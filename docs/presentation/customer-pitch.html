@@ -1,0 +1,1344 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>amz AI 操盘手 — 给客户的产品介绍</title>
+<style>
+  :root{
+    --bg-1:#0b1020;
+    --bg-2:#11183a;
+    --fg:#eaf0ff;
+    --muted:#9aa5cc;
+    --primary:#6b8cff;
+    --accent:#8b5cf6;
+    --success:#22d3ee;
+    --warn:#fbbf24;
+    --danger:#ef4444;
+    --card:#161e44;
+    --line:#28326b;
+    --code-bg:#0d1230;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg-1);color:var(--fg);font-family:"PingFang SC","Microsoft YaHei","Segoe UI",system-ui,sans-serif;-webkit-font-smoothing:antialiased;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  /* 默认 = PDF 平铺模式（每个 slide 一页堆叠） */
+  .deck{position:static;display:block;height:auto;overflow:visible}
+  .slide{
+    position:relative;
+    display:flex;flex-direction:column;justify-content:flex-start;
+    width:297mm;height:209mm;
+    padding:14mm 18mm;
+    margin:0 auto;
+    background:linear-gradient(135deg,var(--bg-1) 0%,var(--bg-2) 100%);
+    overflow:hidden;
+    page-break-after:always;
+    break-after:page;
+    page-break-inside:avoid;
+    break-inside:avoid;
+  }
+  .slide:last-child{page-break-after:auto;break-after:auto}
+  .slide.cover{justify-content:center;align-items:flex-start;background:radial-gradient(1200px 800px at 20% 30%,#1c2454 0%,#0b1020 70%)}
+  .slide.center{justify-content:center}
+
+  /* screen 演示模式：JS 加 body.is-screen 后激活 */
+  body.is-screen .deck{position:relative;height:100vh;overflow:hidden}
+  body.is-screen .slide{
+    position:absolute;top:0;left:0;right:0;bottom:0;
+    width:auto;height:auto;
+    margin:0;
+    padding:48px 72px;
+    page-break-after:auto;
+    display:none;
+  }
+  body.is-screen .slide.active{display:flex}
+  .eyebrow{font-size:13px;letter-spacing:.3em;color:var(--muted);text-transform:uppercase;margin-bottom:14px}
+  h1{font-size:52px;line-height:1.1;margin:0 0 14px;font-weight:800;background:linear-gradient(90deg,#fff,#a5b4fc 60%,#22d3ee);-webkit-background-clip:text;background-clip:text;color:transparent}
+  h2{font-size:34px;margin:0 0 10px;font-weight:800}
+  h3{font-size:18px;margin:0 0 6px;color:var(--fg);font-weight:700}
+  h4{font-size:15px;margin:0 0 4px;color:var(--fg);font-weight:700}
+  p,li{font-size:15px;line-height:1.6;color:var(--fg)}
+  small{font-size:12px}
+  .lead{font-size:20px;color:var(--muted);max-width:980px}
+  .pill{display:inline-block;padding:6px 14px;border:1px solid var(--line);border-radius:999px;color:var(--muted);font-size:12px;letter-spacing:.18em}
+  .cols{display:grid;grid-template-columns:repeat(2,1fr);gap:20px;margin-top:18px}
+  .cols-3{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:18px}
+  .cols-4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:18px}
+  .cols-5{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-top:18px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px}
+  .card-sm{padding:12px;font-size:13px}
+  .card .kicker{font-size:11px;color:var(--muted);letter-spacing:.2em;text-transform:uppercase;margin-bottom:6px}
+  .card h3{font-size:16px}
+  .card h4{font-size:13px}
+  .card p{font-size:13px;color:var(--muted);margin:4px 0 0}
+  .card.accent{border-color:var(--primary)}
+  .badge{display:inline-flex;align-items:center;gap:6px;padding:4px 9px;background:#0e1738;border:1px solid var(--line);border-radius:6px;font-size:12px;color:var(--muted)}
+  .badge .dot{width:7px;height:7px;border-radius:50%;background:var(--success)}
+  .num{font-size:48px;font-weight:800;line-height:1;background:linear-gradient(90deg,#fff,#22d3ee);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .num-sm{font-size:30px;font-weight:800;color:#fff}
+  .grid-stat{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;margin-top:18px}
+  .stat{padding:18px;background:var(--card);border:1px solid var(--line);border-radius:12px;text-align:center}
+  .stat .label{color:var(--muted);font-size:13px;margin-top:6px}
+  .module-hero{display:grid;grid-template-columns:160px 1fr;gap:28px;align-items:center}
+  .module-icon{width:160px;height:160px;border-radius:24px;display:flex;align-items:center;justify-content:center;font-size:60px;font-weight:900;color:#fff}
+  .m1{background:linear-gradient(135deg,#6b8cff,#8b5cf6)}
+  .m2{background:linear-gradient(135deg,#22d3ee,#3b82f6)}
+  .m3{background:linear-gradient(135deg,#f59e0b,#ef4444)}
+  .m4{background:linear-gradient(135deg,#10b981,#22d3ee)}
+  ul.feat{list-style:none;padding:0;margin:10px 0 0}
+  ul.feat li{display:flex;gap:10px;padding:5px 0;align-items:flex-start;border-bottom:1px dashed var(--line)}
+  ul.feat li:last-child{border-bottom:none}
+  ul.feat .check{flex:0 0 18px;width:18px;height:18px;border-radius:50%;background:rgba(34,211,238,.15);color:var(--success);font-weight:800;display:flex;align-items:center;justify-content:center;font-size:11px;margin-top:2px}
+  .pain{padding:14px 18px;border-left:4px solid var(--warn);background:rgba(251,191,36,.08);border-radius:6px;margin:14px 0;color:#ffe8b3;font-size:14px}
+  .gain{padding:14px 18px;border-left:4px solid var(--success);background:rgba(34,211,238,.08);border-radius:6px;margin:14px 0;color:#a8f0ff;font-size:14px}
+  .info{padding:14px 18px;border-left:4px solid var(--primary);background:rgba(107,140,255,.08);border-radius:6px;margin:14px 0;color:#cdd6ff;font-size:14px}
+  .pain strong,.gain strong,.info strong{color:#fff}
+  .footer{position:absolute;bottom:18px;left:72px;right:72px;display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:12px}
+  .progress{position:absolute;top:0;left:0;height:3px;background:linear-gradient(90deg,var(--primary),var(--accent));transition:width .3s}
+  .nav{position:fixed;bottom:18px;right:24px;display:flex;gap:6px;z-index:50}
+  .nav button{background:var(--card);color:var(--fg);border:1px solid var(--line);padding:6px 12px;border-radius:999px;cursor:pointer;font-size:12px}
+  .nav button:hover{border-color:var(--primary)}
+  .help{position:fixed;bottom:18px;left:24px;color:var(--muted);font-size:11px;z-index:50}
+  .quote{font-size:24px;font-weight:600;line-height:1.45;color:#fff;margin-top:14px;max-width:1100px}
+  .arrow{color:var(--success);font-weight:800}
+  table.tt{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px}
+  table.tt th,table.tt td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+  table.tt th{color:var(--muted);font-weight:600;font-size:11px;letter-spacing:.15em;text-transform:uppercase;background:#0e1738}
+  table.tt td.num-cell{font-weight:700;color:var(--success);text-align:right;white-space:nowrap}
+  table.tt td.label-cell{color:var(--muted);font-size:12px}
+  .code{background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:12px 16px;font-family:"SFMono-Regular",Menlo,Consolas,monospace;font-size:12px;line-height:1.55;color:#cbd5ff;white-space:pre;overflow-x:auto}
+  .code .com{color:#7a85b8}
+  .code .kw{color:#a5b4fc}
+  .code .str{color:#fcd34d}
+  .code .ok{color:#22d3ee}
+  .flow{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-top:14px}
+  .flow .step{padding:12px;background:var(--card);border:1px solid var(--line);border-radius:10px;text-align:center}
+  .flow .step .num-step{width:26px;height:26px;border-radius:50%;background:var(--primary);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:800;margin-bottom:6px;font-size:12px}
+  .flow .step h4{margin:0 0 2px;font-size:13px}
+  .flow .step p{font-size:11px;color:var(--muted);margin:0}
+  .pipeline{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:14px}
+  .pipeline .box{flex:1;padding:10px;background:var(--card);border:1px solid var(--line);border-radius:8px;text-align:center;font-size:12px;min-height:54px;display:flex;flex-direction:column;justify-content:center}
+  .pipeline .arr{color:var(--primary);font-weight:800;font-size:18px}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:14px}
+  .stage-row{display:grid;grid-template-columns:120px 1fr 80px;gap:14px;align-items:center;padding:10px 14px;border:1px solid var(--line);border-radius:10px;margin-bottom:8px;background:#0e1738}
+  .stage-row .stage-name{font-weight:800;font-size:14px}
+  .stage-row .stage-list{color:var(--muted);font-size:13px}
+  .stage-row .stage-kpi{font-size:11px;color:var(--success);text-align:right;font-weight:700}
+  .matrix{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:14px}
+  .matrix .cell{padding:10px 12px;background:var(--card);border:1px solid var(--line);border-radius:8px;font-size:12px}
+  .matrix .cell h4{font-size:12px;margin:0 0 4px}
+  .matrix .cell p{font-size:11px;color:var(--muted);margin:0}
+
+  @page{size:A4 landscape;margin:0}
+
+  /* Print/PDF flat mode — 不依赖 @media print，用 body.print-mode 强制 */
+  body.print-mode{background:#0b1020;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body.print-mode .nav,body.print-mode .help,body.print-mode .progress{display:none !important}
+  body.print-mode .deck{display:block;position:static;height:auto;overflow:visible}
+  body.print-mode .slide,
+  body.print-mode .slide.active,
+  body.print-mode .slide.cover,
+  body.print-mode .slide.center{
+    display:flex !important;
+    position:relative !important;
+    top:auto !important;left:auto !important;right:auto !important;bottom:auto !important;
+    inset:auto !important;
+    width:297mm !important;
+    height:209mm !important;
+    padding:14mm 18mm !important;
+    margin:0 !important;
+    box-sizing:border-box !important;
+    background:linear-gradient(135deg,#0b1020 0%,#11183a 100%) !important;
+    color:#eaf0ff !important;
+    overflow:hidden !important;
+    page-break-after:always !important;
+    break-after:page !important;
+    page-break-inside:avoid !important;
+    break-inside:avoid !important;
+    -webkit-print-color-adjust:exact !important;
+    print-color-adjust:exact !important;
+  }
+  body.print-mode .slide:last-child{page-break-after:auto !important}
+  body.print-mode h1,body.print-mode .num{
+    background:linear-gradient(90deg,#fff,#a5b4fc 60%,#22d3ee) !important;
+    -webkit-background-clip:text !important;background-clip:text !important;color:transparent !important;
+  }
+
+  @media print{
+    .nav,.help,.progress{display:none !important}
+    html,body{background:#0b1020 !important;-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important}
+    .deck{display:block !important;position:static !important;height:auto !important;overflow:visible !important}
+    .slide,.slide.active,.slide.cover,.slide.center{
+      display:flex !important;
+      position:relative !important;
+      top:auto !important;
+      left:auto !important;
+      right:auto !important;
+      bottom:auto !important;
+      inset:auto !important;
+      page-break-after:always !important;
+      break-after:page !important;
+      page-break-inside:avoid !important;
+      break-inside:avoid !important;
+      width:297mm !important;
+      height:209mm !important;
+      padding:14mm 18mm !important;
+      margin:0 !important;
+      box-sizing:border-box !important;
+      background:linear-gradient(135deg,#0b1020 0%,#11183a 100%) !important;
+      color:#eaf0ff !important;
+      -webkit-print-color-adjust:exact !important;
+      print-color-adjust:exact !important;
+      overflow:hidden !important;
+    }
+    .slide:last-child{page-break-after:auto !important}
+    h1,.num{
+      background:linear-gradient(90deg,#fff,#a5b4fc 60%,#22d3ee) !important;
+      -webkit-background-clip:text !important;
+      background-clip:text !important;
+      color:transparent !important;
+    }
+    .card,.stat,.stage-row,.matrix .cell,.flow .step,.pipeline .box,.pricing-tier{
+      -webkit-print-color-adjust:exact !important;
+      print-color-adjust:exact !important;
+    }
+  }
+</style>
+</head>
+<body>
+
+<div class="deck" id="deck">
+
+<!-- 1 封面 -->
+<section class="slide cover active">
+  <div class="pill">amz AI 操盘手 · 产品介绍</div>
+  <h1 style="margin-top:20px">给亚马逊卖家的<br/>AI 副驾驶</h1>
+  <p class="lead" style="margin-top:18px">
+    一个人 + AI = 一个运营团队。<br/>
+    AI 给你判断 · 给你依据 · 给你可执行的动作 — 决定权和操作权始终在你手里。
+  </p>
+  <div style="display:flex;gap:10px;margin-top:30px;flex-wrap:wrap">
+    <span class="badge"><span class="dot"></span> M1 Listing 优化室</span>
+    <span class="badge"><span class="dot"></span> M2 实时利润 + 库存</span>
+    <span class="badge"><span class="dot"></span> M3 生命周期广告</span>
+    <span class="badge"><span class="dot"></span> M4 日常运营监控</span>
+  </div>
+</section>
+
+<!-- 2 困境 -->
+<section class="slide">
+  <div class="eyebrow">为什么需要这个产品</div>
+  <h2>亚马逊卖家的 4 个真实困境</h2>
+  <div class="cols-4">
+    <div class="card">
+      <div class="kicker">困境 1</div>
+      <h3>Listing 写不专业</h3>
+      <p>不知道差在哪、改写靠灵感、改完没法验证效果。设计师沟通成本高、迭代慢。</p>
+    </div>
+    <div class="card">
+      <div class="kicker">困境 2</div>
+      <h3>看似赚了实际在亏</h3>
+      <p>退货 / 仓储 / 广告分摊 / 汇率 / 跨境手续费分散，单 SKU 真实利润几乎没人算得清。</p>
+    </div>
+    <div class="card">
+      <div class="kicker">困境 3</div>
+      <h3>广告"一刀切"</h3>
+      <p>新品和成熟 SKU 用同一套 ACOS 目标，要么烧钱要么没量；ACOS 是销售口径不是利润口径。</p>
+    </div>
+    <div class="card">
+      <div class="kicker">困境 4</div>
+      <h3>异常应接不暇</h3>
+      <p>BB 丢失 / 差评 / 竞品 / 政策预警散落各处，每天救火没时间做决策。</p>
+    </div>
+  </div>
+  <div class="pain">
+    <strong>共同根因：</strong>市面上的 ERP 做了"流程管理"，但<strong>"决策建议"</strong>是空白。中小卖家请不起年薪 30 万的运营，新手卖家凭直觉操作，亏损率高。
+  </div>
+</section>
+
+<!-- 3 定位 -->
+<section class="slide">
+  <div class="eyebrow">差异化定位</div>
+  <h2>不替代 ERP，<span style="color:var(--success)">替代运营经验</span></h2>
+  <div class="cols">
+    <div class="card">
+      <div class="kicker">现有 ERP（领星 / 店小秘等）</div>
+      <h3>执行层 — 流程 / 记录 / 看板</h3>
+      <p style="color:var(--fg);font-size:14px">"管好你的店"</p>
+      <ul style="color:var(--muted);font-size:13px;margin-top:8px;padding-left:18px">
+        <li>数据展示、报表导出</li>
+        <li>订单 / 库存流程</li>
+        <li>多店铺协同、员工权限</li>
+      </ul>
+    </div>
+    <div class="card accent">
+      <div class="kicker">amz AI 操盘手</div>
+      <h3>决策层 — 判断 / 建议 / 自动化</h3>
+      <p style="color:var(--fg);font-size:14px">"替你做决策"</p>
+      <ul style="color:var(--fg);font-size:13px;margin-top:8px;padding-left:18px">
+        <li>AI 给判断 + 给依据 + 可执行动作</li>
+        <li>三档主权（手动 / 半自动 / 全自动）</li>
+        <li>可解释 · 可审计 · 可一键回滚</li>
+      </ul>
+    </div>
+  </div>
+  <div class="quote" style="margin-top:24px;font-size:20px">
+    <span style="color:var(--muted)">一句话讲清楚：</span> 一个人 + AI 副驾驶 = 一个运营团队的产出。
+  </div>
+</section>
+
+<!-- 4 全景 -->
+<section class="slide">
+  <div class="eyebrow">产品全景</div>
+  <h2>4 大模块覆盖卖家完整工作流</h2>
+  <div class="cols-4" style="margin-top:24px">
+    <div class="card" style="border-color:var(--primary)">
+      <div class="kicker" style="color:var(--primary)">M1</div>
+      <h3>AI Listing 优化室</h3>
+      <p>5 维评分 · 多轮迭代 · 主图概念稿 + A+/Gallery 直生成 · A/B 测试</p>
+    </div>
+    <div class="card" style="border-color:#22d3ee">
+      <div class="kicker" style="color:#22d3ee">M2</div>
+      <h3>实时利润 + 库存决策</h3>
+      <p>18 项费用全归集 · 12 类漏点 · 补货 / 滞销 / 跟价 · 现金流时序</p>
+    </div>
+    <div class="card" style="border-color:#f59e0b">
+      <div class="kicker" style="color:#f59e0b">M3</div>
+      <h3>生命周期广告优化</h3>
+      <p>4 阶段识别 · 42 条策略 · 每日操作清单 · 利润口径 ROAS</p>
+    </div>
+    <div class="card" style="border-color:#10b981">
+      <div class="kicker" style="color:#10b981">M4</div>
+      <h3>日常运营监控中心</h3>
+      <p>22 类异常 · Review 聚类 · 竞品 9 维 · 5 分钟 P0 通知</p>
+    </div>
+  </div>
+  <div class="cols-3" style="margin-top:18px">
+    <div class="card" style="text-align:center"><h3>共享底座</h3><p>SP-API · Ads API · Keepa · SellerSprite · 用户录入</p></div>
+    <div class="card" style="text-align:center"><h3>AI 决策引擎</h3><p>可解释推理链 · 主权配置 · 审计追溯</p></div>
+    <div class="card" style="text-align:center"><h3>跨模块审计中心</h3><p>统一日志 · 冲突检测 · 一键回滚 · 熔断</p></div>
+  </div>
+</section>
+
+<!-- 5 M1 标题 -->
+<section class="slide center">
+  <div class="eyebrow">模块一</div>
+  <div class="module-hero">
+    <div class="module-icon m1">M1</div>
+    <div>
+      <h2 style="margin-bottom:8px">AI Listing 迭代优化室</h2>
+      <p class="lead">不是一键生成，是"评分 → AI 改 → 评分 → 再改"的对话式表单迭代。<br/>覆盖标题 / 五点 / 描述 / A+ / 主图 / Gallery 全部 Listing 元素。</p>
+    </div>
+  </div>
+</section>
+
+<!-- 6 M1 概览 -->
+<section class="slide">
+  <div class="eyebrow">M1 · 我们做了什么</div>
+  <h2>给运营一个"看得见 AI 判断的"优化室</h2>
+  <div class="cols">
+    <div>
+      <div class="pain"><strong>客户痛点：</strong>Listing 流量来了不转化；改写靠灵感；改完不知道是不是真变好了；设计师沟通慢。</div>
+      <ul class="feat">
+        <li><span class="check">✓</span><div><strong>5 维评分（17 子项 · 百分制）</strong>每个分数都附详细依据</div></li>
+        <li><span class="check">✓</span><div><strong>多轮迭代（每轮 1 个改进点）</strong>AI 给 3 候选方案，运营选 / 微调 / 反馈重来</div></li>
+        <li><span class="check">✓</span><div><strong>每条改动都附"为什么"</strong>运营能学到 AI 的判断逻辑</div></li>
+        <li><span class="check">✓</span><div><strong>图像生成（主图概念稿 / A+ / Gallery）</strong>三层方案确保亚马逊审核合规</div></li>
+        <li><span class="check">✓</span><div><strong>一键发布 + A/B 测试 + 历史回滚</strong>每次改动生成新版本</div></li>
+        <li><span class="check">✓</span><div><strong>多语言母版同步</strong>一国家站做主版，AI 翻译适配其他站点</div></li>
+      </ul>
+    </div>
+    <div>
+      <div class="gain"><strong>客户价值：</strong>14 天 A/B 验证后 CVR 平均提升 ≥ 8%。替代设计师沟通的时间和成本。</div>
+      <div class="card" style="margin-top:10px">
+        <div class="kicker">核心流程</div>
+        <div class="flow" style="grid-template-columns:repeat(2,1fr);gap:8px;margin-top:8px">
+          <div class="step"><div class="num-step">1</div><h4>诊断</h4><p>5 维评分 + 改进点排序</p></div>
+          <div class="step"><div class="num-step">2</div><h4>协商</h4><p>AI 给 3 方案，你选</p></div>
+          <div class="step"><div class="num-step">3</div><h4>重评</h4><p>新分数 + 对比上轮</p></div>
+          <div class="step"><div class="num-step">4</div><h4>发布</h4><p>同步亚马逊 + A/B</p></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 7 M1 实现原理：5 维评分系统 -->
+<section class="slide">
+  <div class="eyebrow">M1 实现原理 · 1/5</div>
+  <h2>5 维评分系统（17 子项 · 百分制）</h2>
+  <table class="tt">
+    <thead><tr><th>维度</th><th style="width:60px">权重</th><th>子项与算法</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>D1 关键词覆盖度</strong></td>
+        <td class="num-cell">25%</td>
+        <td>
+          <strong>D1.1 主词覆盖（12 分）</strong> = 搜索词 Top 10 在标题+五点中出现比例 × 100<br/>
+          <strong>D1.2 长尾词覆盖（8 分）</strong> = Top 30 长尾词（≥4 tokens）在五点+描述+A+ 中覆盖比例<br/>
+          <strong>D1.3 否定词避免（5 分）</strong> = 100 − 禁用词出现数 × 20
+        </td>
+      </tr>
+      <tr>
+        <td><strong>D2 卖点清晰度</strong></td>
+        <td class="num-cell">20%</td>
+        <td>
+          <strong>D2.1 USP 强度（5 分）</strong> LLM 评估五点首句独特性 vs 类目均值<br/>
+          <strong>D2.2 实证强度（5 分）</strong> 计数数据/认证短语（"5000mAh" "FCC"等）<br/>
+          <strong>D2.3 决策因素覆盖（5 分）</strong> 5W2H 框架覆盖度 / 7<br/>
+          <strong>D2.4 vs 竞品差异化（5 分）</strong> 与头部竞品 embedding 距离
+        </td>
+      </tr>
+      <tr>
+        <td><strong>D3 用户痛点对齐</strong></td>
+        <td class="num-cell">20%</td>
+        <td>
+          <strong>D3.1 差评高频问题回应度（8 分）</strong> 自家差评 Top 5 痛点是否在 Listing 中有回应<br/>
+          <strong>D3.2 好评高频卖点突出度（8 分）</strong> 自家好评 Top 5 卖点是否突出<br/>
+          <strong>D3.3 类目共性痛点提及度（4 分）</strong> 同类目竞品差评是否预防性提及
+        </td>
+      </tr>
+      <tr>
+        <td><strong>D4 视觉与 A+</strong></td>
+        <td class="num-cell">15%</td>
+        <td>
+          <strong>D4.1 主图质量（4 分）</strong> 多模态评估：白底 / 主体清晰 / 卖点角标 / 占比 ≥85%<br/>
+          <strong>D4.2 信息图丰富度（4 分）</strong> Gallery ≥6 张 + 含场景/尺寸/使用方式图<br/>
+          <strong>D4.3 A+ 模块设计（4 分）</strong> 模块数 ≥5 + 信息密度 + 模块图质量<br/>
+          <strong>D4.4 视频存在（3 分）</strong> 有=100，无=0
+        </td>
+      </tr>
+      <tr>
+        <td><strong>D5 转化诱因</strong></td>
+        <td class="num-cell">20%</td>
+        <td>
+          <strong>D5.1 社会证明（5）</strong> Review 数（log scale 至 1000）+ 评分（4.5=85, 4.7+=100）<br/>
+          <strong>D5.2 紧迫感（3）</strong> 限量 / 限时短语存在性<br/>
+          <strong>D5.3 风险消除（5）</strong> 保修 / 退换政策提及<br/>
+          <strong>D5.4 对比 / 优势表（4）</strong> A+ 含对比表 / 五点级对比<br/>
+          <strong>D5.5 CTA 明确性（3）</strong> LLM 评估行动语
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="info" style="margin-top:14px"><strong>类目特化：</strong>电子配件 / 家居 / 母婴 / 服装 4 类目权重不同（如服装 D4=25%、D5=10%）；评分版本号化（v2.3）便于灰度升级。</div>
+</section>
+
+<!-- 8 M1 实现原理：迭代状态机 -->
+<section class="slide">
+  <div class="eyebrow">M1 实现原理 · 2/5</div>
+  <h2>多轮迭代状态机（13 个状态 + 防冲突）</h2>
+  <div class="pipeline">
+    <div class="box"><strong>Idle</strong><br/><small>进入 SKU</small></div>
+    <span class="arr">→</span>
+    <div class="box"><strong>Diagnosing</strong><br/><small>拉数据 + LLM 评分</small></div>
+    <span class="arr">→</span>
+    <div class="box"><strong>Diagnosed</strong><br/><small>显示改进点</small></div>
+    <span class="arr">→</span>
+    <div class="box"><strong>Proposing</strong><br/><small>AI 生成 3 候选</small></div>
+    <span class="arr">→</span>
+    <div class="box"><strong>Reviewing</strong><br/><small>用户决策</small></div>
+  </div>
+  <div class="pipeline" style="margin-top:8px">
+    <div class="box"><strong>Editing</strong><br/><small>用户微调方案</small></div>
+    <span class="arr">→</span>
+    <div class="box"><strong>Round Complete</strong><br/><small>本轮完成</small></div>
+    <span class="arr">→</span>
+    <div class="box"><strong>In Progress</strong><br/><small>重评分 + 继续</small></div>
+    <span class="arr">→</span>
+    <div class="box"><strong>Pending Apply</strong><br/><small>应用预览</small></div>
+    <span class="arr">→</span>
+    <div class="box"><strong>Applied</strong><br/><small>同步亚马逊</small></div>
+  </div>
+  <div class="cols" style="margin-top:18px">
+    <div class="card">
+      <h4>用户对每个 AI 候选的 4 种操作</h4>
+      <ul class="feat">
+        <li><span class="check">✓</span><div><strong>采纳 A/B/C</strong>：直接选定方案，进入草稿</div></li>
+        <li><span class="check">✓</span><div><strong>微调</strong>：富文本编辑预填方案</div></li>
+        <li><span class="check">✓</span><div><strong>让 AI 重写</strong>：填"我想要什么"自由文本，回到 Proposing 重出 3 案</div></li>
+        <li><span class="check">✓</span><div><strong>跳过</strong>：不改这一项，继续下个改进点</div></li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>关键业务规则</h4>
+      <ul class="feat">
+        <li><span class="check">✓</span><div>同 SKU 同时只允许 1 个进行中迭代（乐观锁防冲突）</div></li>
+        <li><span class="check">✓</span><div>单次迭代最多 20 轮 / 闲置 48h 自动归档</div></li>
+        <li><span class="check">✓</span><div><strong>应用冷却 7 天</strong>：避免亚马逊将账号标"频繁修改"</div></li>
+        <li><span class="check">✓</span><div>主图改动单独冷却 14 天（亚马逊审核压力大）</div></li>
+        <li><span class="check">✓</span><div>每次发布生成新 version，可对比 / 回滚</div></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 9 M1 实现原理：AI Prompt 工作流 -->
+<section class="slide">
+  <div class="eyebrow">M1 实现原理 · 3/5</div>
+  <h2>11 个 AI Prompt 协同的工作流</h2>
+  <table class="tt">
+    <thead><tr><th>Prompt ID</th><th>用途</th><th>关键输入</th><th>输出</th></tr></thead>
+    <tbody>
+      <tr><td><strong>P-M1-DIAGNOSE</strong></td><td>诊断评分</td><td>当前 Listing + 5 个头部竞品 + 搜索词报告 + Top 50 自家/竞品 Review</td><td>5 维分数 + Top 5 改进点（按 ROI 排序）</td></tr>
+      <tr><td><strong>P-M1-PROPOSE</strong></td><td>文本改写方案</td><td>选定改进项 + 当前文本 + 品牌偏好 + 关键词目标</td><td>3 个不同风格方案（数据 / 场景 / 对比）+ 合规检查</td></tr>
+      <tr><td><strong>P-M1-REWRITE</strong></td><td>用户反馈重写</td><td>用户自由反馈 + 已拒绝的 3 候选</td><td>3 个新候选（明确响应反馈）</td></tr>
+      <tr><td><strong>P-M1-EXPLAIN</strong></td><td>推理链解释</td><td>原文 vs 新文 + 改进维度</td><td>≤100 字"为什么这么改"说明</td></tr>
+      <tr><td><strong>P-M1-CATEGORY-PAIN</strong></td><td>类目共性痛点提取</td><td>类目 + Top 20 竞品差评聚合</td><td>10 个类目级痛点 + 预防性 Listing 策略</td></tr>
+      <tr><td><strong>P-M1-IMG-MAIN-GEN</strong></td><td>主图概念稿生成</td><td>当前主图 + 卖点 + 类目规则</td><td>3 候选图 + 生成 Prompt + 合规元数据</td></tr>
+      <tr><td><strong>P-M1-IMG-APLUS-GEN</strong></td><td>A+ 图模块生成</td><td>模块类型 + 文案 + 风格</td><td>3 候选 A+ 模块图</td></tr>
+      <tr><td><strong>P-M1-IMG-GALLERY-GEN</strong></td><td>Gallery 图生成</td><td>图类型（场景/尺寸/使用）+ 产品参考</td><td>3 候选图 + 描述</td></tr>
+      <tr><td><strong>P-M1-IMG-CRITIQUE</strong></td><td>图像质量评估</td><td>单图 + 类目规则</td><td>多模态 0-100 评分 + 缺陷清单</td></tr>
+      <tr><td><strong>P-M1-IMG-COMPLIANCE</strong></td><td>亚马逊主图合规检查</td><td>图 + 类目</td><td>pass/fail + 违规项 + 自动修正建议</td></tr>
+      <tr><td><strong>P-M1-IMG-REWRITE</strong></td><td>图像重生成</td><td>用户反馈 + 已拒绝候选</td><td>3 新候选（响应反馈）</td></tr>
+    </tbody>
+  </table>
+  <div class="info"><strong>Prompt 版本管理：</strong>所有 Prompt 在 <code>packages/prompts/m1/</code> git 版控；50% 用户跑 v2、50% 跑 v1 做 A/B；图像生成 Prompt 单独 A/B（图像质量评估反馈到 Prompt 迭代）。</div>
+</section>
+
+<!-- 10 M1 实现原理：图像生成三层方案 -->
+<section class="slide">
+  <div class="eyebrow">M1 实现原理 · 4/5</div>
+  <h2>图像生成三层方案（应对亚马逊审核）</h2>
+  <div class="pain" style="margin-bottom:14px"><strong>核心挑战：</strong>亚马逊主图必须"实物拍摄风格"。纯 DALL-E / Imagen 渲染极易被审核拒（行业拒绝率约 30%）。我们用三层方案降到约 1%。</div>
+  <div class="cols-3">
+    <div class="card" style="border-color:var(--primary)">
+      <div class="kicker" style="color:var(--primary)">方案 A · 默认推荐</div>
+      <h3>AI 概念稿 + 用户拍摄</h3>
+      <p style="color:var(--fg);font-size:13px;margin-top:6px"><strong>流程：</strong></p>
+      <ul style="font-size:12px;color:var(--muted);padding-left:18px;margin:6px 0">
+        <li>AI 生成 3 个"概念稿"（含布光建议、角标位置、卖点排布）</li>
+        <li>不直接发布，作为"拍摄简报"交给设计师/拍摄团队</li>
+        <li>用户拍真实照片后上传，系统做合规检查 + 角标合成</li>
+      </ul>
+      <p style="font-size:12px;color:var(--success)"><strong>用途：</strong>替代昂贵的设计师沟通；将"我想要 X 风格" → 可视化稿</p>
+      <p style="font-size:12px;color:var(--success)"><strong>审核拒绝率：约 1%</strong></p>
+    </div>
+    <div class="card" style="border-color:var(--success)">
+      <div class="kicker" style="color:var(--success)">方案 B · 微改</div>
+      <h3>AI 后期处理（不重新合成产品）</h3>
+      <p style="color:var(--fg);font-size:13px;margin-top:6px"><strong>适用：</strong>已有合规真实主图，只需微改</p>
+      <ul style="font-size:12px;color:var(--muted);padding-left:18px;margin:6px 0">
+        <li>仅做后期处理：合成角标、白底替换、亮度对比微调</li>
+        <li>不允许 AI 重新合成产品本体</li>
+        <li>多模态合规检查 + 视觉相似度（embedding）双校验</li>
+        <li>与原图相似度 &gt; 0.85 才允许</li>
+      </ul>
+      <p style="font-size:12px;color:var(--success)"><strong>审核拒绝率：约 5%</strong></p>
+    </div>
+    <div class="card" style="border-color:var(--accent)">
+      <div class="kicker" style="color:var(--accent)">方案 C · 进阶模式</div>
+      <h3>SD + 真实产品 LoRA fine-tune</h3>
+      <p style="color:var(--fg);font-size:13px;margin-top:6px"><strong>适用：</strong>需要换角度 / 换场景的真实感生成</p>
+      <ul style="font-size:12px;color:var(--muted);padding-left:18px;margin:6px 0">
+        <li>用户提供 30+ 张产品多角度真实照片</li>
+        <li>系统训练专属 LoRA（仅该 SKU 可用）</li>
+        <li>后续生成基于真实产品特征</li>
+        <li>仍需用户确认"够真实"才发布</li>
+      </ul>
+      <p style="font-size:12px;color:var(--warn)"><strong>仅限"产品已经稳定 + 长期销售"的 SKU 投资</strong></p>
+    </div>
+  </div>
+  <div class="cols" style="margin-top:18px">
+    <div class="card">
+      <h4>A+ / Gallery 不受此限制</h4>
+      <p style="color:var(--muted);font-size:13px">A+ 和 Gallery 允许插画 / 信息图 / 场景图 / 人物，<strong style="color:var(--success)">直接 AI 生成无问题</strong>。仍走内容合规检查（无医疗声明 / 无第三方品牌 / 无虚假超级化）。</p>
+    </div>
+    <div class="card">
+      <h4>版权与侵权防范</h4>
+      <ul style="font-size:12px;color:var(--muted);padding-left:18px;margin:6px 0">
+        <li>所有"AI 生成"输出附带 generation_metadata（模型 / prompt / 参考图）</li>
+        <li>与竞品图像 embedding 相似度 &gt; 0.92 → 阻止生成 + 风险提示</li>
+        <li>用户上传"参考图"必须勾选合法使用权</li>
+        <li>系统不存储未授权竞品图（短期分析后丢弃）</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 11 M1 实现原理：数据源 + A/B 测试 -->
+<section class="slide">
+  <div class="eyebrow">M1 实现原理 · 5/5</div>
+  <h2>数据来源、A/B 测试与版本管理</h2>
+  <div class="cols">
+    <div class="card">
+      <h4>数据来源</h4>
+      <table class="tt" style="margin-top:6px">
+        <thead><tr><th>数据</th><th>来源</th><th>更新频率</th></tr></thead>
+        <tbody>
+          <tr><td>当前 Listing</td><td>SP-API ListingsItems / Catalog</td><td>实时</td></tr>
+          <tr><td>竞品 Listing</td><td>Keepa / SellerSprite</td><td>天级缓存</td></tr>
+          <tr><td>搜索词报告</td><td>SP-API Brand Analytics / SQP</td><td>周级</td></tr>
+          <tr><td>Top Reviews（自家+竞品）</td><td>SellerSprite Review API</td><td>天级</td></tr>
+          <tr><td>多模态图像评估</td><td>Claude Vision / GPT-4V</td><td>触发式</td></tr>
+          <tr><td>图像生成</td><td>Imagen 3 / DALL-E 3 / SD-XL</td><td>触发式</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="card">
+      <h4>A/B 测试机制（亚马逊原生）</h4>
+      <p style="color:var(--muted);font-size:13px">通过 SP-API <code>Manage Your Experiments</code> 启动主图 / A+ 模块 A/B</p>
+      <ul style="font-size:12px;color:var(--muted);padding-left:18px;margin:6px 0">
+        <li>实验时长默认 14 天</li>
+        <li>仅亚马逊原生支持的元素（主图 / A+）</li>
+        <li>14 天后自动回收 CVR 数据</li>
+        <li>显著性双指标：贝叶斯 + 频率主义</li>
+        <li>winner 自动判定 + 推荐"采用 / 继续测试 / 回滚"</li>
+      </ul>
+    </div>
+  </div>
+  <div class="cols" style="margin-top:14px">
+    <div class="card">
+      <h4>版本管理（每次改动 = 新版本）</h4>
+      <ul style="font-size:12px;color:var(--muted);padding-left:18px;margin:6px 0">
+        <li>v1（初始） → v2（手动改）→ v3（AI 优化 +8 分）→ v4（回滚 v2）...</li>
+        <li>选两个版本对比 → diff 显示（红删 / 绿增）+ 评分对比 + 期间销量/CVR 变化</li>
+        <li>回滚需二次确认（含"会触发亚马逊审核"提示）</li>
+        <li>父子变体：可选"仅当前 ASIN" / "应用到所有子变体"</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>多语言母版同步（多国家站）</h4>
+      <ul style="font-size:12px;color:var(--muted);padding-left:18px;margin:6px 0">
+        <li>用户在一个国家站做"母版优化"，标记为模板</li>
+        <li>系统用 LLM 翻译并适配其他国家站</li>
+        <li>保留品牌词、单位转换、文化适配</li>
+        <li>各国家站仍独立诊断 + 独立应用（亚马逊后台分别审核）</li>
+        <li>母版改动 → 触发"是否同步到其他国家站"提示</li>
+      </ul>
+    </div>
+  </div>
+  <div class="info"><strong>评分校准计划：</strong>Phase A 100 个真实 SKU × 5 位资深运营盲测，AI vs 人工相关性 ≥ 0.80 才允许上线。Phase B Beta 期跟踪"评分提升 ↔ 真实 CVR lift"相关性 ≥ 0.50。Phase C 持续 A/B 评分版本（v2.0 → v2.1）。</div>
+</section>
+
+<!-- 12 M2 标题 -->
+<section class="slide center">
+  <div class="eyebrow">模块二</div>
+  <div class="module-hero">
+    <div class="module-icon m2">M2</div>
+    <div>
+      <h2 style="margin-bottom:8px">实时利润中枢 + 库存决策</h2>
+      <p class="lead">"看似赚了其实在亏" — 把利润黑洞照亮。<br/>每一块钱赚在哪、亏在哪、压在哪，全部实时可见。</p>
+    </div>
+  </div>
+</section>
+
+<!-- 13 M2 概览 -->
+<section class="slide">
+  <div class="eyebrow">M2 · 我们做了什么</div>
+  <h2>把"账本糊涂账"变成"决策依据"</h2>
+  <div class="cols">
+    <div>
+      <div class="pain"><strong>客户痛点：</strong>退货 30 天后才知道；仓储费、长仓费、跨境手续费、汇率分散无人加和；广告 ACOS 是销售口径不是利润口径 — 很多人在亏钱跑广告还不知道。</div>
+      <ul class="feat">
+        <li><span class="check">✓</span><div><strong>18 项费用全归集</strong>含跨境手续费（Payoneer/PingPong）、汇率损益、资金成本、销售税</div></li>
+        <li><span class="check">✓</span><div><strong>单订单 / SKU / 广告 / 关键词级真实利润</strong>瀑布图可视化拆解</div></li>
+        <li><span class="check">✓</span><div><strong>暂估 / 终值双标签</strong>🟡 暂估 / 🟢 终值（跨境电商 ±5% 误差是常态）</div></li>
+        <li><span class="check">✓</span><div><strong>批次管理 FIFO / LIFO</strong>每个订单按批次匹配真实采购成本</div></li>
+        <li><span class="check">✓</span><div><strong>12 类利润漏点 AI 主动检测</strong>每条带"修复后预计可省 ¥X"</div></li>
+        <li><span class="check">✓</span><div><strong>补货 / 滞销 / 跟价 三大决策</strong>基于利润而不是销量</div></li>
+      </ul>
+    </div>
+    <div>
+      <div class="gain"><strong>客户价值：</strong>月度可挽回利润 5-15%。补货决策不再"凭感觉"，跟价不再"亏了不知道"。</div>
+      <div class="card" style="margin-top:10px">
+        <div class="kicker">还包括</div>
+        <ul class="feat">
+          <li><span class="check">✓</span><div><strong>现金流时序视图（90 天）</strong>应收/应付/在途/可用</div></li>
+          <li><span class="check">✓</span><div><strong>采购单完整流程 + 供应商管理</strong>PO 双模式 · 多供应商比价 · 凑单优化</div></li>
+          <li><span class="check">✓</span><div><strong>资金预算优化器</strong>AI 在多 SKU 间最优分配</div></li>
+          <li><span class="check">✓</span><div><strong>多店铺合并视图 + 多维度归集</strong>品牌/项目/团队/运营人员</div></li>
+          <li><span class="check">✓</span><div><strong>情景模拟器 + 汇率风险 + 税务辅助</strong></div></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 14 M2 真实场景 -->
+<section class="slide">
+  <div class="eyebrow">M2 · 真实场景</div>
+  <h2>例：一次"看似在赚"的广告</h2>
+  <div class="cols-3" style="margin-top:18px">
+    <div class="card">
+      <div class="kicker">表象</div>
+      <div class="num-sm">¥80,000</div>
+      <p style="margin-top:6px">月销售（Campaign A 跑了 30 天）<br/>ACOS <strong>30%</strong>，看着挺正常</p>
+    </div>
+    <div class="card" style="border-color:var(--warn)">
+      <div class="kicker" style="color:var(--warn)">真相（M2 算出）</div>
+      <div class="num-sm" style="color:var(--warn)">利润 ROAS 0.85</div>
+      <p style="margin-top:6px">毛利率 25%，但 ACOS 30% 已超过保本线。<br/>每跑一单亏 ¥X。</p>
+    </div>
+    <div class="card" style="border-color:var(--success)">
+      <div class="kicker" style="color:var(--success)">M2 给出</div>
+      <ul style="color:var(--fg);font-size:14px;list-style:none;padding:0">
+        <li>· 立即暂停 Campaign A</li>
+        <li>· 月止损 <strong>¥4,200</strong></li>
+        <li>· 替代方案：转 SD 防御位</li>
+        <li>· 一键执行 + 30 天跟踪</li>
+      </ul>
+    </div>
+  </div>
+  <div class="quote" style="margin-top:24px;font-size:20px">
+    <span style="color:var(--muted)">这是"漏点 12 类"的其中 1 类。</span><br/>
+    全店一个月通常能识别 <strong style="color:var(--success)">5-15 个</strong> 这样的漏点，月可挽回 <strong style="color:var(--success)">¥10,000 - 50,000</strong>（取决于规模）。
+  </div>
+</section>
+
+<!-- 15 M3 标题 -->
+<section class="slide center">
+  <div class="eyebrow">模块三</div>
+  <div class="module-hero">
+    <div class="module-icon m3">M3</div>
+    <div>
+      <h2 style="margin-bottom:8px">生命周期广告优化</h2>
+      <p class="lead">不只优化广告，先判断 SKU 当前在生命周期哪一阶段，再用对应阶段该用的策略。<br/>把"AI 当真正的操盘手"，而不是"无脑批量调整工具"。</p>
+    </div>
+  </div>
+</section>
+
+<!-- 16 M3 概览 4 阶段 -->
+<section class="slide">
+  <div class="eyebrow">M3 · 我们做了什么</div>
+  <h2>4 个生命周期 × 不同策略</h2>
+  <div class="cols-4">
+    <div class="card" style="border-color:#a5b4fc">
+      <div class="kicker" style="color:#a5b4fc">🌱 新品期</div>
+      <h3>起量 + 拿评论</h3>
+      <p style="font-size:12px">自动广告 + 高曝光词 + Vine<br/>容忍 ACOS 30/60/100%（用户选）</p>
+    </div>
+    <div class="card" style="border-color:#22d3ee">
+      <div class="kicker" style="color:#22d3ee">🌳 成长期</div>
+      <h3>扩规模 + 抢排名</h3>
+      <p style="font-size:12px">自动转手动 + 长尾词扩展<br/>预算扩张 + SB 启动</p>
+    </div>
+    <div class="card" style="border-color:#f59e0b">
+      <div class="kicker" style="color:#f59e0b">🌲 成熟期</div>
+      <h3>守排名 + 利润</h3>
+      <p style="font-size:12px">否词清理 + 出价精细化<br/>分时段 + 位置加成 + 品牌防御</p>
+    </div>
+    <div class="card" style="border-color:#fb923c">
+      <div class="kicker" style="color:#fb923c">🍂 衰退期</div>
+      <h3>清库 + 减投入</h3>
+      <p style="font-size:12px">预算大幅收缩 + 促销联动<br/>触发 M2 滞销决策</p>
+    </div>
+  </div>
+  <div class="gain" style="margin-top:18px"><strong>客户价值：</strong>30 天验证：利润口径 ROAS 提升 ≥ 15%，ACOS 平均下降 ≥ 5 个百分点（同时销售额不降）。</div>
+</section>
+
+<!-- 17 M3 实现原理：周期识别 -->
+<section class="slide">
+  <div class="eyebrow">M3 实现原理 · 1/5</div>
+  <h2>生命周期智能识别（规则 + LLM 复核 + 迟滞防抖）</h2>
+  <div class="cols">
+    <div class="card">
+      <h4>识别信号矩阵（7 类）</h4>
+      <table class="tt">
+        <thead><tr><th>信号</th><th>来源</th><th>用途</th></tr></thead>
+        <tbody>
+          <tr><td>上架时长</td><td>products.launched_at</td><td>区分新品 vs 其他</td></tr>
+          <tr><td>评论数</td><td>reviews count</td><td>区分新品 vs 成长</td></tr>
+          <tr><td>销量曲线（28 天）</td><td>order_profits 聚合</td><td>判断趋势</td></tr>
+          <tr><td>BSR 趋势（28 天）</td><td>competitor_snapshots</td><td>印证销量趋势</td></tr>
+          <tr><td>转化率</td><td>sessions / orders</td><td>健康度</td></tr>
+          <tr><td>库存周转</td><td>inventory</td><td>衰退信号</td></tr>
+          <tr><td>替代品出现</td><td>M4C 类目监控</td><td>衰退触发</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="card">
+      <h4>识别两步法</h4>
+      <p style="color:var(--muted);font-size:13px"><strong>Step 1 · 规则引擎初判</strong></p>
+      <div class="code">
+<span class="kw">def</span> initial_stage(sku):
+  days = (today - sku.launched_at).days
+  reviews = sku.review_count
+  trend = analyze_sales_trend(sku, 28)
+
+  <span class="com"># 新品期</span>
+  <span class="kw">if</span> days &lt; 90 <span class="kw">or</span> reviews &lt; 30:
+    <span class="kw">return</span> <span class="str">"launch"</span>
+
+  <span class="com"># 衰退期</span>
+  <span class="kw">if</span> trend.dir == <span class="str">"declining_strong"</span>:
+    <span class="kw">return</span> <span class="str">"decline"</span>
+
+  <span class="com"># 成熟期</span>
+  <span class="kw">if</span> trend.dir == <span class="str">"stable"</span> <span class="kw">and</span> reviews &gt;= 100:
+    <span class="kw">return</span> <span class="str">"mature"</span>
+
+  <span class="com"># 默认成长期</span>
+  <span class="kw">return</span> <span class="str">"growth"</span></div>
+      <p style="color:var(--muted);font-size:13px;margin-top:8px"><strong>Step 2 · LLM 复核</strong>：边界情况（"上升 26 天"vs"上升 28 天"）调用 LLM 判断"数据是否噪音 / 趋势是否会反转 / 是否有隐藏信号"。</p>
+    </div>
+  </div>
+  <div class="info" style="margin-top:14px"><strong>迟滞机制（防抖动）：</strong>新品→成长 进入后至少 21 天不能退回；成长→成熟 至少 30 天；任意→衰退 单方向，回升需 21 天才能升回成长；用户手动覆盖 14 天内不会被自动评估覆盖。</div>
+</section>
+
+<!-- 18 M3 实现原理：4 阶段策略库 -->
+<section class="slide">
+  <div class="eyebrow">M3 实现原理 · 2/5</div>
+  <h2>4 阶段策略库（共 42 条专属规则）</h2>
+  <div class="stage-row">
+    <div class="stage-name" style="color:#a5b4fc">🌱 新品期</div>
+    <div class="stage-list">
+      <strong>LAUNCH-1</strong> 自动广告 4 类型全开 ·
+      <strong>LAUNCH-2</strong> 预算 ≥ 类目均值×1.5 ·
+      <strong>LAUNCH-3</strong> Top 10 高曝光词单独广告组 ·
+      <strong>LAUNCH-4</strong> Vine 计划 ·
+      <strong>LAUNCH-5</strong> Coupon 5% off 提 CVR ·
+      <strong>LAUNCH-6</strong> 否词谨慎 ·
+      <strong>LAUNCH-7</strong> CVR &lt;类目均 50% 触发 M1 ·
+      <strong>LAUNCH-8</strong> SB 品牌广告（如备案）·
+      <strong>LAUNCH-9</strong> SD 自家关联 ASIN 防御 ·
+      <strong>LAUNCH-10</strong> 头 30 天不动核心结构
+    </div>
+    <div class="stage-kpi">10 条<br/>ACOS 容忍 30/60/100%</div>
+  </div>
+  <div class="stage-row">
+    <div class="stage-name" style="color:#22d3ee">🌳 成长期</div>
+    <div class="stage-list">
+      <strong>GROWTH-1</strong> 自动转手动 ·
+      <strong>GROWTH-2</strong> 长尾词扩展 ·
+      <strong>GROWTH-3</strong> ACOS&lt;目标自动 +30% 预算 ·
+      <strong>GROWTH-4</strong> SP 商品定位攻击 ·
+      <strong>GROWTH-5</strong> SB 品牌广告 ·
+      <strong>GROWTH-6</strong> SBV 视频 ·
+      <strong>GROWTH-7</strong> 关键词排名监控 ·
+      <strong>GROWTH-8</strong> 否词初步整理 ·
+      <strong>GROWTH-9</strong> 出价精细化 ·
+      <strong>GROWTH-10</strong> Coupon 减量 ·
+      <strong>GROWTH-11</strong> Lightning Deal 申请 ·
+      <strong>GROWTH-12</strong> 自然流量审计
+    </div>
+    <div class="stage-kpi">12 条<br/>看 TACoS 下降</div>
+  </div>
+  <div class="stage-row">
+    <div class="stage-name" style="color:#f59e0b">🌲 成熟期</div>
+    <div class="stage-list">
+      <strong>MATURE-1</strong> 否词清理 30 天 0 转化 ·
+      <strong>MATURE-2</strong> 利润 ROAS &lt;0.85 暂停建议 ·
+      <strong>MATURE-3</strong> 分时段出价 ·
+      <strong>MATURE-4</strong> 首页/详情位置加成 ·
+      <strong>MATURE-5</strong> 品牌词防御 +15-30% ·
+      <strong>MATURE-6</strong> 长尾词独立活动 ·
+      <strong>MATURE-7</strong> SD 防御 ·
+      <strong>MATURE-8</strong> 预算无效→高效 ·
+      <strong>MATURE-9</strong> A/B 出价测试 ·
+      <strong>MATURE-10</strong> 季节性预算调节 ·
+      <strong>MATURE-11</strong> 月度复盘 ·
+      <strong>MATURE-12</strong> 滞销前预警
+    </div>
+    <div class="stage-kpi">12 条<br/>ACOS &lt; 25%<br/>利润 ROAS &gt; 1.5</div>
+  </div>
+  <div class="stage-row">
+    <div class="stage-name" style="color:#fb923c">🍂 衰退期</div>
+    <div class="stage-list">
+      <strong>DECLINE-1</strong> 整体预算 -50% ·
+      <strong>DECLINE-2</strong> 仅保 ACOS &lt;20% 核心词 ·
+      <strong>DECLINE-3</strong> Coupon / Lightning Deal ·
+      <strong>DECLINE-4</strong> 促销期临时加预算 ·
+      <strong>DECLINE-5</strong> 大量否定无效投放 ·
+      <strong>DECLINE-6</strong> 替代款研究提示 ·
+      <strong>DECLINE-7</strong> 库存临界触发 M2 滞销决策 ·
+      <strong>DECLINE-8</strong> 衰退原因学习沉淀
+    </div>
+    <div class="stage-kpi">8 条<br/>利润让位库存周转</div>
+  </div>
+</section>
+
+<!-- 19 M3 实现原理：操作建议引擎 -->
+<section class="slide">
+  <div class="eyebrow">M3 实现原理 · 3/5</div>
+  <h2>每日操作建议生成引擎（凌晨 03:00）</h2>
+  <div class="pipeline">
+    <div class="box"><strong>1 拉数据</strong><br/><small>广告 + 业务 + 利润</small></div>
+    <span class="arr">→</span>
+    <div class="box"><strong>2 识别周期</strong><br/><small>每 SKU 重评估 + LLM 复核</small></div>
+    <span class="arr">→</span>
+    <div class="box"><strong>3 应用策略库</strong><br/><small>SKU × Campaign × 阶段</small></div>
+    <span class="arr">→</span>
+    <div class="box"><strong>4 规则候选</strong><br/><small>命中规则的建议候选</small></div>
+    <span class="arr">→</span>
+    <div class="box"><strong>5 AI 复核</strong><br/><small>排序 + 量化预期</small></div>
+  </div>
+  <div class="pipeline" style="margin-top:8px;justify-content:flex-end">
+    <div class="box" style="flex:initial;width:25%"><strong>6 优先级评分</strong><br/><small>影响 + 紧急 + 类型 × 阶段权重</small></div>
+    <span class="arr">→</span>
+    <div class="box" style="flex:initial;width:25%"><strong>7 写入 daily_action_list</strong></div>
+    <span class="arr">→</span>
+    <div class="box" style="flex:initial;width:25%"><strong>8 推送 Dashboard</strong></div>
+  </div>
+  <div class="cols" style="margin-top:18px">
+    <div class="card">
+      <h4>单条建议数据结构</h4>
+      <div class="code">{
+  <span class="str">"strategy_id"</span>: <span class="str">"GROWTH-3"</span>,
+  <span class="str">"lifecycle_context"</span>: { stage: <span class="str">"growth"</span> },
+  <span class="str">"scope"</span>: { level: <span class="str">"keyword"</span>, kw: <span class="str">"phone case"</span> },
+  <span class="str">"action"</span>: {
+    type: <span class="str">"increase_budget"</span>,
+    current: 100, new: 130, change_pct: 0.30
+  },
+  <span class="str">"evidence"</span>: {
+    metric: <span class="str">"acos"</span>, value: 0.18, target: 0.30,
+    duration_days: 7, trend: <span class="str">"stable_low"</span>
+  },
+  <span class="str">"expected_impact"</span>: {
+    primary_metric: <span class="str">"monthly_sales"</span>,
+    estimated_change: <span class="str">"+¥3,200"</span>,
+    confidence: 0.78
+  },
+  <span class="str">"priority"</span>: <span class="ok">"high"</span>,
+  <span class="str">"rationale"</span>: <span class="str">"ACOS 18% 远低于目标 30%, 预算受限"</span>,
+  <span class="str">"auto_executable"</span>: <span class="ok">true</span>
+}</div>
+    </div>
+    <div class="card">
+      <h4>优先级评分算法</h4>
+      <div class="code"><span class="com"># 量化影响</span>
+impact_amt &gt; 5000 → +30
+impact_amt &gt; 1000 → +20
+impact_amt &gt; 200  → +10
+
+<span class="com"># 紧急度（基于趋势）</span>
+rapidly_deteriorating → +25
+deteriorating         → +15
+
+<span class="com"># 类型权重</span>
+pause_loss_campaign → +30  <span class="com"># 止损最重要</span>
+increase_budget     → +15
+negative_keyword    → +10
+bid_adjustment      → +8
+
+<span class="com"># 阶段乘数</span>
+decline × 1.2  <span class="com"># 衰退期更紧迫</span>
+mature  × 1.0
+growth  × 0.9
+launch  × 0.8
+
+<span class="com"># 分级</span>
+score &gt;= 50 → high
+score &gt;= 25 → medium
+else        → low</div>
+    </div>
+  </div>
+  <div class="info"><strong>用户对每条建议 6 种操作：</strong>一键执行 / 自定义参数 / 拒绝并反馈（用于改进 prompt）/ 跳过 / 推迟 / 静音（该 SKU 该策略 30 天不再推荐）。</div>
+</section>
+
+<!-- 20 M3 实现原理：双 ROAS + 自动护栏 -->
+<section class="slide">
+  <div class="eyebrow">M3 实现原理 · 4/5</div>
+  <h2>利润口径 ROAS + 自动执行护栏</h2>
+  <div class="cols">
+    <div class="card">
+      <h4>双 ROAS 求解（M2 ↔ M3 循环依赖）</h4>
+      <p style="color:var(--muted);font-size:13px">M3 用 M2 的"利润 ROAS"做决策，但 M2 利润含 M3 广告分摊。<strong>双口径并存</strong>避免循环：</p>
+      <div class="code">Sales ROAS  = Sales / Spend           <span class="com"># 亚马逊原口径</span>
+Profit ROAS = (Sales × Margin
+              − OtherCosts) / Spend  <span class="com"># 利润口径</span>
+
+<span class="com"># 求解三阶段</span>
+1. 基础口径：M2 出销售 ROAS → M3 粗判
+2. 精确口径：M2 用 M3 关键词归因 → 出利润 ROAS
+3. 迭代收敛：M3 自动执行 1h 后重算（最多 3 次防抖）
+
+<span class="com"># UI 颜色编码</span>
+利润 ROAS &lt; 1   → 🔴 红（亏钱跑广告）
+销售高利润低    → 🟡 黄（看似在赚 实际没赚）
+利润 ROAS &gt; 1.5 → 🟢 绿</div>
+    </div>
+    <div class="card">
+      <h4>自动执行护栏（5 项 Safety Check）</h4>
+      <ul class="feat" style="margin:6px 0 12px">
+        <li><span class="check">1</span><div><strong>动作类型白名单</strong>：bid 调整 ±15% / 加预算 ≤+20% / 减预算 ≤-30% / 加否词。删除 / 暂停 Campaign 须人工</div></li>
+        <li><span class="check">2</span><div><strong>数值阈值</strong>：bid_change_max 15% / budget_inc_max 20% / 周累计 50%</div></li>
+        <li><span class="check">3</span><div><strong>每日配额</strong>：单 SKU ≤ 5 操作 / 单租户 ≤ 100 操作</div></li>
+        <li><span class="check">4</span><div><strong>SKU 排除</strong>：标签"重点 / 测试 / 保护期"自动跳过</div></li>
+        <li><span class="check">5</span><div><strong>时间窗口</strong>：Prime Day / 黑五期间不自动</div></li>
+      </ul>
+      <p style="color:var(--muted);font-size:12px"><strong>失败熔断：</strong>单 SKU 失败 1 次自动模式暂停 4h；失败 3 次 / 24h 全租户全自动停止 + 紧急通知。</p>
+      <p style="color:var(--muted);font-size:12px"><strong>一键回滚：</strong>所有自动执行 7 天内可一键回滚（反向 API 调用 + 审计记录）。</p>
+    </div>
+  </div>
+  <div class="info"><strong>主权三档：</strong>手动（仅给清单，全人工）/ 半自动（一键批量执行，默认）/ 全自动（按规则自动）。所有写操作必经"<strong>跨模块审计中心</strong>"统一记录，含冲突检测 + 资源锁 + 配额管控。</div>
+</section>
+
+<!-- 21 M3 实现原理：预算优化 + 库存联动 -->
+<section class="slide">
+  <div class="eyebrow">M3 实现原理 · 5/5</div>
+  <h2>整体预算分配优化 + 库存联动 + 投放健康</h2>
+  <div class="cols-3">
+    <div class="card">
+      <h4>整体预算分配优化器</h4>
+      <p style="color:var(--muted);font-size:12px">用户给月总预算 ¥X，AI 在多 Campaign 间智能分配最大化总利润。</p>
+      <div class="code">max(Σ profit_per_campaign)
+s.t. Σ budget_i ≤ total_budget
+     budget_min ≤ budget_i ≤ budget_max
+
+<span class="com"># 算法</span>
+1. 拟合每 Campaign 边际收益曲线
+2. 凸优化（每多 ¥1 预算多少利润）
+3. 边际收益相等时即为最优</div>
+      <p style="color:var(--muted);font-size:11px;margin-top:6px">输出："Brand Defense +80% / Auto SP-A -40% / Manual SP-B +63% — 预期总利润 +¥4,200/月"</p>
+    </div>
+    <div class="card">
+      <h4>库存联动（断货保护四档）</h4>
+      <table class="tt">
+        <thead><tr><th>剩余天数</th><th>行动</th></tr></thead>
+        <tbody>
+          <tr><td>&lt; 3 天</td><td><strong style="color:var(--danger)">必停广告</strong>（防浪费）</td></tr>
+          <tr><td>3-7 天</td><td>出价 -50%（激进保护）</td></tr>
+          <tr><td>7-14 天</td><td>出价 -20% +<strong style="color:var(--success)"> 联动 M2 紧急补货</strong></td></tr>
+          <tr><td>14-21 天</td><td>仅预警，不动广告</td></tr>
+          <tr><td>&gt; 21 天</td><td>正常</td></tr>
+        </tbody>
+      </table>
+      <p style="color:var(--muted);font-size:11px;margin-top:6px">海运周期 35 天，3 天断货时已晚。我们在 14 天就预警 + 触发 M2 补货决策。</p>
+    </div>
+    <div class="card">
+      <h4>投放结构健康分（百分制 8 子项）</h4>
+      <table class="tt">
+        <thead><tr><th>子项</th><th style="width:40px">权重</th></tr></thead>
+        <tbody>
+          <tr><td>Campaign 数量比例（SP:SB:SD）</td><td>15</td></tr>
+          <tr><td>AdGroup 粒度</td><td>15</td></tr>
+          <tr><td>关键词分组质量</td><td>20</td></tr>
+          <tr><td>匹配方式分布</td><td>10</td></tr>
+          <tr><td>否词覆盖</td><td>10</td></tr>
+          <tr><td>预算分布</td><td>10</td></tr>
+          <tr><td>关键词数量</td><td>10</td></tr>
+          <tr><td>品牌防御完整度</td><td>10</td></tr>
+        </tbody>
+      </table>
+      <p style="color:var(--muted);font-size:11px;margin-top:6px">每条改进按 ROI 排序，可一键应用。</p>
+    </div>
+  </div>
+  <div class="info" style="margin-top:14px"><strong>更多能力：</strong>分时段策略（7×24 出价加成）· 位置优化（首页 / 详情页）· 品牌防御 4 层级（专属 Campaign / SD 防御 / 监控反攻击）· 竞品 ASIN 攻击（基于 BSR / 评分 / 价格筛选）· 创意 A/B（自建轮替框架，非亚马逊原生）· 关键词排名追踪（有机+广告双轨）· SQP 集成（Brand Analytics）· 促销联动（Coupon / LD / BD）。</div>
+</section>
+
+<!-- 22 M4 标题 -->
+<section class="slide center">
+  <div class="eyebrow">模块四</div>
+  <div class="module-hero">
+    <div class="module-icon m4">M4</div>
+    <div>
+      <h2 style="margin-bottom:8px">日常运营监控中心</h2>
+      <p class="lead">异常 / 差评 / 竞品都不漏掉，并且每个事件都自带"该怎么办"。<br/>预警 → 响应 → 闭环。</p>
+    </div>
+  </div>
+</section>
+
+<!-- 23 M4 三位一体 -->
+<section class="slide">
+  <div class="eyebrow">M4 · 我们做了什么</div>
+  <h2>三位一体的实时监控</h2>
+  <div class="cols-3">
+    <div class="card" style="border-color:var(--danger)">
+      <div class="kicker" style="color:var(--danger)">M4A · 自家数据异常（22 类）</div>
+      <h3>P0 / P1 / P2 严重度分层</h3>
+      <p style="color:var(--muted);font-size:12px">销量 / BSR / 排名 / Buy Box / Listing 被改 / 库存 / 广告烧钱 / 退款 / 差评激增 / 政策预警 / 账户健康 / <strong>跟卖出现</strong> / <strong>侵权告警</strong> / 库容超 80% / 客服 SLA / VAT 截止 / 退款类型异常 / 类目 BSR 大变 / 价格异常 / 内容审核拒绝 / B2B 大订单 / 关键词排名</p>
+      <ul class="feat" style="margin-top:10px">
+        <li><span class="check">✓</span><div>P0 异常 5 分钟内通知</div></li>
+        <li><span class="check">✓</span><div>每个异常附 AI 根因分析 + 处置建议</div></li>
+        <li><span class="check">✓</span><div>自适应阈值（避免"狼来了"）+ 反馈降权</div></li>
+        <li><span class="check">✓</span><div>派单 + SLA + 升级（团队 ≥2 人时启用）</div></li>
+        <li><span class="check">✓</span><div>多异常关联性聚合（同根因合并）</div></li>
+      </ul>
+    </div>
+    <div class="card" style="border-color:#f59e0b">
+      <div class="kicker" style="color:#f59e0b">M4B · Review 中心</div>
+      <h3>差评聚类 + 申诉 + 挽回</h3>
+      <p style="color:var(--muted);font-size:12px">实时新评推送 · 1-3 星即时预警 · 评分趋势 · Vine review 单独跟踪</p>
+      <ul class="feat" style="margin-top:10px">
+        <li><span class="check">✓</span><div><strong>差评聚类按 4 类归因</strong>：产品质量 / Listing 描述 / 包装 / 预期管理</div></li>
+        <li><span class="check">✓</span><div>恶意评论识别 + AI 起草<strong>申诉文案</strong>（合规模板）</div></li>
+        <li><span class="check">✓</span><div>差评<strong>挽回邮件起草</strong>（默认草稿模式 + 用户审）</div></li>
+        <li><span class="check">✓</span><div>聚类一键推送到 M1 优化 Listing</div></li>
+        <li><span class="check">✓</span><div>申诉成功率跟踪</div></li>
+      </ul>
+    </div>
+    <div class="card" style="border-color:#22d3ee">
+      <div class="kicker" style="color:#22d3ee">M4C · 竞品作战室（9 维）</div>
+      <h3>检测变化 + AI 解读策略</h3>
+      <p style="color:var(--muted);font-size:12px">价格 · Listing · BSR · Review · 广告位 · 新品 · 促销 · 变体扩展 · 广告创意</p>
+      <ul class="feat" style="margin-top:10px">
+        <li><span class="check">✓</span><div><strong>Listing 主图被改的多模态视觉对比</strong>（pHash + Claude Vision）</div></li>
+        <li><span class="check">✓</span><div>AI 解读"对方在做什么策略"（清库 / 备战 / 重新定位）</div></li>
+        <li><span class="check">✓</span><div>关联响应：跟价测算 / Listing 改进 / 广告反击 自动跨模块跳转</div></li>
+        <li><span class="check">✓</span><div><strong>跟卖处置：</strong>检测 → Test Buy 指导 → 验货 → 申诉</div></li>
+        <li><span class="check">✓</span><div>竞品池 AI 推荐</div></li>
+      </ul>
+    </div>
+  </div>
+  <div class="gain"><strong>客户价值：</strong>异常响应平均时长 -50%。Test Buy 流程化，申诉成功率 ≥ 30%。新差评 1 小时内推送（站内+邮件，Phase 2 微信/企微）。</div>
+</section>
+
+<!-- 24 跨模块亮点 -->
+<section class="slide">
+  <div class="eyebrow">不止 4 个模块</div>
+  <h2>跨模块的工程亮点</h2>
+  <div class="cols">
+    <div class="card">
+      <div class="kicker">审计中心（Audit Center）</div>
+      <h3>所有自动操作可解释、可回滚</h3>
+      <ul class="feat">
+        <li><span class="check">✓</span><div><strong>统一记录</strong>：M2/M3/M4 全部自动写操作落到一份审计日志</div></li>
+        <li><span class="check">✓</span><div><strong>冲突检测</strong>：同一资源（Campaign / Listing / 价格）短时间多源改动自动阻断</div></li>
+        <li><span class="check">✓</span><div><strong>资源锁 + 配额</strong>：跨模块统一管控"单租户日操作上限"</div></li>
+        <li><span class="check">✓</span><div><strong>一键回滚</strong>：7 天内的自动操作可一键撤销（反向 API 调用）</div></li>
+        <li><span class="check">✓</span><div><strong>熔断保护</strong>：单模块连续失败 3 次暂停 4h；全局失败 30 次紧急停止</div></li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="kicker">三档主权（核心信任设计）</div>
+      <h3>决定权始终在用户手里</h3>
+      <ul class="feat">
+        <li><span class="check">✓</span><div><strong>手动</strong>：仅给建议，运营全决定</div></li>
+        <li><span class="check">✓</span><div><strong>半自动</strong>：建议 + 一键批量执行（默认）</div></li>
+        <li><span class="check">✓</span><div><strong>全自动</strong>：白名单 + 金额护栏 + 审计回溯 + 一键回滚</div></li>
+        <li><span class="check">✓</span><div>用户可按"模块 / SKU / 操作类型"细粒度配置</div></li>
+        <li><span class="check">✓</span><div>客服回复 / Listing 改动 默认强制人工审</div></li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="kicker">AI 决策可解释</div>
+      <h3>每条建议都附"为什么"</h3>
+      <p style="color:var(--muted);font-size:13px">完整推理链 + 引用证据（数据 / 规则 / 类目均值）+ 预期影响（量化 + 置信度）+ 副作用提示。运营能学到 AI 的判断逻辑，建立信任。每条决策保留 90 天可追溯。</p>
+    </div>
+    <div class="card">
+      <div class="kicker">跨境电商深度适配</div>
+      <h3>不只是"亚马逊功能搬运"</h3>
+      <p style="color:var(--muted);font-size:13px">跨境支付通道费（Payoneer/PingPong）· 汇率管理 + 远期跟踪 · 多币种 · 多国家站 · VAT/Sales Tax 申报辅助 · 海运周期 + 头程成本 · 多供应商管理 · 凑单优化 — 全部内置。</p>
+    </div>
+  </div>
+</section>
+
+<!-- 25 规模 -->
+<section class="slide">
+  <div class="eyebrow">规模与质量</div>
+  <h2>产品深度可量化</h2>
+  <div class="grid-stat">
+    <div class="stat"><div class="num">1,313</div><div class="label">需求条目<br/>（PRD 全量追踪）</div></div>
+    <div class="stat"><div class="num">196</div><div class="label">用户故事</div></div>
+    <div class="stat"><div class="num">203</div><div class="label">API 端点</div></div>
+    <div class="stat"><div class="num">22</div><div class="label">异常监控类</div></div>
+  </div>
+  <div class="grid-stat">
+    <div class="stat"><div class="num-sm">18</div><div class="label">利润费用归集项</div></div>
+    <div class="stat"><div class="num-sm">42</div><div class="label">广告策略<br/>（4 周期合计）</div></div>
+    <div class="stat"><div class="num-sm">12</div><div class="label">利润漏点类型</div></div>
+    <div class="stat"><div class="num-sm">9</div><div class="label">竞品监控维度</div></div>
+  </div>
+  <div class="grid-stat">
+    <div class="stat"><div class="num-sm">11</div><div class="label">M1 AI Prompts</div></div>
+    <div class="stat"><div class="num-sm">17</div><div class="label">评分子项</div></div>
+    <div class="stat"><div class="num-sm">8</div><div class="label">广告健康分子项</div></div>
+    <div class="stat"><div class="num-sm">21</div><div class="label">数据库核心表</div></div>
+  </div>
+  <div class="quote" style="margin-top:24px;font-size:18px">
+    <span style="color:var(--muted)">所有功能从 PRD → 设计 → 实现 → 测试全链路追溯。</span><br/>
+    每个需求都能定位到具体的代码、API、测试用例。
+  </div>
+</section>
+
+<!-- 26 价值矩阵 -->
+<section class="slide">
+  <div class="eyebrow">客户价值</div>
+  <h2>4 个模块带来的可量化收益</h2>
+  <div class="cols-4" style="margin-top:24px">
+    <div class="card" style="border-color:var(--primary)">
+      <div class="kicker" style="color:var(--primary)">M1 价值</div>
+      <div class="num-sm">+8% CVR</div>
+      <p style="font-size:12px;margin-top:4px">14 天 A/B 验证</p>
+      <p style="color:var(--muted);font-size:12px">替代设计师沟通成本</p>
+    </div>
+    <div class="card" style="border-color:#22d3ee">
+      <div class="kicker" style="color:#22d3ee">M2 价值</div>
+      <div class="num-sm">+5-15% 利润</div>
+      <p style="font-size:12px;margin-top:4px">月度可挽回</p>
+      <p style="color:var(--muted);font-size:12px">真实利润看得清</p>
+    </div>
+    <div class="card" style="border-color:#f59e0b">
+      <div class="kicker" style="color:#f59e0b">M3 价值</div>
+      <div class="num-sm">+15% ROAS</div>
+      <p style="font-size:12px;margin-top:4px">利润口径，30 天验证</p>
+      <p style="color:var(--muted);font-size:12px">ACOS 同时下降 5pp</p>
+    </div>
+    <div class="card" style="border-color:#10b981">
+      <div class="kicker" style="color:#10b981">M4 价值</div>
+      <div class="num-sm">-50% 响应时长</div>
+      <p style="font-size:12px;margin-top:4px">异常 5 分钟到达</p>
+      <p style="color:var(--muted);font-size:12px">申诉成功率 ≥ 30%</p>
+    </div>
+  </div>
+  <div class="gain" style="margin-top:24px">
+    <strong>典型中卖测算（30 SKU、月销 ¥80 万、毛利 25%）：</strong>
+    利润漏点修复 3-5% + 广告优化 2-4% + 库存周转 1-3% + CVR 提升 1-2% =
+    <strong style="color:#fff">合计每月净利润提升 7-14%（即 ¥1.4-3.2 万 / 月）</strong>
+  </div>
+</section>
+
+<!-- 27 安全 -->
+<section class="slide">
+  <div class="eyebrow">安全与信任</div>
+  <h2>你的店铺数据安全吗？</h2>
+  <div class="cols">
+    <div class="card">
+      <div class="kicker">数据安全</div>
+      <ul class="feat">
+        <li><span class="check">✓</span><div>OAuth 授权，<strong>不存密码</strong>，refresh_token KMS 加密</div></li>
+        <li><span class="check">✓</span><div>多租户严格隔离 + 行级安全（RLS）</div></li>
+        <li><span class="check">✓</span><div>用户随时可撤销授权 + 24 小时内清除数据</div></li>
+        <li><span class="check">✓</span><div>静态加密 + 传输 mTLS + 全链路审计日志</div></li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="kicker">操作安全</div>
+      <ul class="feat">
+        <li><span class="check">✓</span><div><strong>默认不写真实店铺</strong>：必须用户显式开启</div></li>
+        <li><span class="check">✓</span><div>三档主权 + 全自动模式护栏（金额 / 类型 / SKU 白名单）</div></li>
+        <li><span class="check">✓</span><div>所有自动操作可一键回滚（7 天内）</div></li>
+        <li><span class="check">✓</span><div>错误处置可追溯到具体决策 + 推理链</div></li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="kicker">合规</div>
+      <ul class="feat">
+        <li><span class="check">✓</span><div>SP-API / Ads API 官方授权流程</div></li>
+        <li><span class="check">✓</span><div>第三方数据（Keepa / SellerSprite）正版授权，<strong>不自爬</strong></div></li>
+        <li><span class="check">✓</span><div>EU 数据可选 EU 部署区域（GDPR）</div></li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="kicker">免责说明</div>
+      <p style="color:var(--muted);font-size:13px">所有 AI 建议是"建议"，最终决定权在用户。<br/>错误决策不构成法律责任。<br/>申诉文案 / 法律相关建议为参考稿，不构成法律意见。</p>
+    </div>
+  </div>
+</section>
+
+<!-- 28 合作路径 -->
+<section class="slide">
+  <div class="eyebrow">合作路径</div>
+  <h2>从 Beta 到全店上线</h2>
+  <div class="flow" style="grid-template-columns:repeat(4,1fr);gap:14px">
+    <div class="step">
+      <div class="num-step">1</div>
+      <h4>体验试用（14 天）</h4>
+      <p>授权 SP-API 沙箱<br/>5 SKU 试跑 4 模块</p>
+    </div>
+    <div class="step">
+      <div class="num-step">2</div>
+      <h4>Onboarding</h4>
+      <p>30 分钟出基础概览<br/>24-72 小时全模块就绪</p>
+    </div>
+    <div class="step">
+      <div class="num-step">3</div>
+      <h4>核心模块上线</h4>
+      <p>建议 M2 利润 + M3 广告<br/>30 天看可量化提升</p>
+    </div>
+    <div class="step">
+      <div class="num-step">4</div>
+      <h4>全店扩展</h4>
+      <p>M1 Listing + M4 监控<br/>团队 + 多店铺协同</p>
+    </div>
+  </div>
+  <div class="cols" style="margin-top:24px">
+    <div class="card">
+      <h4>Onboarding 分级（解决"首日黑暗期"流失）</h4>
+      <table class="tt">
+        <thead><tr><th>时长</th><th>用户能看到</th></tr></thead>
+        <tbody>
+          <tr><td>0-5 分钟</td><td>店铺基础概览（店铺 / SKU 数 / 7d GMV 估算）</td></tr>
+          <tr><td>5-30 分钟</td><td>单 SKU 快速诊断（M1 评分基于 Listing 文本）</td></tr>
+          <tr><td>30 分钟-4 小时</td><td>M2 销售总览 + M3 广告概览</td></tr>
+          <tr><td>4-24 小时</td><td>完整 M2 利润 + 漏点初步识别</td></tr>
+          <tr><td>24-72 小时</td><td>全模块完整诊断 + 第三方数据接入</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="card">
+      <h4>每个里程碑都有可量化指标验证</h4>
+      <ul class="feat">
+        <li><span class="check">✓</span><div><strong>M1</strong> 看 14 天 A/B 后 CVR lift</div></li>
+        <li><span class="check">✓</span><div><strong>M2</strong> 看月度可挽回利润额（漏点 + 决策）</div></li>
+        <li><span class="check">✓</span><div><strong>M3</strong> 看 30 天利润口径 ROAS 提升</div></li>
+        <li><span class="check">✓</span><div><strong>M4</strong> 看异常响应时长 + 申诉成功率</div></li>
+        <li><span class="check">✓</span><div>试用期完整度 &lt;80% 自动延长 7 天（防数据未就绪误流失）</div></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 29 结尾 -->
+<section class="slide cover" style="justify-content:center;align-items:flex-start">
+  <div class="pill">下一步</div>
+  <h1 style="margin-top:20px">从"亏在哪都不知道"<br/>到"赚在哪一清二楚"</h1>
+  <p class="lead" style="margin-top:24px">
+    给我们 14 天，让 AI 跟你的真实店铺跑一遍，<br/>
+    看看月度可挽回利润到底有多少。
+  </p>
+  <div class="cols-3" style="margin-top:36px;width:100%">
+    <div class="card" style="text-align:center">
+      <div class="kicker" style="color:var(--primary)">联系试用</div>
+      <p style="color:var(--fg)">扫码 / 微信</p>
+    </div>
+    <div class="card" style="text-align:center">
+      <div class="kicker" style="color:var(--success)">技术对接</div>
+      <p style="color:var(--fg)">SP-API / Ads API 沙箱授权指引</p>
+    </div>
+    <div class="card" style="text-align:center">
+      <div class="kicker" style="color:var(--accent)">商务合作</div>
+      <p style="color:var(--fg)">企业版 / 私有化部署</p>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<div class="progress" id="progress"></div>
+<div class="help">← → 翻页 ｜ Esc 退出全屏 ｜ Ctrl+P 打印为 PDF</div>
+<div class="nav">
+  <button onclick="prev()">‹ 上一页</button>
+  <button onclick="next()">下一页 ›</button>
+</div>
+
+<script>
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const params = new URLSearchParams(location.search);
+  // 默认 = PDF 平铺模式（无 JS 也能正确打印）
+  // 浏览器交互模式：URL 不带 ?print=1 时，JS 加 body.is-screen 切换为单屏演示
+  const wantsPrint = params.has('print') || /print=1/.test(location.search) || /print$/.test(location.hash);
+
+  if(wantsPrint){
+    // 保持默认平铺模式
+  } else {
+    document.body.classList.add('is-screen');
+    let cur = 0;
+    function show(i){
+      slides.forEach((s,idx)=>s.classList.toggle('active', idx===i));
+      document.getElementById('progress').style.width = ((i+1)/slides.length*100)+'%';
+      cur = i;
+      history.replaceState(null,'','#'+(i+1));
+    }
+    function next(){ if(cur<slides.length-1) show(cur+1); }
+    function prev(){ if(cur>0) show(cur-1); }
+    window.next = next; window.prev = prev;
+    document.addEventListener('keydown', e=>{
+      if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown') next();
+      else if(e.key==='ArrowLeft'||e.key==='PageUp') prev();
+      else if(e.key==='Home') show(0);
+      else if(e.key==='End') show(slides.length-1);
+    });
+    document.addEventListener('click', e=>{
+      if(e.target.closest('button')) return;
+      if(e.clientX > window.innerWidth*0.5) next(); else prev();
+    });
+    const m = window.location.hash.match(/(\d+)/);
+    if(m){ const i=Math.max(0,Math.min(slides.length-1,parseInt(m[1])-1)); show(i); }
+    else show(0);
+  }
+</script>
+
+</body>
+</html>

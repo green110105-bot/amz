@@ -1,0 +1,181 @@
+{
+  "module": "M4",
+  "stories": [
+    {
+      "id": "US-M4-001",
+      "module": "M4",
+      "story": "作为运营，我希望系统 24/7 监控我的店铺关键指标，发现异常时主动通知",
+      "acceptance": "14 类异常全覆盖",
+      "source": "docs/modules/M4-daily-ops-monitoring.md:138",
+      "status": "pending",
+      "implementation": "deferred/partial: audit and notification contracts first",
+      "test": "pending test design",
+      "dependencyMode": "mock_until_credentials"
+    },
+    {
+      "id": "US-M4-002",
+      "module": "M4",
+      "story": "作为运营，我希望异常按严重度（P0/P1/P2）分层",
+      "acceptance": "三档清晰",
+      "source": "docs/modules/M4-daily-ops-monitoring.md:139",
+      "status": "pending",
+      "implementation": "deferred/partial: audit and notification contracts first",
+      "test": "pending test design",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M4-003",
+      "module": "M4",
+      "story": "作为运营，我希望 P0 异常 5 分钟内收到通知",
+      "acceptance": "SLA 5 min",
+      "source": "docs/modules/M4-daily-ops-monitoring.md:140",
+      "status": "pending",
+      "implementation": "deferred/partial: audit and notification contracts first",
+      "test": "pending test design",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M4-004",
+      "module": "M4",
+      "story": "作为运营，我希望对每个异常都能看到\"该怎么办\"的建议",
+      "acceptance": "100% 覆盖",
+      "source": "docs/modules/M4-daily-ops-monitoring.md:141",
+      "status": "pending",
+      "implementation": "deferred/partial: audit and notification contracts first",
+      "test": "pending test design",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M4-005",
+      "module": "M4",
+      "story": "作为运营，我希望对一些异常能\"一键处置\"（如跟价、暂停 Campaign）",
+      "acceptance": "一键可执行",
+      "source": "docs/modules/M4-daily-ops-monitoring.md:142",
+      "status": "pending",
+      "implementation": "deferred/partial: audit and notification contracts first",
+      "test": "pending test design",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M4-006",
+      "module": "M4",
+      "story": "作为运营，我希望新差评实时推送",
+      "acceptance": "< 1 小时",
+      "source": "docs/modules/M4-daily-ops-monitoring.md:143",
+      "status": "pending",
+      "implementation": "deferred/partial: audit and notification contracts first",
+      "test": "pending test design",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M4-007",
+      "module": "M4",
+      "story": "作为运营，我希望差评聚类分析告诉我该改产品 / Listing 还是包装",
+      "acceptance": "4 类归因",
+      "source": "docs/modules/M4-daily-ops-monitoring.md:144",
+      "status": "pending",
+      "implementation": "deferred/partial: audit and notification contracts first",
+      "test": "pending test design",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M4-008",
+      "module": "M4",
+      "story": "作为运营，我希望对恶意评论自动起草申诉文案",
+      "acceptance": "文案合规",
+      "source": "docs/modules/M4-daily-ops-monitoring.md:145",
+      "status": "pending",
+      "implementation": "deferred/partial: audit and notification contracts first",
+      "test": "pending test design",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M4-009",
+      "module": "M4",
+      "story": "作为运营，我希望对差评起草礼貌挽回邮件",
+      "acceptance": "模板可改",
+      "source": "docs/modules/M4-daily-ops-monitoring.md:146",
+      "status": "pending",
+      "implementation": "deferred/partial: audit and notification contracts first",
+      "test": "pending test design",
+      "dependencyMode": "mock_until_credentials"
+    },
+    {
+      "id": "US-M4-010",
+      "module": "M4",
+      "story": "作为运营，我希望关注的竞品 ASIN 池可管理（添加/删除）",
+      "acceptance": "5-10 个/SKU",
+      "source": "docs/modules/M4-daily-ops-monitoring.md:147",
+      "status": "pending",
+      "implementation": "deferred/partial: audit and notification contracts first",
+      "test": "pending test design",
+      "dependencyMode": "mock_until_credentials"
+    },
+    {
+      "id": "US-M4-011",
+      "module": "M4",
+      "story": "作为运营，我希望竞品 7 维监控（价格/Listing/BSR/Review/广告位/新品/促销）",
+      "acceptance": "全部",
+      "source": "docs/modules/M4-daily-ops-monitoring.md:148",
+      "status": "pending",
+      "implementation": "deferred/partial: audit and notification contracts first",
+      "test": "pending test design",
+      "dependencyMode": "mock_until_credentials"
+    },
+    {
+      "id": "US-M4-012",
+      "module": "M4",
+      "story": "作为运营，我希望对竞品变化 AI 给出\"对方在做什么策略\"的解读",
+      "acceptance": "解读准确",
+      "source": "docs/modules/M4-daily-ops-monitoring.md:149",
+      "status": "pending",
+      "implementation": "deferred/partial: audit and notification contracts first",
+      "test": "pending test design",
+      "dependencyMode": "mock_until_credentials"
+    },
+    {
+      "id": "US-M4-013",
+      "module": "M4",
+      "story": "作为运营，我希望竞品变化能关联到我该做的动作（M1/M2/M3）",
+      "acceptance": "跨模块联动",
+      "source": "docs/modules/M4-daily-ops-monitoring.md:150",
+      "status": "pending",
+      "implementation": "deferred/partial: audit and notification contracts first",
+      "test": "pending test design",
+      "dependencyMode": "mock_until_credentials"
+    },
+    {
+      "id": "US-M4-014",
+      "module": "M4",
+      "story": "作为运营，我希望异常通知支持站内 + 邮件",
+      "acceptance": "Phase 1 双通道",
+      "source": "docs/modules/M4-daily-ops-monitoring.md:151",
+      "status": "pending",
+      "implementation": "deferred/partial: audit and notification contracts first",
+      "test": "pending test design",
+      "dependencyMode": "mock_until_credentials"
+    },
+    {
+      "id": "US-M4-015",
+      "module": "M4",
+      "story": "作为运营，我希望可对某个异常类型 / SKU 设置静音",
+      "acceptance": "静音可配",
+      "source": "docs/modules/M4-daily-ops-monitoring.md:152",
+      "status": "pending",
+      "implementation": "deferred/partial: audit and notification contracts first",
+      "test": "pending test design",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M4-016",
+      "module": "M4",
+      "story": "作为运营，我希望异常处置后自动跟踪是否真的解决了",
+      "acceptance": "闭环跟踪",
+      "source": "docs/modules/M4-daily-ops-monitoring.md:153",
+      "status": "pending",
+      "implementation": "deferred/partial: audit and notification contracts first",
+      "test": "pending test design",
+      "dependencyMode": "local_domain"
+    }
+  ]
+}

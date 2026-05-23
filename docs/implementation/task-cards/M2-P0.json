@@ -1,0 +1,170 @@
+{
+  "module": "M2",
+  "stories": [
+    {
+      "id": "US-M2-001",
+      "module": "M2",
+      "story": "作为卖家，我希望看到昨日 / 7 日 / 30 日的店铺总净利润和利润率",
+      "acceptance": "数字精确至 ±2%",
+      "source": "docs/modules/M2-realtime-profit-inventory.md:118",
+      "status": "started_mock",
+      "implementation": "packages/domain/src/profit-engine.mjs + leak-detector.mjs + inventory-engine.mjs",
+      "test": "tests/domain/profit-engine.test.mjs / leak-detector.test.mjs / inventory-engine.test.mjs",
+      "dependencyMode": "mock_until_credentials"
+    },
+    {
+      "id": "US-M2-002",
+      "module": "M2",
+      "story": "作为卖家，我希望看到单 SKU 的滚动净利润 + 利润率趋势",
+      "acceptance": "图表可下钻",
+      "source": "docs/modules/M2-realtime-profit-inventory.md:119",
+      "status": "started_mock",
+      "implementation": "packages/domain/src/profit-engine.mjs + leak-detector.mjs + inventory-engine.mjs",
+      "test": "tests/domain/profit-engine.test.mjs / leak-detector.test.mjs / inventory-engine.test.mjs",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M2-003",
+      "module": "M2",
+      "story": "作为卖家，我希望对每笔订单都能看到完整成本拆解（14 项费用）",
+      "acceptance": "瀑布图可视",
+      "source": "docs/modules/M2-realtime-profit-inventory.md:120",
+      "status": "started_mock",
+      "implementation": "packages/domain/src/profit-engine.mjs + leak-detector.mjs + inventory-engine.mjs",
+      "test": "tests/domain/profit-engine.test.mjs / leak-detector.test.mjs / inventory-engine.test.mjs",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M2-004",
+      "module": "M2",
+      "story": "作为卖家，我希望系统主动提醒我\"这里漏钱了\"",
+      "acceptance": "漏点 ≥ 6 类被监测",
+      "source": "docs/modules/M2-realtime-profit-inventory.md:121",
+      "status": "started_mock",
+      "implementation": "packages/domain/src/profit-engine.mjs + leak-detector.mjs + inventory-engine.mjs",
+      "test": "tests/domain/profit-engine.test.mjs / leak-detector.test.mjs / inventory-engine.test.mjs",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M2-005",
+      "module": "M2",
+      "story": "作为卖家，我希望对每个漏点能看到\"修复后预计每月可省 ¥X\"",
+      "acceptance": "量化估算",
+      "source": "docs/modules/M2-realtime-profit-inventory.md:122",
+      "status": "pending",
+      "implementation": "packages/domain/src/profit-engine.mjs + leak-detector.mjs + inventory-engine.mjs",
+      "test": "tests/domain/profit-engine.test.mjs / leak-detector.test.mjs / inventory-engine.test.mjs",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M2-006",
+      "module": "M2",
+      "story": "作为卖家，我希望系统按\"利润 ROAS\"评估广告，而不是销售 ROAS",
+      "acceptance": "双指标并列",
+      "source": "docs/modules/M2-realtime-profit-inventory.md:123",
+      "status": "started_mock",
+      "implementation": "packages/domain/src/profit-engine.mjs + leak-detector.mjs + inventory-engine.mjs",
+      "test": "tests/domain/profit-engine.test.mjs / leak-detector.test.mjs / inventory-engine.test.mjs",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M2-007",
+      "module": "M2",
+      "story": "作为卖家，我希望看到每个 SKU 的资金周转天数",
+      "acceptance": "显示 + 排序",
+      "source": "docs/modules/M2-realtime-profit-inventory.md:124",
+      "status": "pending",
+      "implementation": "packages/domain/src/profit-engine.mjs + leak-detector.mjs + inventory-engine.mjs",
+      "test": "tests/domain/profit-engine.test.mjs / leak-detector.test.mjs / inventory-engine.test.mjs",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M2-008",
+      "module": "M2",
+      "story": "作为卖家，我希望系统给\"该不该补 / 补多少\"的建议",
+      "acceptance": "含金额测算",
+      "source": "docs/modules/M2-realtime-profit-inventory.md:125",
+      "status": "started_mock",
+      "implementation": "packages/domain/src/profit-engine.mjs + leak-detector.mjs + inventory-engine.mjs",
+      "test": "tests/domain/profit-engine.test.mjs / leak-detector.test.mjs / inventory-engine.test.mjs",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M2-009",
+      "module": "M2",
+      "story": "作为卖家，我希望对滞销 SKU 系统给出\"继续 / 清库 / 移除\"对比",
+      "acceptance": "三选项含金额",
+      "source": "docs/modules/M2-realtime-profit-inventory.md:126",
+      "status": "started_mock",
+      "implementation": "packages/domain/src/profit-engine.mjs + leak-detector.mjs + inventory-engine.mjs",
+      "test": "tests/domain/profit-engine.test.mjs / leak-detector.test.mjs / inventory-engine.test.mjs",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M2-010",
+      "module": "M2",
+      "story": "作为卖家，我希望对竞品降价能看到\"跟到什么价我还赚\"",
+      "acceptance": "价格-利润曲线",
+      "source": "docs/modules/M2-realtime-profit-inventory.md:127",
+      "status": "started_mock",
+      "implementation": "packages/domain/src/profit-engine.mjs + leak-detector.mjs + inventory-engine.mjs",
+      "test": "tests/domain/profit-engine.test.mjs / leak-detector.test.mjs / inventory-engine.test.mjs",
+      "dependencyMode": "mock_until_credentials"
+    },
+    {
+      "id": "US-M2-011",
+      "module": "M2",
+      "story": "作为卖家，我希望随时点\"重新计算\"立即更新数据",
+      "acceptance": "30s 内完成",
+      "source": "docs/modules/M2-realtime-profit-inventory.md:128",
+      "status": "pending",
+      "implementation": "packages/domain/src/profit-engine.mjs + leak-detector.mjs + inventory-engine.mjs",
+      "test": "tests/domain/profit-engine.test.mjs / leak-detector.test.mjs / inventory-engine.test.mjs",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M2-012",
+      "module": "M2",
+      "story": "作为卖家，我希望录入采购成本/头程/海运周期支持批量上传",
+      "acceptance": "Excel / CSV",
+      "source": "docs/modules/M2-realtime-profit-inventory.md:129",
+      "status": "pending",
+      "implementation": "packages/domain/src/profit-engine.mjs + leak-detector.mjs + inventory-engine.mjs",
+      "test": "tests/domain/profit-engine.test.mjs / leak-detector.test.mjs / inventory-engine.test.mjs",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M2-013",
+      "module": "M2",
+      "story": "作为卖家，我希望成本未填的 SKU 系统用估算 + 标\"估算\"",
+      "acceptance": "标记清晰",
+      "source": "docs/modules/M2-realtime-profit-inventory.md:130",
+      "status": "started_mock",
+      "implementation": "packages/domain/src/profit-engine.mjs + leak-detector.mjs + inventory-engine.mjs",
+      "test": "tests/domain/profit-engine.test.mjs / leak-detector.test.mjs / inventory-engine.test.mjs",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M2-014",
+      "module": "M2",
+      "story": "作为卖家，我希望多店铺/多国家站可聚合查看",
+      "acceptance": "切换+聚合视图",
+      "source": "docs/modules/M2-realtime-profit-inventory.md:131",
+      "status": "pending",
+      "implementation": "packages/domain/src/profit-engine.mjs + leak-detector.mjs + inventory-engine.mjs",
+      "test": "tests/domain/profit-engine.test.mjs / leak-detector.test.mjs / inventory-engine.test.mjs",
+      "dependencyMode": "mock_until_credentials"
+    },
+    {
+      "id": "US-M2-015",
+      "module": "M2",
+      "story": "作为卖家，我希望按时段、按广告活动、按关键词分别看利润",
+      "acceptance": "钻取顺畅",
+      "source": "docs/modules/M2-realtime-profit-inventory.md:132",
+      "status": "pending",
+      "implementation": "packages/domain/src/profit-engine.mjs + leak-detector.mjs + inventory-engine.mjs",
+      "test": "tests/domain/profit-engine.test.mjs / leak-detector.test.mjs / inventory-engine.test.mjs",
+      "dependencyMode": "local_domain"
+    }
+  ]
+}

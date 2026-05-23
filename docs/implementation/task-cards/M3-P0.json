@@ -1,0 +1,170 @@
+{
+  "module": "M3",
+  "stories": [
+    {
+      "id": "US-M3-001",
+      "module": "M3",
+      "story": "作为运营，我希望系统自动识别每个 SKU 当前处于哪个生命周期阶段",
+      "acceptance": "4 阶段全覆盖",
+      "source": "docs/modules/M3-lifecycle-ad-optimization.md:133",
+      "status": "started_mock",
+      "implementation": "packages/domain/src/lifecycle-engine.mjs + audit-center.mjs",
+      "test": "tests/domain/lifecycle-engine.test.mjs / audit-center.test.mjs",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M3-002",
+      "module": "M3",
+      "story": "作为运营，我希望可以手动覆盖 AI 的阶段判断",
+      "acceptance": "覆盖后所有策略适配",
+      "source": "docs/modules/M3-lifecycle-ad-optimization.md:134",
+      "status": "pending",
+      "implementation": "packages/domain/src/lifecycle-engine.mjs + audit-center.mjs",
+      "test": "tests/domain/lifecycle-engine.test.mjs / audit-center.test.mjs",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M3-003",
+      "module": "M3",
+      "story": "作为运营，我希望每天看到一份\"今日广告操作清单\"",
+      "acceptance": "高/中/低优先级排序",
+      "source": "docs/modules/M3-lifecycle-ad-optimization.md:135",
+      "status": "started_mock",
+      "implementation": "packages/domain/src/lifecycle-engine.mjs + audit-center.mjs",
+      "test": "tests/domain/lifecycle-engine.test.mjs / audit-center.test.mjs",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M3-004",
+      "module": "M3",
+      "story": "作为运营，我希望每条建议都附\"为什么\"的推理",
+      "acceptance": "可展开查看依据",
+      "source": "docs/modules/M3-lifecycle-ad-optimization.md:136",
+      "status": "started_mock",
+      "implementation": "packages/domain/src/lifecycle-engine.mjs + audit-center.mjs",
+      "test": "tests/domain/lifecycle-engine.test.mjs / audit-center.test.mjs",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M3-005",
+      "module": "M3",
+      "story": "作为运营，我希望对建议能\"采纳/拒绝/批量执行\"",
+      "acceptance": "一键操作",
+      "source": "docs/modules/M3-lifecycle-ad-optimization.md:137",
+      "status": "started_mock",
+      "implementation": "packages/domain/src/lifecycle-engine.mjs + audit-center.mjs",
+      "test": "tests/domain/lifecycle-engine.test.mjs / audit-center.test.mjs",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M3-006",
+      "module": "M3",
+      "story": "作为运营，我希望系统按\"利润 ROAS\"评估广告，而不仅是销售 ROAS",
+      "acceptance": "双指标显示",
+      "source": "docs/modules/M3-lifecycle-ad-optimization.md:138",
+      "status": "started_mock",
+      "implementation": "packages/domain/src/lifecycle-engine.mjs + audit-center.mjs",
+      "test": "tests/domain/lifecycle-engine.test.mjs / audit-center.test.mjs",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M3-007",
+      "module": "M3",
+      "story": "作为运营，我希望阶段切换时收到提醒",
+      "acceptance": "切换 7 天内提醒",
+      "source": "docs/modules/M3-lifecycle-ad-optimization.md:139",
+      "status": "pending",
+      "implementation": "packages/domain/src/lifecycle-engine.mjs + audit-center.mjs",
+      "test": "tests/domain/lifecycle-engine.test.mjs / audit-center.test.mjs",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M3-008",
+      "module": "M3",
+      "story": "作为运营，我希望对每个 Campaign 看到所属阶段的策略目标和容忍 KPI",
+      "acceptance": "直观可见",
+      "source": "docs/modules/M3-lifecycle-ad-optimization.md:140",
+      "status": "pending",
+      "implementation": "packages/domain/src/lifecycle-engine.mjs + audit-center.mjs",
+      "test": "tests/domain/lifecycle-engine.test.mjs / audit-center.test.mjs",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M3-009",
+      "module": "M3",
+      "story": "作为运营，我希望否词管理高效（建议+一键执行）",
+      "acceptance": "30 天 0 转化词识别准确",
+      "source": "docs/modules/M3-lifecycle-ad-optimization.md:141",
+      "status": "pending",
+      "implementation": "packages/domain/src/lifecycle-engine.mjs + audit-center.mjs",
+      "test": "tests/domain/lifecycle-engine.test.mjs / audit-center.test.mjs",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M3-010",
+      "module": "M3",
+      "story": "作为运营，我希望从搜索词报告自动找到\"该转手动的关键词\"",
+      "acceptance": "推荐准确度 ≥ 80%",
+      "source": "docs/modules/M3-lifecycle-ad-optimization.md:142",
+      "status": "pending",
+      "implementation": "packages/domain/src/lifecycle-engine.mjs + audit-center.mjs",
+      "test": "tests/domain/lifecycle-engine.test.mjs / audit-center.test.mjs",
+      "dependencyMode": "mock_until_credentials"
+    },
+    {
+      "id": "US-M3-011",
+      "module": "M3",
+      "story": "作为运营，我希望执行一个建议后能跟踪 7-14 天的效果",
+      "acceptance": "效果显示",
+      "source": "docs/modules/M3-lifecycle-ad-optimization.md:143",
+      "status": "started_mock",
+      "implementation": "packages/domain/src/lifecycle-engine.mjs + audit-center.mjs",
+      "test": "tests/domain/lifecycle-engine.test.mjs / audit-center.test.mjs",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M3-012",
+      "module": "M3",
+      "story": "作为运营，我希望按时段调整出价（白天/夜晚）",
+      "acceptance": "dayparting 可配",
+      "source": "docs/modules/M3-lifecycle-ad-optimization.md:144",
+      "status": "pending",
+      "implementation": "packages/domain/src/lifecycle-engine.mjs + audit-center.mjs",
+      "test": "tests/domain/lifecycle-engine.test.mjs / audit-center.test.mjs",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M3-013",
+      "module": "M3",
+      "story": "作为运营，我希望按位置（首页/详情页）调整 bid",
+      "acceptance": "位置加成可配",
+      "source": "docs/modules/M3-lifecycle-ad-optimization.md:145",
+      "status": "pending",
+      "implementation": "packages/domain/src/lifecycle-engine.mjs + audit-center.mjs",
+      "test": "tests/domain/lifecycle-engine.test.mjs / audit-center.test.mjs",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M3-014",
+      "module": "M3",
+      "story": "作为运营，我希望品牌词防御自动化",
+      "acceptance": "品牌词 bid 维持",
+      "source": "docs/modules/M3-lifecycle-ad-optimization.md:146",
+      "status": "pending",
+      "implementation": "packages/domain/src/lifecycle-engine.mjs + audit-center.mjs",
+      "test": "tests/domain/lifecycle-engine.test.mjs / audit-center.test.mjs",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M3-015",
+      "module": "M3",
+      "story": "作为运营，我希望对广告活动可标\"暂不优化\"（如新品保护期）",
+      "acceptance": "标记后系统不推荐",
+      "source": "docs/modules/M3-lifecycle-ad-optimization.md:147",
+      "status": "pending",
+      "implementation": "packages/domain/src/lifecycle-engine.mjs + audit-center.mjs",
+      "test": "tests/domain/lifecycle-engine.test.mjs / audit-center.test.mjs",
+      "dependencyMode": "local_domain"
+    }
+  ]
+}

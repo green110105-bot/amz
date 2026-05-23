@@ -1,0 +1,181 @@
+{
+  "module": "M1",
+  "stories": [
+    {
+      "id": "US-M1-001",
+      "module": "M1",
+      "story": "作为运营，我希望选择一个 SKU 后系统能自动拉取其当前 Listing、5 个头部竞品 Listing、近 30 天搜索词报告、自家 + 竞品最近 50 条 Review，作为优化基础数据",
+      "acceptance": "数据齐全，10s 内呈现",
+      "source": "docs/modules/M1-listing-optimization.md:154",
+      "status": "pending",
+      "implementation": "deferred: listing adapter and scoring engine after M2/M3 loop",
+      "test": "pending test design",
+      "dependencyMode": "mock_until_credentials"
+    },
+    {
+      "id": "US-M1-002",
+      "module": "M1",
+      "story": "作为运营，我希望看到当前 Listing 的 5 维度评分（百分制）+ 总分",
+      "acceptance": "评分有依据可展开",
+      "source": "docs/modules/M1-listing-optimization.md:155",
+      "status": "pending",
+      "implementation": "deferred: listing adapter and scoring engine after M2/M3 loop",
+      "test": "pending test design",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M1-003",
+      "module": "M1",
+      "story": "作为运营，我希望看到 AI 推荐的\"最关键的 3-5 个改进点\"（按 ROI 排序）",
+      "acceptance": "每条带预期分数提升",
+      "source": "docs/modules/M1-listing-optimization.md:156",
+      "status": "pending",
+      "implementation": "deferred: listing adapter and scoring engine after M2/M3 loop",
+      "test": "pending test design",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M1-004",
+      "module": "M1",
+      "story": "作为运营，我希望选择 1 个改进点后，AI 给我 3 个不同风格的改写方案",
+      "acceptance": "3 案文风/侧重不同",
+      "source": "docs/modules/M1-listing-optimization.md:157",
+      "status": "pending",
+      "implementation": "deferred: listing adapter and scoring engine after M2/M3 loop",
+      "test": "pending test design",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M1-005",
+      "module": "M1",
+      "story": "作为运营，我希望对 AI 方案能\"采纳 / 微调 / 拒绝并要求重写\"",
+      "acceptance": "反馈循环顺畅",
+      "source": "docs/modules/M1-listing-optimization.md:158",
+      "status": "pending",
+      "implementation": "deferred: listing adapter and scoring engine after M2/M3 loop",
+      "test": "pending test design",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M1-006",
+      "module": "M1",
+      "story": "作为运营，我希望每完成一轮迭代后能看到新评分 + 与上一轮的对比",
+      "acceptance": "对比直观",
+      "source": "docs/modules/M1-listing-optimization.md:159",
+      "status": "pending",
+      "implementation": "deferred: listing adapter and scoring engine after M2/M3 loop",
+      "test": "pending test design",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M1-007",
+      "module": "M1",
+      "story": "作为运营，我希望一键将优化后版本同步到亚马逊后台",
+      "acceptance": "同步成功率 ≥ 99%",
+      "source": "docs/modules/M1-listing-optimization.md:160",
+      "status": "pending",
+      "implementation": "deferred: listing adapter and scoring engine after M2/M3 loop",
+      "test": "pending test design",
+      "dependencyMode": "mock_until_credentials"
+    },
+    {
+      "id": "US-M1-008",
+      "module": "M1",
+      "story": "作为运营，我希望每次改动都生成新版本（含图像），可对比、可回滚",
+      "acceptance": "版本号递增",
+      "source": "docs/modules/M1-listing-optimization.md:161",
+      "status": "pending",
+      "implementation": "deferred: listing adapter and scoring engine after M2/M3 loop",
+      "test": "pending test design",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M1-009",
+      "module": "M1",
+      "story": "作为运营，我希望对每条改动都能看到\"AI 为什么这么改\"的推理",
+      "acceptance": "每条可展开",
+      "source": "docs/modules/M1-listing-optimization.md:162",
+      "status": "pending",
+      "implementation": "deferred: listing adapter and scoring engine after M2/M3 loop",
+      "test": "pending test design",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M1-010",
+      "module": "M1",
+      "story": "作为运营，我希望看到当前 SKU 的优化历史记录（哪轮做了什么）",
+      "acceptance": "历史完整",
+      "source": "docs/modules/M1-listing-optimization.md:163",
+      "status": "pending",
+      "implementation": "deferred: listing adapter and scoring engine after M2/M3 loop",
+      "test": "pending test design",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M1-IMG-1",
+      "module": "M1",
+      "story": "作为运营，我希望对主图能让 AI 生成 3 个改进版本（基于现有主图为参考）",
+      "acceptance": "3 候选",
+      "source": "docs/modules/M1-listing-optimization.md:164",
+      "status": "pending",
+      "implementation": "deferred: listing adapter and scoring engine after M2/M3 loop",
+      "test": "pending test design",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M1-IMG-2",
+      "module": "M1",
+      "story": "作为运营，我希望生成的主图符合亚马逊主图规则（白底、无文字水印、产品占比≥85%）",
+      "acceptance": "100% 合规",
+      "source": "docs/modules/M1-listing-optimization.md:165",
+      "status": "pending",
+      "implementation": "deferred: listing adapter and scoring engine after M2/M3 loop",
+      "test": "pending test design",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M1-IMG-3",
+      "module": "M1",
+      "story": "作为运营，我希望对 A+ 模块图（信息图/对比图/场景图）能让 AI 生成",
+      "acceptance": "3 候选",
+      "source": "docs/modules/M1-listing-optimization.md:166",
+      "status": "pending",
+      "implementation": "deferred: listing adapter and scoring engine after M2/M3 loop",
+      "test": "pending test design",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M1-IMG-4",
+      "module": "M1",
+      "story": "作为运营，我希望对生成的图能\"在 X 上微调（再生成）/ 用 Y 风格再来一版\"",
+      "acceptance": "反馈可调",
+      "source": "docs/modules/M1-listing-optimization.md:167",
+      "status": "pending",
+      "implementation": "deferred: listing adapter and scoring engine after M2/M3 loop",
+      "test": "pending test design",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M1-IMG-5",
+      "module": "M1",
+      "story": "作为运营，我希望对生成的图能在内置编辑器做微调（裁剪/角标/文字位置）",
+      "acceptance": "简单编辑器",
+      "source": "docs/modules/M1-listing-optimization.md:168",
+      "status": "pending",
+      "implementation": "deferred: listing adapter and scoring engine after M2/M3 loop",
+      "test": "pending test design",
+      "dependencyMode": "local_domain"
+    },
+    {
+      "id": "US-M1-IMG-6",
+      "module": "M1",
+      "story": "作为运营，我希望生成的图能直接同步到亚马逊（含主图触发审核流程跟踪）",
+      "acceptance": "同步成功",
+      "source": "docs/modules/M1-listing-optimization.md:169",
+      "status": "pending",
+      "implementation": "deferred: listing adapter and scoring engine after M2/M3 loop",
+      "test": "pending test design",
+      "dependencyMode": "mock_until_credentials"
+    }
+  ]
+}
