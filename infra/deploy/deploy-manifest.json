@@ -1,0 +1,93 @@
+﻿{
+  "schemaVersion": "2026-05-08.deploy-manifest.v1",
+  "releasePolicy": {
+    "defaultEnvironment": "local",
+    "mockModeDefault": true,
+    "realWritesDefault": false,
+    "auditRequiredDefault": true,
+    "secretSourceDefault": "local-placeholder",
+    "productionDeployBlockedByDefault": true,
+    "backupRequiredBeforeDeploy": true
+  },
+  "environments": {
+    "local": {
+      "purpose": "developer smoke runs with deterministic mock data",
+      "providerMode": "mock",
+      "realWritesEnabled": false,
+      "secrets": "env.example placeholders only"
+    },
+    "sandbox": {
+      "purpose": "credentialed integration validation without production writes",
+      "providerMode": "sandbox-or-mock",
+      "realWritesEnabled": false,
+      "secrets": "managed secret store required"
+    },
+    "production": {
+      "purpose": "real-store read/write release after approvals",
+      "providerMode": "real-after-contract-tests",
+      "realWritesEnabled": false,
+      "blockers": ["explicit approval", "fresh backup", "rollback owner", "provider credentials", "audit signoff"]
+    }
+  },
+  "components": [
+    {
+      "name": "api",
+      "kind": "service",
+      "image": "node:24-alpine",
+      "command": "node apps/api/src/server.mjs",
+      "ports": ["${API_PORT:-8080}:8080"],
+      "health": "/health",
+      "readiness": "/ready",
+      "env": ["MOCK_MODE", "REAL_WRITES_ENABLED", "AUDIT_REQUIRED", "DATA_PROVIDER_MODE", "POSTGRES_HOST", "CLICKHOUSE_HOST"],
+      "blockers": ["real write approval", "provider credentials"]
+    },
+    {
+      "name": "web",
+      "kind": "service",
+      "image": "node:24-alpine",
+      "command": "node apps/web/server.mjs",
+      "ports": ["${WEB_PORT:-3000}:3000"],
+      "health": "/health",
+      "readiness": "/ready",
+      "env": ["MOCK_MODE", "API_BASE_URL"],
+      "blockers": ["api readiness"]
+    },
+    {
+      "name": "services",
+      "kind": "worker-and-domain-service",
+      "image": "node:24-alpine",
+      "command": "node apps/services/src/runner.mjs --service api-gateway --port 8090",
+      "ports": ["${SERVICES_PORT:-8090}:8090"],
+      "health": "/health",
+      "readiness": "/ready",
+      "env": ["MOCK_MODE", "REAL_WRITES_ENABLED", "AUDIT_REQUIRED", "LLM_PROVIDER", "EMAIL_PROVIDER"],
+      "blockers": ["audit center online", "llm/email providers mocked or credentialed"]
+    },
+    {
+      "name": "db",
+      "kind": "postgres",
+      "image": "postgres:16-alpine",
+      "ports": ["${POSTGRES_PORT:-5432}:5432"],
+      "volumes": ["postgres-data:/var/lib/postgresql/data"],
+      "env": ["POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD"],
+      "blockers": ["migration validation", "backup before deploy"]
+    },
+    {
+      "name": "clickhouse",
+      "kind": "analytics-store",
+      "image": "clickhouse/clickhouse-server:24-alpine",
+      "ports": ["${CLICKHOUSE_PORT:-8123}:8123"],
+      "volumes": ["clickhouse-data:/var/lib/clickhouse"],
+      "env": ["CLICKHOUSE_DB", "CLICKHOUSE_USER", "CLICKHOUSE_PASSWORD"],
+      "blockers": ["migration validation", "backup before deploy"]
+    },
+    {
+      "name": "providers",
+      "kind": "external-boundary",
+      "image": "not-deployed-adapter-boundary",
+      "ports": [],
+      "env": ["SPAPI_PROVIDER", "ADS_PROVIDER", "KEEPA_PROVIDER", "SELLERSPRITE_PROVIDER", "HELIUM10_PROVIDER", "LLM_PROVIDER", "EMAIL_PROVIDER", "PAYMENT_PROVIDER"],
+      "blockers": ["Amazon SP-API credentials", "Amazon Ads API credentials", "market-intel credentials", "LLM API key", "email/WeCom approval", "payment sandbox", "real store write approval"]
+    }
+  ]
+}

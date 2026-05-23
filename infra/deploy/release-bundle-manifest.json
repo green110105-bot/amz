@@ -1,0 +1,52 @@
+{
+  "schemaVersion": "2026-05-08.release-bundle-manifest.v1",
+  "package": "amz-ai-operator",
+  "artifactPattern": "dist/release/amz-ai-operator-<version>.tar.gz",
+  "script": "scripts/package-release.mjs",
+  "format": "tar.gz",
+  "dependencyPolicy": "pure-node-no-third-party-runtime-packager",
+  "includeRoots": [
+    "AGENTS.md",
+    "PRD.md",
+    "PROJECT_STATUS.md",
+    "MEMORY.md",
+    "README.md",
+    ".github",
+    "docs",
+    "apps",
+    "packages",
+    "infra",
+    "scripts",
+    "tests",
+    ".env.example",
+    "package.json"
+  ],
+  "excludeRules": [
+    "node_modules/**",
+    ".git/**",
+    "dist/**",
+    "log/**",
+    "logs/**",
+    "secrets/**",
+    "*.log",
+    ".env* except .env.example"
+  ],
+  "generatedFilesInBundle": [
+    "RELEASE-MANIFEST.json",
+    "SECURITY-NOTES.md"
+  ],
+  "safety": {
+    "mockModeDefault": true,
+    "realWritesEnabledDefault": false,
+    "auditRequiredDefault": true,
+    "credentialsIncluded": false,
+    "productionWritesBlockedUntilApproval": true,
+    "dryRunWritesArchive": false
+  },
+  "verification": [
+    "Run node scripts/package-release.mjs --dry-run --json before creating an artifact.",
+    "Run node scripts/package-release.mjs to create the tar.gz artifact.",
+    "Inspect RELEASE-MANIFEST.json inside the archive and compare sha256 values before deployment.",
+    "Confirm SECURITY-NOTES.md keeps real-write and provider approval gates visible to operators."
+  ]
+}

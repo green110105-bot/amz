@@ -1,0 +1,76 @@
+services:
+  api:
+    image: node:24-alpine
+    working_dir: /workspace
+    env_file: ../../.env.example
+    environment:
+      PORT: 8080
+      MOCK_MODE: ${MOCK_MODE:-true}
+      REAL_WRITES_ENABLED: ${REAL_WRITES_ENABLED:-false}
+      AUDIT_REQUIRED: ${AUDIT_REQUIRED:-true}
+      DATA_PROVIDER_MODE: ${DATA_PROVIDER_MODE:-mock}
+    command: ["node", "apps/api/src/server.mjs"]
+    volumes:
+      - ../..:/workspace:ro
+    ports:
+      - "${API_PORT:-8080}:8080"
+    depends_on:
+      - db
+      - clickhouse
+  web:
+    image: node:24-alpine
+    working_dir: /workspace
+    env_file: ../../.env.example
+    environment:
+      MOCK_MODE: ${MOCK_MODE:-true}
+      API_BASE_URL: ${API_BASE_URL:-http://api:8080}
+      WEB_PORT: 3000
+    command: ["node", "apps/web/server.mjs"]
+    volumes:
+      - ../..:/workspace:ro
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      - api
+  services:
+    image: node:24-alpine
+    working_dir: /workspace
+    env_file: ../../.env.example
+    environment:
+      MOCK_MODE: ${MOCK_MODE:-true}
+      REAL_WRITES_ENABLED: ${REAL_WRITES_ENABLED:-false}
+      AUDIT_REQUIRED: ${AUDIT_REQUIRED:-true}
+      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-mock}
+      SERVICES_PORT: 8090
+    command: ["node", "apps/services/src/runner.mjs", "--service", "api-gateway", "--port", "8090"]
+    volumes:
+      - ../..:/workspace:ro
+    ports:
+      - "${SERVICES_PORT:-8090}:8090"
+    depends_on:
+      - db
+      - clickhouse
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-amz_operator}
+      POSTGRES_USER: ${POSTGRES_USER:-amz_app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-local-only}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+  clickhouse:
+    image: clickhouse/clickhouse-server:24-alpine
+    environment:
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-amz_events}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-change-me-local-only}
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    ports:
+      - "${CLICKHOUSE_PORT:-8123}:8123"
+volumes:
+  postgres-data:
+  clickhouse-data:
