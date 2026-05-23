@@ -1,0 +1,1352 @@
+[
+  {
+    "keywordId": 900000000000001,
+    "adGroupId": 800000000000001,
+    "campaignId": 700000000000001,
+    "keywordText": "blender deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.5
+  },
+  {
+    "keywordId": 900000000000002,
+    "adGroupId": 800000000000001,
+    "campaignId": 700000000000001,
+    "keywordText": "toaster deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.5700000000000001
+  },
+  {
+    "keywordId": 900000000000003,
+    "adGroupId": 800000000000001,
+    "campaignId": 700000000000001,
+    "keywordText": "mug deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 0.64
+  },
+  {
+    "keywordId": 900000000000004,
+    "adGroupId": 800000000000001,
+    "campaignId": 700000000000001,
+    "keywordText": "candle deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.71
+  },
+  {
+    "keywordId": 900000000000005,
+    "adGroupId": 800000000000001,
+    "campaignId": 700000000000001,
+    "keywordText": "cable deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.78
+  },
+  {
+    "keywordId": 900000000000006,
+    "adGroupId": 800000000000001,
+    "campaignId": 700000000000001,
+    "keywordText": "case deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 0.8500000000000001
+  },
+  {
+    "keywordId": 900000000000007,
+    "adGroupId": 800000000000001,
+    "campaignId": 700000000000001,
+    "keywordText": "lamp deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.92
+  },
+  {
+    "keywordId": 900000000000008,
+    "adGroupId": 800000000000001,
+    "campaignId": 700000000000001,
+    "keywordText": "vacuum deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.99
+  },
+  {
+    "keywordId": 900000000000009,
+    "adGroupId": 800000000000001,
+    "campaignId": 700000000000001,
+    "keywordText": "speaker deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 1.06
+  },
+  {
+    "keywordId": 900000000000010,
+    "adGroupId": 800000000000001,
+    "campaignId": 700000000000001,
+    "keywordText": "headphone deluxe",
+    "matchType": "broad",
+    "state": "paused",
+    "bid": 1.1300000000000001
+  },
+  {
+    "keywordId": 900000000000011,
+    "adGroupId": 800000000000002,
+    "campaignId": 700000000000001,
+    "keywordText": "blender deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.5
+  },
+  {
+    "keywordId": 900000000000012,
+    "adGroupId": 800000000000002,
+    "campaignId": 700000000000001,
+    "keywordText": "toaster deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.5700000000000001
+  },
+  {
+    "keywordId": 900000000000013,
+    "adGroupId": 800000000000002,
+    "campaignId": 700000000000001,
+    "keywordText": "mug deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 0.64
+  },
+  {
+    "keywordId": 900000000000014,
+    "adGroupId": 800000000000002,
+    "campaignId": 700000000000001,
+    "keywordText": "candle deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.71
+  },
+  {
+    "keywordId": 900000000000015,
+    "adGroupId": 800000000000002,
+    "campaignId": 700000000000001,
+    "keywordText": "cable deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.78
+  },
+  {
+    "keywordId": 900000000000016,
+    "adGroupId": 800000000000002,
+    "campaignId": 700000000000001,
+    "keywordText": "case deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 0.8500000000000001
+  },
+  {
+    "keywordId": 900000000000017,
+    "adGroupId": 800000000000002,
+    "campaignId": 700000000000001,
+    "keywordText": "lamp deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.92
+  },
+  {
+    "keywordId": 900000000000018,
+    "adGroupId": 800000000000002,
+    "campaignId": 700000000000001,
+    "keywordText": "vacuum deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.99
+  },
+  {
+    "keywordId": 900000000000019,
+    "adGroupId": 800000000000002,
+    "campaignId": 700000000000001,
+    "keywordText": "speaker deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 1.06
+  },
+  {
+    "keywordId": 900000000000020,
+    "adGroupId": 800000000000002,
+    "campaignId": 700000000000001,
+    "keywordText": "headphone deluxe",
+    "matchType": "broad",
+    "state": "paused",
+    "bid": 1.1300000000000001
+  },
+  {
+    "keywordId": 900000000000021,
+    "adGroupId": 800000000000003,
+    "campaignId": 700000000000001,
+    "keywordText": "blender deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.5
+  },
+  {
+    "keywordId": 900000000000022,
+    "adGroupId": 800000000000003,
+    "campaignId": 700000000000001,
+    "keywordText": "toaster deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.5700000000000001
+  },
+  {
+    "keywordId": 900000000000023,
+    "adGroupId": 800000000000003,
+    "campaignId": 700000000000001,
+    "keywordText": "mug deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 0.64
+  },
+  {
+    "keywordId": 900000000000024,
+    "adGroupId": 800000000000003,
+    "campaignId": 700000000000001,
+    "keywordText": "candle deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.71
+  },
+  {
+    "keywordId": 900000000000025,
+    "adGroupId": 800000000000003,
+    "campaignId": 700000000000001,
+    "keywordText": "cable deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.78
+  },
+  {
+    "keywordId": 900000000000026,
+    "adGroupId": 800000000000003,
+    "campaignId": 700000000000001,
+    "keywordText": "case deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 0.8500000000000001
+  },
+  {
+    "keywordId": 900000000000027,
+    "adGroupId": 800000000000003,
+    "campaignId": 700000000000001,
+    "keywordText": "lamp deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.92
+  },
+  {
+    "keywordId": 900000000000028,
+    "adGroupId": 800000000000003,
+    "campaignId": 700000000000001,
+    "keywordText": "vacuum deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.99
+  },
+  {
+    "keywordId": 900000000000029,
+    "adGroupId": 800000000000003,
+    "campaignId": 700000000000001,
+    "keywordText": "speaker deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 1.06
+  },
+  {
+    "keywordId": 900000000000030,
+    "adGroupId": 800000000000003,
+    "campaignId": 700000000000001,
+    "keywordText": "headphone deluxe",
+    "matchType": "broad",
+    "state": "paused",
+    "bid": 1.1300000000000001
+  },
+  {
+    "keywordId": 900000000000031,
+    "adGroupId": 800000000000004,
+    "campaignId": 700000000000002,
+    "keywordText": "blender deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.5
+  },
+  {
+    "keywordId": 900000000000032,
+    "adGroupId": 800000000000004,
+    "campaignId": 700000000000002,
+    "keywordText": "toaster deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.5700000000000001
+  },
+  {
+    "keywordId": 900000000000033,
+    "adGroupId": 800000000000004,
+    "campaignId": 700000000000002,
+    "keywordText": "mug deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 0.64
+  },
+  {
+    "keywordId": 900000000000034,
+    "adGroupId": 800000000000004,
+    "campaignId": 700000000000002,
+    "keywordText": "candle deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.71
+  },
+  {
+    "keywordId": 900000000000035,
+    "adGroupId": 800000000000004,
+    "campaignId": 700000000000002,
+    "keywordText": "cable deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.78
+  },
+  {
+    "keywordId": 900000000000036,
+    "adGroupId": 800000000000004,
+    "campaignId": 700000000000002,
+    "keywordText": "case deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 0.8500000000000001
+  },
+  {
+    "keywordId": 900000000000037,
+    "adGroupId": 800000000000004,
+    "campaignId": 700000000000002,
+    "keywordText": "lamp deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.92
+  },
+  {
+    "keywordId": 900000000000038,
+    "adGroupId": 800000000000004,
+    "campaignId": 700000000000002,
+    "keywordText": "vacuum deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.99
+  },
+  {
+    "keywordId": 900000000000039,
+    "adGroupId": 800000000000004,
+    "campaignId": 700000000000002,
+    "keywordText": "speaker deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 1.06
+  },
+  {
+    "keywordId": 900000000000040,
+    "adGroupId": 800000000000004,
+    "campaignId": 700000000000002,
+    "keywordText": "headphone deluxe",
+    "matchType": "broad",
+    "state": "paused",
+    "bid": 1.1300000000000001
+  },
+  {
+    "keywordId": 900000000000041,
+    "adGroupId": 800000000000005,
+    "campaignId": 700000000000002,
+    "keywordText": "blender deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.5
+  },
+  {
+    "keywordId": 900000000000042,
+    "adGroupId": 800000000000005,
+    "campaignId": 700000000000002,
+    "keywordText": "toaster deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.5700000000000001
+  },
+  {
+    "keywordId": 900000000000043,
+    "adGroupId": 800000000000005,
+    "campaignId": 700000000000002,
+    "keywordText": "mug deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 0.64
+  },
+  {
+    "keywordId": 900000000000044,
+    "adGroupId": 800000000000005,
+    "campaignId": 700000000000002,
+    "keywordText": "candle deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.71
+  },
+  {
+    "keywordId": 900000000000045,
+    "adGroupId": 800000000000005,
+    "campaignId": 700000000000002,
+    "keywordText": "cable deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.78
+  },
+  {
+    "keywordId": 900000000000046,
+    "adGroupId": 800000000000005,
+    "campaignId": 700000000000002,
+    "keywordText": "case deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 0.8500000000000001
+  },
+  {
+    "keywordId": 900000000000047,
+    "adGroupId": 800000000000005,
+    "campaignId": 700000000000002,
+    "keywordText": "lamp deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.92
+  },
+  {
+    "keywordId": 900000000000048,
+    "adGroupId": 800000000000005,
+    "campaignId": 700000000000002,
+    "keywordText": "vacuum deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.99
+  },
+  {
+    "keywordId": 900000000000049,
+    "adGroupId": 800000000000005,
+    "campaignId": 700000000000002,
+    "keywordText": "speaker deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 1.06
+  },
+  {
+    "keywordId": 900000000000050,
+    "adGroupId": 800000000000005,
+    "campaignId": 700000000000002,
+    "keywordText": "headphone deluxe",
+    "matchType": "broad",
+    "state": "paused",
+    "bid": 1.1300000000000001
+  },
+  {
+    "keywordId": 900000000000051,
+    "adGroupId": 800000000000006,
+    "campaignId": 700000000000002,
+    "keywordText": "blender deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.5
+  },
+  {
+    "keywordId": 900000000000052,
+    "adGroupId": 800000000000006,
+    "campaignId": 700000000000002,
+    "keywordText": "toaster deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.5700000000000001
+  },
+  {
+    "keywordId": 900000000000053,
+    "adGroupId": 800000000000006,
+    "campaignId": 700000000000002,
+    "keywordText": "mug deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 0.64
+  },
+  {
+    "keywordId": 900000000000054,
+    "adGroupId": 800000000000006,
+    "campaignId": 700000000000002,
+    "keywordText": "candle deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.71
+  },
+  {
+    "keywordId": 900000000000055,
+    "adGroupId": 800000000000006,
+    "campaignId": 700000000000002,
+    "keywordText": "cable deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.78
+  },
+  {
+    "keywordId": 900000000000056,
+    "adGroupId": 800000000000006,
+    "campaignId": 700000000000002,
+    "keywordText": "case deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 0.8500000000000001
+  },
+  {
+    "keywordId": 900000000000057,
+    "adGroupId": 800000000000006,
+    "campaignId": 700000000000002,
+    "keywordText": "lamp deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.92
+  },
+  {
+    "keywordId": 900000000000058,
+    "adGroupId": 800000000000006,
+    "campaignId": 700000000000002,
+    "keywordText": "vacuum deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.99
+  },
+  {
+    "keywordId": 900000000000059,
+    "adGroupId": 800000000000006,
+    "campaignId": 700000000000002,
+    "keywordText": "speaker deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 1.06
+  },
+  {
+    "keywordId": 900000000000060,
+    "adGroupId": 800000000000006,
+    "campaignId": 700000000000002,
+    "keywordText": "headphone deluxe",
+    "matchType": "broad",
+    "state": "paused",
+    "bid": 1.1300000000000001
+  },
+  {
+    "keywordId": 900000000000061,
+    "adGroupId": 800000000000007,
+    "campaignId": 700000000000003,
+    "keywordText": "blender deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.5
+  },
+  {
+    "keywordId": 900000000000062,
+    "adGroupId": 800000000000007,
+    "campaignId": 700000000000003,
+    "keywordText": "toaster deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.5700000000000001
+  },
+  {
+    "keywordId": 900000000000063,
+    "adGroupId": 800000000000007,
+    "campaignId": 700000000000003,
+    "keywordText": "mug deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 0.64
+  },
+  {
+    "keywordId": 900000000000064,
+    "adGroupId": 800000000000007,
+    "campaignId": 700000000000003,
+    "keywordText": "candle deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.71
+  },
+  {
+    "keywordId": 900000000000065,
+    "adGroupId": 800000000000007,
+    "campaignId": 700000000000003,
+    "keywordText": "cable deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.78
+  },
+  {
+    "keywordId": 900000000000066,
+    "adGroupId": 800000000000007,
+    "campaignId": 700000000000003,
+    "keywordText": "case deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 0.8500000000000001
+  },
+  {
+    "keywordId": 900000000000067,
+    "adGroupId": 800000000000007,
+    "campaignId": 700000000000003,
+    "keywordText": "lamp deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.92
+  },
+  {
+    "keywordId": 900000000000068,
+    "adGroupId": 800000000000007,
+    "campaignId": 700000000000003,
+    "keywordText": "vacuum deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.99
+  },
+  {
+    "keywordId": 900000000000069,
+    "adGroupId": 800000000000007,
+    "campaignId": 700000000000003,
+    "keywordText": "speaker deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 1.06
+  },
+  {
+    "keywordId": 900000000000070,
+    "adGroupId": 800000000000007,
+    "campaignId": 700000000000003,
+    "keywordText": "headphone deluxe",
+    "matchType": "broad",
+    "state": "paused",
+    "bid": 1.1300000000000001
+  },
+  {
+    "keywordId": 900000000000071,
+    "adGroupId": 800000000000008,
+    "campaignId": 700000000000003,
+    "keywordText": "blender deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.5
+  },
+  {
+    "keywordId": 900000000000072,
+    "adGroupId": 800000000000008,
+    "campaignId": 700000000000003,
+    "keywordText": "toaster deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.5700000000000001
+  },
+  {
+    "keywordId": 900000000000073,
+    "adGroupId": 800000000000008,
+    "campaignId": 700000000000003,
+    "keywordText": "mug deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 0.64
+  },
+  {
+    "keywordId": 900000000000074,
+    "adGroupId": 800000000000008,
+    "campaignId": 700000000000003,
+    "keywordText": "candle deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.71
+  },
+  {
+    "keywordId": 900000000000075,
+    "adGroupId": 800000000000008,
+    "campaignId": 700000000000003,
+    "keywordText": "cable deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.78
+  },
+  {
+    "keywordId": 900000000000076,
+    "adGroupId": 800000000000008,
+    "campaignId": 700000000000003,
+    "keywordText": "case deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 0.8500000000000001
+  },
+  {
+    "keywordId": 900000000000077,
+    "adGroupId": 800000000000008,
+    "campaignId": 700000000000003,
+    "keywordText": "lamp deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.92
+  },
+  {
+    "keywordId": 900000000000078,
+    "adGroupId": 800000000000008,
+    "campaignId": 700000000000003,
+    "keywordText": "vacuum deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.99
+  },
+  {
+    "keywordId": 900000000000079,
+    "adGroupId": 800000000000008,
+    "campaignId": 700000000000003,
+    "keywordText": "speaker deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 1.06
+  },
+  {
+    "keywordId": 900000000000080,
+    "adGroupId": 800000000000008,
+    "campaignId": 700000000000003,
+    "keywordText": "headphone deluxe",
+    "matchType": "broad",
+    "state": "paused",
+    "bid": 1.1300000000000001
+  },
+  {
+    "keywordId": 900000000000081,
+    "adGroupId": 800000000000009,
+    "campaignId": 700000000000003,
+    "keywordText": "blender deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.5
+  },
+  {
+    "keywordId": 900000000000082,
+    "adGroupId": 800000000000009,
+    "campaignId": 700000000000003,
+    "keywordText": "toaster deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.5700000000000001
+  },
+  {
+    "keywordId": 900000000000083,
+    "adGroupId": 800000000000009,
+    "campaignId": 700000000000003,
+    "keywordText": "mug deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 0.64
+  },
+  {
+    "keywordId": 900000000000084,
+    "adGroupId": 800000000000009,
+    "campaignId": 700000000000003,
+    "keywordText": "candle deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.71
+  },
+  {
+    "keywordId": 900000000000085,
+    "adGroupId": 800000000000009,
+    "campaignId": 700000000000003,
+    "keywordText": "cable deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.78
+  },
+  {
+    "keywordId": 900000000000086,
+    "adGroupId": 800000000000009,
+    "campaignId": 700000000000003,
+    "keywordText": "case deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 0.8500000000000001
+  },
+  {
+    "keywordId": 900000000000087,
+    "adGroupId": 800000000000009,
+    "campaignId": 700000000000003,
+    "keywordText": "lamp deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.92
+  },
+  {
+    "keywordId": 900000000000088,
+    "adGroupId": 800000000000009,
+    "campaignId": 700000000000003,
+    "keywordText": "vacuum deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.99
+  },
+  {
+    "keywordId": 900000000000089,
+    "adGroupId": 800000000000009,
+    "campaignId": 700000000000003,
+    "keywordText": "speaker deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 1.06
+  },
+  {
+    "keywordId": 900000000000090,
+    "adGroupId": 800000000000009,
+    "campaignId": 700000000000003,
+    "keywordText": "headphone deluxe",
+    "matchType": "broad",
+    "state": "paused",
+    "bid": 1.1300000000000001
+  },
+  {
+    "keywordId": 900000000000091,
+    "adGroupId": 800000000000010,
+    "campaignId": 700000000000004,
+    "keywordText": "blender deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.5
+  },
+  {
+    "keywordId": 900000000000092,
+    "adGroupId": 800000000000010,
+    "campaignId": 700000000000004,
+    "keywordText": "toaster deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.5700000000000001
+  },
+  {
+    "keywordId": 900000000000093,
+    "adGroupId": 800000000000010,
+    "campaignId": 700000000000004,
+    "keywordText": "mug deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 0.64
+  },
+  {
+    "keywordId": 900000000000094,
+    "adGroupId": 800000000000010,
+    "campaignId": 700000000000004,
+    "keywordText": "candle deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.71
+  },
+  {
+    "keywordId": 900000000000095,
+    "adGroupId": 800000000000010,
+    "campaignId": 700000000000004,
+    "keywordText": "cable deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.78
+  },
+  {
+    "keywordId": 900000000000096,
+    "adGroupId": 800000000000010,
+    "campaignId": 700000000000004,
+    "keywordText": "case deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 0.8500000000000001
+  },
+  {
+    "keywordId": 900000000000097,
+    "adGroupId": 800000000000010,
+    "campaignId": 700000000000004,
+    "keywordText": "lamp deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.92
+  },
+  {
+    "keywordId": 900000000000098,
+    "adGroupId": 800000000000010,
+    "campaignId": 700000000000004,
+    "keywordText": "vacuum deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.99
+  },
+  {
+    "keywordId": 900000000000099,
+    "adGroupId": 800000000000010,
+    "campaignId": 700000000000004,
+    "keywordText": "speaker deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 1.06
+  },
+  {
+    "keywordId": 900000000000100,
+    "adGroupId": 800000000000010,
+    "campaignId": 700000000000004,
+    "keywordText": "headphone deluxe",
+    "matchType": "broad",
+    "state": "paused",
+    "bid": 1.1300000000000001
+  },
+  {
+    "keywordId": 900000000000101,
+    "adGroupId": 800000000000011,
+    "campaignId": 700000000000004,
+    "keywordText": "blender deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.5
+  },
+  {
+    "keywordId": 900000000000102,
+    "adGroupId": 800000000000011,
+    "campaignId": 700000000000004,
+    "keywordText": "toaster deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.5700000000000001
+  },
+  {
+    "keywordId": 900000000000103,
+    "adGroupId": 800000000000011,
+    "campaignId": 700000000000004,
+    "keywordText": "mug deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 0.64
+  },
+  {
+    "keywordId": 900000000000104,
+    "adGroupId": 800000000000011,
+    "campaignId": 700000000000004,
+    "keywordText": "candle deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.71
+  },
+  {
+    "keywordId": 900000000000105,
+    "adGroupId": 800000000000011,
+    "campaignId": 700000000000004,
+    "keywordText": "cable deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.78
+  },
+  {
+    "keywordId": 900000000000106,
+    "adGroupId": 800000000000011,
+    "campaignId": 700000000000004,
+    "keywordText": "case deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 0.8500000000000001
+  },
+  {
+    "keywordId": 900000000000107,
+    "adGroupId": 800000000000011,
+    "campaignId": 700000000000004,
+    "keywordText": "lamp deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.92
+  },
+  {
+    "keywordId": 900000000000108,
+    "adGroupId": 800000000000011,
+    "campaignId": 700000000000004,
+    "keywordText": "vacuum deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.99
+  },
+  {
+    "keywordId": 900000000000109,
+    "adGroupId": 800000000000011,
+    "campaignId": 700000000000004,
+    "keywordText": "speaker deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 1.06
+  },
+  {
+    "keywordId": 900000000000110,
+    "adGroupId": 800000000000011,
+    "campaignId": 700000000000004,
+    "keywordText": "headphone deluxe",
+    "matchType": "broad",
+    "state": "paused",
+    "bid": 1.1300000000000001
+  },
+  {
+    "keywordId": 900000000000111,
+    "adGroupId": 800000000000012,
+    "campaignId": 700000000000004,
+    "keywordText": "blender deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.5
+  },
+  {
+    "keywordId": 900000000000112,
+    "adGroupId": 800000000000012,
+    "campaignId": 700000000000004,
+    "keywordText": "toaster deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.5700000000000001
+  },
+  {
+    "keywordId": 900000000000113,
+    "adGroupId": 800000000000012,
+    "campaignId": 700000000000004,
+    "keywordText": "mug deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 0.64
+  },
+  {
+    "keywordId": 900000000000114,
+    "adGroupId": 800000000000012,
+    "campaignId": 700000000000004,
+    "keywordText": "candle deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.71
+  },
+  {
+    "keywordId": 900000000000115,
+    "adGroupId": 800000000000012,
+    "campaignId": 700000000000004,
+    "keywordText": "cable deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.78
+  },
+  {
+    "keywordId": 900000000000116,
+    "adGroupId": 800000000000012,
+    "campaignId": 700000000000004,
+    "keywordText": "case deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 0.8500000000000001
+  },
+  {
+    "keywordId": 900000000000117,
+    "adGroupId": 800000000000012,
+    "campaignId": 700000000000004,
+    "keywordText": "lamp deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.92
+  },
+  {
+    "keywordId": 900000000000118,
+    "adGroupId": 800000000000012,
+    "campaignId": 700000000000004,
+    "keywordText": "vacuum deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.99
+  },
+  {
+    "keywordId": 900000000000119,
+    "adGroupId": 800000000000012,
+    "campaignId": 700000000000004,
+    "keywordText": "speaker deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 1.06
+  },
+  {
+    "keywordId": 900000000000120,
+    "adGroupId": 800000000000012,
+    "campaignId": 700000000000004,
+    "keywordText": "headphone deluxe",
+    "matchType": "broad",
+    "state": "paused",
+    "bid": 1.1300000000000001
+  },
+  {
+    "keywordId": 900000000000121,
+    "adGroupId": 800000000000013,
+    "campaignId": 700000000000005,
+    "keywordText": "blender deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.5
+  },
+  {
+    "keywordId": 900000000000122,
+    "adGroupId": 800000000000013,
+    "campaignId": 700000000000005,
+    "keywordText": "toaster deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.5700000000000001
+  },
+  {
+    "keywordId": 900000000000123,
+    "adGroupId": 800000000000013,
+    "campaignId": 700000000000005,
+    "keywordText": "mug deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 0.64
+  },
+  {
+    "keywordId": 900000000000124,
+    "adGroupId": 800000000000013,
+    "campaignId": 700000000000005,
+    "keywordText": "candle deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.71
+  },
+  {
+    "keywordId": 900000000000125,
+    "adGroupId": 800000000000013,
+    "campaignId": 700000000000005,
+    "keywordText": "cable deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.78
+  },
+  {
+    "keywordId": 900000000000126,
+    "adGroupId": 800000000000013,
+    "campaignId": 700000000000005,
+    "keywordText": "case deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 0.8500000000000001
+  },
+  {
+    "keywordId": 900000000000127,
+    "adGroupId": 800000000000013,
+    "campaignId": 700000000000005,
+    "keywordText": "lamp deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.92
+  },
+  {
+    "keywordId": 900000000000128,
+    "adGroupId": 800000000000013,
+    "campaignId": 700000000000005,
+    "keywordText": "vacuum deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.99
+  },
+  {
+    "keywordId": 900000000000129,
+    "adGroupId": 800000000000013,
+    "campaignId": 700000000000005,
+    "keywordText": "speaker deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 1.06
+  },
+  {
+    "keywordId": 900000000000130,
+    "adGroupId": 800000000000013,
+    "campaignId": 700000000000005,
+    "keywordText": "headphone deluxe",
+    "matchType": "broad",
+    "state": "paused",
+    "bid": 1.1300000000000001
+  },
+  {
+    "keywordId": 900000000000131,
+    "adGroupId": 800000000000014,
+    "campaignId": 700000000000005,
+    "keywordText": "blender deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.5
+  },
+  {
+    "keywordId": 900000000000132,
+    "adGroupId": 800000000000014,
+    "campaignId": 700000000000005,
+    "keywordText": "toaster deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.5700000000000001
+  },
+  {
+    "keywordId": 900000000000133,
+    "adGroupId": 800000000000014,
+    "campaignId": 700000000000005,
+    "keywordText": "mug deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 0.64
+  },
+  {
+    "keywordId": 900000000000134,
+    "adGroupId": 800000000000014,
+    "campaignId": 700000000000005,
+    "keywordText": "candle deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.71
+  },
+  {
+    "keywordId": 900000000000135,
+    "adGroupId": 800000000000014,
+    "campaignId": 700000000000005,
+    "keywordText": "cable deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.78
+  },
+  {
+    "keywordId": 900000000000136,
+    "adGroupId": 800000000000014,
+    "campaignId": 700000000000005,
+    "keywordText": "case deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 0.8500000000000001
+  },
+  {
+    "keywordId": 900000000000137,
+    "adGroupId": 800000000000014,
+    "campaignId": 700000000000005,
+    "keywordText": "lamp deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.92
+  },
+  {
+    "keywordId": 900000000000138,
+    "adGroupId": 800000000000014,
+    "campaignId": 700000000000005,
+    "keywordText": "vacuum deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.99
+  },
+  {
+    "keywordId": 900000000000139,
+    "adGroupId": 800000000000014,
+    "campaignId": 700000000000005,
+    "keywordText": "speaker deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 1.06
+  },
+  {
+    "keywordId": 900000000000140,
+    "adGroupId": 800000000000014,
+    "campaignId": 700000000000005,
+    "keywordText": "headphone deluxe",
+    "matchType": "broad",
+    "state": "paused",
+    "bid": 1.1300000000000001
+  },
+  {
+    "keywordId": 900000000000141,
+    "adGroupId": 800000000000015,
+    "campaignId": 700000000000005,
+    "keywordText": "blender deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.5
+  },
+  {
+    "keywordId": 900000000000142,
+    "adGroupId": 800000000000015,
+    "campaignId": 700000000000005,
+    "keywordText": "toaster deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.5700000000000001
+  },
+  {
+    "keywordId": 900000000000143,
+    "adGroupId": 800000000000015,
+    "campaignId": 700000000000005,
+    "keywordText": "mug deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 0.64
+  },
+  {
+    "keywordId": 900000000000144,
+    "adGroupId": 800000000000015,
+    "campaignId": 700000000000005,
+    "keywordText": "candle deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.71
+  },
+  {
+    "keywordId": 900000000000145,
+    "adGroupId": 800000000000015,
+    "campaignId": 700000000000005,
+    "keywordText": "cable deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.78
+  },
+  {
+    "keywordId": 900000000000146,
+    "adGroupId": 800000000000015,
+    "campaignId": 700000000000005,
+    "keywordText": "case deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 0.8500000000000001
+  },
+  {
+    "keywordId": 900000000000147,
+    "adGroupId": 800000000000015,
+    "campaignId": 700000000000005,
+    "keywordText": "lamp deluxe",
+    "matchType": "broad",
+    "state": "enabled",
+    "bid": 0.92
+  },
+  {
+    "keywordId": 900000000000148,
+    "adGroupId": 800000000000015,
+    "campaignId": 700000000000005,
+    "keywordText": "vacuum deluxe",
+    "matchType": "phrase",
+    "state": "enabled",
+    "bid": 0.99
+  },
+  {
+    "keywordId": 900000000000149,
+    "adGroupId": 800000000000015,
+    "campaignId": 700000000000005,
+    "keywordText": "speaker deluxe",
+    "matchType": "exact",
+    "state": "enabled",
+    "bid": 1.06
+  },
+  {
+    "keywordId": 900000000000150,
+    "adGroupId": 800000000000015,
+    "campaignId": 700000000000005,
+    "keywordText": "headphone deluxe",
+    "matchType": "broad",
+    "state": "paused",
+    "bid": 1.1300000000000001
+  }
+]

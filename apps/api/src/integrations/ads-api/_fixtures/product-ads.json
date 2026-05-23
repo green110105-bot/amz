@@ -1,0 +1,122 @@
+[
+  {
+    "adId": 600000000000001,
+    "adGroupId": 800000000000001,
+    "campaignId": 700000000000001,
+    "sku": "MOCK-SKU-0001",
+    "asin": "B0MOCKAD001",
+    "state": "enabled"
+  },
+  {
+    "adId": 600000000000002,
+    "adGroupId": 800000000000002,
+    "campaignId": 700000000000001,
+    "sku": "MOCK-SKU-0002",
+    "asin": "B0MOCKAD002",
+    "state": "enabled"
+  },
+  {
+    "adId": 600000000000003,
+    "adGroupId": 800000000000003,
+    "campaignId": 700000000000001,
+    "sku": "MOCK-SKU-0003",
+    "asin": "B0MOCKAD003",
+    "state": "enabled"
+  },
+  {
+    "adId": 600000000000004,
+    "adGroupId": 800000000000004,
+    "campaignId": 700000000000002,
+    "sku": "MOCK-SKU-0004",
+    "asin": "B0MOCKAD004",
+    "state": "enabled"
+  },
+  {
+    "adId": 600000000000005,
+    "adGroupId": 800000000000005,
+    "campaignId": 700000000000002,
+    "sku": "MOCK-SKU-0005",
+    "asin": "B0MOCKAD005",
+    "state": "enabled"
+  },
+  {
+    "adId": 600000000000006,
+    "adGroupId": 800000000000006,
+    "campaignId": 700000000000002,
+    "sku": "MOCK-SKU-0006",
+    "asin": "B0MOCKAD006",
+    "state": "enabled"
+  },
+  {
+    "adId": 600000000000007,
+    "adGroupId": 800000000000007,
+    "campaignId": 700000000000003,
+    "sku": "MOCK-SKU-0007",
+    "asin": "B0MOCKAD007",
+    "state": "paused"
+  },
+  {
+    "adId": 600000000000008,
+    "adGroupId": 800000000000008,
+    "campaignId": 700000000000003,
+    "sku": "MOCK-SKU-0008",
+    "asin": "B0MOCKAD008",
+    "state": "enabled"
+  },
+  {
+    "adId": 600000000000009,
+    "adGroupId": 800000000000009,
+    "campaignId": 700000000000003,
+    "sku": "MOCK-SKU-0009",
+    "asin": "B0MOCKAD009",
+    "state": "enabled"
+  },
+  {
+    "adId": 600000000000010,
+    "adGroupId": 800000000000010,
+    "campaignId": 700000000000004,
+    "sku": "MOCK-SKU-0010",
+    "asin": "B0MOCKAD010",
+    "state": "enabled"
+  },
+  {
+    "adId": 600000000000011,
+    "adGroupId": 800000000000011,
+    "campaignId": 700000000000004,
+    "sku": "MOCK-SKU-0011",
+    "asin": "B0MOCKAD011",
+    "state": "enabled"
+  },
+  {
+    "adId": 600000000000012,
+    "adGroupId": 800000000000012,
+    "campaignId": 700000000000004,
+    "sku": "MOCK-SKU-0012",
+    "asin": "B0MOCKAD012",
+    "state": "enabled"
+  },
+  {
+    "adId": 600000000000013,
+    "adGroupId": 800000000000013,
+    "campaignId": 700000000000005,
+    "sku": "MOCK-SKU-0013",
+    "asin": "B0MOCKAD013",
+    "state": "enabled"
+  },
+  {
+    "adId": 600000000000014,
+    "adGroupId": 800000000000014,
+    "campaignId": 700000000000005,
+    "sku": "MOCK-SKU-0014",
+    "asin": "B0MOCKAD014",
+    "state": "enabled"
+  },
+  {
+    "adId": 600000000000015,
+    "adGroupId": 800000000000015,
+    "campaignId": 700000000000005,
+    "sku": "MOCK-SKU-0015",
+    "asin": "B0MOCKAD015",
+    "state": "enabled"
+  }
+]

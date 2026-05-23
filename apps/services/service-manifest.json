@@ -1,0 +1,130 @@
+{
+  "schemaVersion": "2026-05-08.service-manifest.v1",
+  "dependencyMode": "no-runtime-dependencies",
+  "defaults": {
+    "source": "deterministic-mock-first",
+    "writePolicy": "sandbox-or-audit-only-until-credentials-and-approval",
+    "metadata": ["source", "confidence", "freshness"]
+  },
+  "externalBlockers": [
+    "Amazon SP-API",
+    "Amazon Ads API",
+    "Keepa/SellerSprite/Helium 10",
+    "LLM APIs",
+    "Email/WeCom/WeChat",
+    "Real store write operations",
+    "Payment/Billing",
+    "Real beta validation"
+  ],
+  "prdModules": ["Dashboard", "M1", "M2", "M3", "M4", "Data Foundation", "AI Decision Engine", "Audit Center", "Billing"],
+  "services": [
+    {
+      "name": "api-gateway",
+      "owner": "Frontend/API",
+      "ports": [{ "name": "http", "env": "API_GATEWAY_PORT", "default": 8080 }],
+      "jobs": [],
+      "contracts": ["REST /health", "REST /ready", "REST /api/actions", "REST /api/audit", "REST /api/metrics", "OpenAPI aggregate contract"],
+      "env": ["API_GATEWAY_PORT", "WEB_BFF_URL", "AI_SERVICE_URL", "AUDIT_REQUIRED", "MOCK_MODE"],
+      "externalBlockers": ["Real store write operations", "Real beta validation"],
+      "prdModules": ["Dashboard", "M1", "M2", "M3", "M4", "Audit Center"],
+      "health": { "path": "/health", "checks": ["process", "route-table", "mock-mode"] },
+      "readiness": { "path": "/ready", "checks": ["web-bff reachable", "ai-service reachable", "audit policy loaded"] }
+    },
+    {
+      "name": "ai-service",
+      "owner": "Domain",
+      "ports": [{ "name": "http", "env": "AI_SERVICE_PORT", "default": 8090 }],
+      "jobs": [{ "name": "decision-evaluation", "trigger": "queue:decision.requested" }, { "name": "explanation-render", "trigger": "queue:explanation.requested" }],
+      "contracts": ["DecisionRequest", "DecisionCard", "RuleTrace", "ExplainabilityEnvelope", "AuditDraftAction"],
+      "env": ["AI_SERVICE_PORT", "LLM_PROVIDER", "LLM_API_KEY", "LLM_BUDGET_CENTS", "MOCK_MODE"],
+      "externalBlockers": ["LLM APIs", "Real store write operations"],
+      "prdModules": ["M1", "M2", "M3", "M4", "AI Decision Engine", "Audit Center"],
+      "health": { "path": "/health", "checks": ["process", "rules-loaded", "prompt-registry-loaded"] },
+      "readiness": { "path": "/ready", "checks": ["deterministic fallback available", "audit action sink available"] }
+    },
+    {
+      "name": "etl-spapi",
+      "owner": "Data/API",
+      "ports": [],
+      "jobs": [{ "name": "orders-sync", "trigger": "schedule:hourly" }, { "name": "inventory-sync", "trigger": "schedule:daily" }, { "name": "listing-sync", "trigger": "schedule:daily" }, { "name": "reports-sync", "trigger": "manual-or-scheduled" }],
+      "contracts": ["SpApiAdapter", "OrdersSnapshot", "InventorySnapshot", "ListingSnapshot", "DataFreshnessMetadata"],
+      "env": ["SPAPI_CLIENT_ID", "SPAPI_CLIENT_SECRET", "SPAPI_REFRESH_TOKEN", "SPAPI_REGION", "MOCK_MODE"],
+      "externalBlockers": ["Amazon SP-API", "Real beta validation"],
+      "prdModules": ["Data Foundation", "Dashboard", "M1", "M2", "M4"],
+      "health": { "path": "job:health", "checks": ["fixture catalog readable", "adapter contract loaded"] },
+      "readiness": { "path": "job:ready", "checks": ["mock snapshots available", "freshness metadata writer available"] }
+    },
+    {
+      "name": "etl-ads",
+      "owner": "Data/API",
+      "ports": [],
+      "jobs": [{ "name": "campaign-sync", "trigger": "schedule:hourly" }, { "name": "search-term-sync", "trigger": "schedule:daily" }, { "name": "ad-suggestion-export", "trigger": "queue:ad.suggestion.approved" }],
+      "contracts": ["AdsApiAdapter", "CampaignSnapshot", "SearchTermReport", "AdSuggestion", "AuditDraftAction"],
+      "env": ["ADS_CLIENT_ID", "ADS_CLIENT_SECRET", "ADS_REFRESH_TOKEN", "ADS_PROFILE_ID", "MOCK_MODE"],
+      "externalBlockers": ["Amazon Ads API", "Real store write operations", "Real beta validation"],
+      "prdModules": ["Data Foundation", "M2", "M3", "Audit Center"],
+      "health": { "path": "job:health", "checks": ["fixture catalog readable", "adapter contract loaded"] },
+      "readiness": { "path": "job:ready", "checks": ["mock campaign snapshots available", "audit action sink available"] }
+    },
+    {
+      "name": "scheduler",
+      "owner": "DevOps",
+      "ports": [{ "name": "http", "env": "SCHEDULER_PORT", "default": 8070 }],
+      "jobs": [{ "name": "data-refresh-orchestration", "trigger": "cron" }, { "name": "decision-loop", "trigger": "cron" }, { "name": "notification-dispatch", "trigger": "cron" }],
+      "contracts": ["CronPlan", "JobLease", "RetryPolicy", "RunFreshnessReport"],
+      "env": ["SCHEDULER_PORT", "SCHEDULER_TICK_MS", "JOB_MAX_RETRIES", "MOCK_MODE"],
+      "externalBlockers": ["Real beta validation"],
+      "prdModules": ["Dashboard", "Data Foundation", "M2", "M3", "M4"],
+      "health": { "path": "/health", "checks": ["process", "clock", "cron registry"] },
+      "readiness": { "path": "/ready", "checks": ["job leases available", "worker queue available"] }
+    },
+    {
+      "name": "worker",
+      "owner": "Domain",
+      "ports": [],
+      "jobs": [{ "name": "profit-inventory-loop", "trigger": "queue:m2.refresh" }, { "name": "ad-lifecycle-loop", "trigger": "queue:m3.refresh" }, { "name": "ops-monitor-loop", "trigger": "queue:m4.refresh" }, { "name": "listing-iteration-loop", "trigger": "queue:m1.refresh" }],
+      "contracts": ["ProfitLeakSignal", "InventoryDecision", "LifecycleAdDecision", "OpsAlert", "ListingIteration", "ActionCard"],
+      "env": ["WORKER_CONCURRENCY", "DECISION_CONFIDENCE_FLOOR", "AUDIT_REQUIRED", "MOCK_MODE"],
+      "externalBlockers": ["LLM APIs", "Keepa/SellerSprite/Helium 10", "Real store write operations"],
+      "prdModules": ["Dashboard", "M1", "M2", "M3", "M4", "AI Decision Engine", "Audit Center"],
+      "health": { "path": "job:health", "checks": ["process", "rule packs loaded", "fixture inputs readable"] },
+      "readiness": { "path": "job:ready", "checks": ["queue available", "audit action sink available", "notification sink available"] }
+    },
+    {
+      "name": "notification",
+      "owner": "Frontend/API",
+      "ports": [{ "name": "http", "env": "NOTIFICATION_PORT", "default": 8060 }],
+      "jobs": [{ "name": "in-app-notification-write", "trigger": "queue:notification.requested" }, { "name": "external-channel-dispatch", "trigger": "queue:notification.approved" }],
+      "contracts": ["NotificationRecord", "NotificationTemplate", "DeliveryAttempt", "UserChannelPreference"],
+      "env": ["NOTIFICATION_PORT", "EMAIL_PROVIDER_KEY", "WECOM_WEBHOOK", "WECHAT_TEMPLATE_ID", "MOCK_MODE"],
+      "externalBlockers": ["Email/WeCom/WeChat", "Real beta validation"],
+      "prdModules": ["Dashboard", "M4", "Audit Center"],
+      "health": { "path": "/health", "checks": ["process", "template registry"] },
+      "readiness": { "path": "/ready", "checks": ["in-app sink available", "mock external dispatcher available"] }
+    },
+    {
+      "name": "billing",
+      "owner": "Frontend/API",
+      "ports": [{ "name": "http", "env": "BILLING_PORT", "default": 8050 }],
+      "jobs": [{ "name": "quota-refresh", "trigger": "schedule:daily" }, { "name": "invoice-simulation", "trigger": "manual" }],
+      "contracts": ["SubscriptionPlan", "QuotaLedger", "UsageMeter", "MockInvoice", "EntitlementDecision"],
+      "env": ["BILLING_PORT", "PAYMENT_PROVIDER", "PAYMENT_API_KEY", "BILLING_MOCK_CLOCK", "MOCK_MODE"],
+      "externalBlockers": ["Payment/Billing", "Real beta validation"],
+      "prdModules": ["Billing", "Dashboard"],
+      "health": { "path": "/health", "checks": ["process", "plan catalog"] },
+      "readiness": { "path": "/ready", "checks": ["quota ledger available", "mock invoice engine available"] }
+    },
+    {
+      "name": "web-bff",
+      "owner": "Frontend/API",
+      "ports": [{ "name": "http", "env": "WEB_BFF_PORT", "default": 8040 }],
+      "jobs": [],
+      "contracts": ["DashboardActionCards", "ModuleKpiView", "AuditQueueView", "ServiceReadinessView", "BillingEntitlementView"],
+      "env": ["WEB_BFF_PORT", "API_GATEWAY_URL", "BILLING_URL", "NOTIFICATION_URL", "MOCK_MODE"],
+      "externalBlockers": ["Real beta validation"],
+      "prdModules": ["Dashboard", "M1", "M2", "M3", "M4", "Audit Center", "Billing"],
+      "health": { "path": "/health", "checks": ["process", "view model registry"] },
+      "readiness": { "path": "/ready", "checks": ["api-gateway reachable", "billing reachable", "notification reachable"] }
+    }
+  ]
+}

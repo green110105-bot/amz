@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "2026-05-08.gateway.mock-contract.v1",
+  "runtimeTruth": "node-mock-gated",
+  "openApi": "contracts/openapi.gateway.yaml",
+  "routes": [
+    { "method": "GET", "path": "/health", "upstream": "apps/services api-gateway /health", "mockRequired": true },
+    { "method": "GET", "path": "/ready", "upstream": "apps/services api-gateway /ready", "mockRequired": true },
+    { "method": "GET", "path": "/api/actions", "upstream": "apps/api mock actions", "mockRequired": true },
+    { "method": "POST", "path": "/api/audit", "upstream": "apps/api audit draft", "mockRequired": true, "writePolicy": "audit-draft-only" }
+  ],
+  "forbidden": ["real-store-write", "production-credential", "payment-capture"]
+}

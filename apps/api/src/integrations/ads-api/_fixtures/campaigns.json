@@ -1,0 +1,57 @@
+[
+  {
+    "campaignId": 700000000000001,
+    "name": "SP-AUTO-Mock-001",
+    "campaignType": "sponsoredProducts",
+    "targetingType": "auto",
+    "state": "enabled",
+    "dailyBudget": 25.0,
+    "startDate": "20260101",
+    "bidding": { "strategy": "legacyForSales" },
+    "portfolioId": null
+  },
+  {
+    "campaignId": 700000000000002,
+    "name": "SP-MANUAL-Mock-002",
+    "campaignType": "sponsoredProducts",
+    "targetingType": "manual",
+    "state": "enabled",
+    "dailyBudget": 40.0,
+    "startDate": "20260101",
+    "bidding": { "strategy": "autoForSales" },
+    "portfolioId": null
+  },
+  {
+    "campaignId": 700000000000003,
+    "name": "SP-MANUAL-Mock-003",
+    "campaignType": "sponsoredProducts",
+    "targetingType": "manual",
+    "state": "paused",
+    "dailyBudget": 15.0,
+    "startDate": "20260102",
+    "bidding": { "strategy": "manual" },
+    "portfolioId": null
+  },
+  {
+    "campaignId": 700000000000004,
+    "name": "SP-MANUAL-Mock-004",
+    "campaignType": "sponsoredProducts",
+    "targetingType": "manual",
+    "state": "enabled",
+    "dailyBudget": 60.0,
+    "startDate": "20260103",
+    "bidding": { "strategy": "autoForSales" },
+    "portfolioId": null
+  },
+  {
+    "campaignId": 700000000000005,
+    "name": "SP-AUTO-Mock-005",
+    "campaignType": "sponsoredProducts",
+    "targetingType": "auto",
+    "state": "enabled",
+    "dailyBudget": 30.0,
+    "startDate": "20260104",
+    "bidding": { "strategy": "legacyForSales" },
+    "portfolioId": null
+  }
+]

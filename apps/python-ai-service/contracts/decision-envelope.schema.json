@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://amz.local/contracts/decision-envelope.schema.json",
+  "title": "DecisionEnvelope",
+  "type": "object",
+  "required": ["decisionId", "module", "recommendation", "sourceMetadata", "auditDraft"],
+  "properties": {
+    "decisionId": { "type": "string" },
+    "module": { "enum": ["M1", "M2", "M3", "M4", "Dashboard"] },
+    "recommendation": { "type": "string" },
+    "ruleTrace": { "type": "array", "items": { "type": "string" } },
+    "sourceMetadata": {
+      "type": "object",
+      "required": ["source", "confidence", "freshness"],
+      "properties": {
+        "source": { "enum": ["deterministic-mock", "adapter-mock", "sandbox"] },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "freshness": { "type": "string" }
+      }
+    },
+    "auditDraft": {
+      "type": "object",
+      "required": ["required", "writePolicy"],
+      "properties": {
+        "required": { "const": true },
+        "writePolicy": { "const": "audit-draft-only" }
+      }
+    }
+  }
+}

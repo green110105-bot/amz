@@ -1,0 +1,66 @@
+openapi: 3.1.0
+info:
+  title: AMZ Mock-Gated API Gateway
+  version: 0.1.0-boundary
+  description: Future Go gateway contract. Current runtime remains Node mock-gated.
+servers:
+  - url: http://localhost:8080
+    description: Local migration boundary
+paths:
+  /health:
+    get:
+      summary: Health probe
+      responses:
+        '200':
+          description: Mock-gated gateway is alive
+  /ready:
+    get:
+      summary: Readiness probe
+      responses:
+        '200':
+          description: Gateway dependencies and audit policy are loaded
+  /api/actions:
+    get:
+      summary: List dashboard action cards from mock contracts
+      responses:
+        '200':
+          description: Action cards include source, confidence, and freshness metadata
+  /api/audit:
+    get:
+      summary: List audit queue entries
+      responses:
+        '200':
+          description: Audit queue view is available
+    post:
+      summary: Draft a write-like action for audit review
+      x-write-policy: audit-draft-only
+      responses:
+        '202':
+          description: Draft accepted; no real store write was performed
+components:
+  schemas:
+    SourceMetadata:
+      type: object
+      required: [source, confidence, freshness]
+      properties:
+        source:
+          type: string
+          enum: [deterministic-mock, adapter-mock, sandbox]
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        freshness:
+          type: string
+    ActionCard:
+      type: object
+      required: [id, module, title, sourceMetadata]
+      properties:
+        id:
+          type: string
+        module:
+          type: string
+        title:
+          type: string
+        sourceMetadata:
+          $ref: '#/components/schemas/SourceMetadata'

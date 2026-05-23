@@ -1,0 +1,107 @@
+[
+  {
+    "adGroupId": 800000000000001,
+    "campaignId": 700000000000001,
+    "name": "AG-Mock-001-1",
+    "defaultBid": 1.15,
+    "state": "enabled"
+  },
+  {
+    "adGroupId": 800000000000002,
+    "campaignId": 700000000000001,
+    "name": "AG-Mock-001-2",
+    "defaultBid": 1.3,
+    "state": "enabled"
+  },
+  {
+    "adGroupId": 800000000000003,
+    "campaignId": 700000000000001,
+    "name": "AG-Mock-001-3",
+    "defaultBid": 1.45,
+    "state": "enabled"
+  },
+  {
+    "adGroupId": 800000000000004,
+    "campaignId": 700000000000002,
+    "name": "AG-Mock-002-1",
+    "defaultBid": 1.6,
+    "state": "enabled"
+  },
+  {
+    "adGroupId": 800000000000005,
+    "campaignId": 700000000000002,
+    "name": "AG-Mock-002-2",
+    "defaultBid": 1.75,
+    "state": "enabled"
+  },
+  {
+    "adGroupId": 800000000000006,
+    "campaignId": 700000000000002,
+    "name": "AG-Mock-002-3",
+    "defaultBid": 1.9,
+    "state": "enabled"
+  },
+  {
+    "adGroupId": 800000000000007,
+    "campaignId": 700000000000003,
+    "name": "AG-Mock-003-1",
+    "defaultBid": 1,
+    "state": "enabled"
+  },
+  {
+    "adGroupId": 800000000000008,
+    "campaignId": 700000000000003,
+    "name": "AG-Mock-003-2",
+    "defaultBid": 1.15,
+    "state": "paused"
+  },
+  {
+    "adGroupId": 800000000000009,
+    "campaignId": 700000000000003,
+    "name": "AG-Mock-003-3",
+    "defaultBid": 1.3,
+    "state": "enabled"
+  },
+  {
+    "adGroupId": 800000000000010,
+    "campaignId": 700000000000004,
+    "name": "AG-Mock-004-1",
+    "defaultBid": 1.45,
+    "state": "enabled"
+  },
+  {
+    "adGroupId": 800000000000011,
+    "campaignId": 700000000000004,
+    "name": "AG-Mock-004-2",
+    "defaultBid": 1.6,
+    "state": "enabled"
+  },
+  {
+    "adGroupId": 800000000000012,
+    "campaignId": 700000000000004,
+    "name": "AG-Mock-004-3",
+    "defaultBid": 1.75,
+    "state": "enabled"
+  },
+  {
+    "adGroupId": 800000000000013,
+    "campaignId": 700000000000005,
+    "name": "AG-Mock-005-1",
+    "defaultBid": 1.9,
+    "state": "enabled"
+  },
+  {
+    "adGroupId": 800000000000014,
+    "campaignId": 700000000000005,
+    "name": "AG-Mock-005-2",
+    "defaultBid": 1,
+    "state": "enabled"
+  },
+  {
+    "adGroupId": 800000000000015,
+    "campaignId": 700000000000005,
+    "name": "AG-Mock-005-3",
+    "defaultBid": 1.15,
+    "state": "enabled"
+  }
+]

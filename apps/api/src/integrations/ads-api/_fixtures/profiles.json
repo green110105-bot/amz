@@ -1,0 +1,28 @@
+[
+  {
+    "profileId": 9876543210123,
+    "countryCode": "US",
+    "currencyCode": "USD",
+    "dailyBudget": 200.0,
+    "timezone": "America/Los_Angeles",
+    "accountInfo": {
+      "marketplaceStringId": "ATVPDKIKX0DER",
+      "id": "A3MOCKSELLERIDX",
+      "type": "seller",
+      "name": "Mock Ads Seller US"
+    }
+  },
+  {
+    "profileId": 1234567890123,
+    "countryCode": "CA",
+    "currencyCode": "CAD",
+    "dailyBudget": 75.0,
+    "timezone": "America/Toronto",
+    "accountInfo": {
+      "marketplaceStringId": "A2EUQ1WTGCTBG2",
+      "id": "A3MOCKSELLERIDX",
+      "type": "seller",
+      "name": "Mock Ads Seller CA"
+    }
+  }
+]
