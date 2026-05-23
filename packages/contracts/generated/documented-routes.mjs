@@ -1,0 +1,1829 @@
+export const documentedRoutes = [
+  {
+    "method": "get",
+    "path": "/api/v1/audit",
+    "operationId": "get_api_v1_audit",
+    "module": "AUDIT",
+    "source": "docs/cross-module/audit-center.md:310",
+    "summary": "GET / /api/v1/audit / 审计列表",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/audit/{id}",
+    "operationId": "get_api_v1_audit_id",
+    "module": "AUDIT",
+    "source": "docs/cross-module/audit-center.md:311",
+    "summary": "GET / /api/v1/audit/{id} / 详情",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/audit/{id}/revert",
+    "operationId": "post_api_v1_audit_id_revert",
+    "module": "AUDIT",
+    "source": "docs/cross-module/audit-center.md:312",
+    "summary": "POST / /api/v1/audit/{id}/revert / 回滚",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/audit/batch-revert",
+    "operationId": "post_api_v1_audit_batch_revert",
+    "module": "AUDIT",
+    "source": "docs/cross-module/audit-center.md:313",
+    "summary": "POST / /api/v1/audit/batch-revert / 批量回滚",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/audit/quotas",
+    "operationId": "get_api_v1_audit_quotas",
+    "module": "AUDIT",
+    "source": "docs/cross-module/audit-center.md:314",
+    "summary": "GET / /api/v1/audit/quotas / 当前配额",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/audit/circuit-breakers",
+    "operationId": "get_api_v1_audit_circuit_breakers",
+    "module": "AUDIT",
+    "source": "docs/cross-module/audit-center.md:315",
+    "summary": "GET / /api/v1/audit/circuit-breakers / 熔断状态",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/audit/circuit-breakers/reset",
+    "operationId": "post_api_v1_audit_circuit_breakers_reset",
+    "module": "AUDIT",
+    "source": "docs/cross-module/audit-center.md:316",
+    "summary": "POST / /api/v1/audit/circuit-breakers/reset / 重置熔断（admin）",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/audit/conflicts",
+    "operationId": "get_api_v1_audit_conflicts",
+    "module": "AUDIT",
+    "source": "docs/cross-module/audit-center.md:317",
+    "summary": "GET / /api/v1/audit/conflicts / 待解决冲突",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/listings",
+    "operationId": "get_api_v1_listings",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1894",
+    "summary": "GET / /api/v1/listings / SKU 列表（带评分）",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/listings/diagnose-batch",
+    "operationId": "post_api_v1_listings_diagnose_batch",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1895",
+    "summary": "POST / /api/v1/listings/diagnose-batch / 批量诊断",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/listings/{productId}/diagnose",
+    "operationId": "post_api_v1_listings_productId_diagnose",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1896",
+    "summary": "POST / /api/v1/listings/{productId}/diagnose / 单 SKU 诊断",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/listings/{productId}/diagnoses",
+    "operationId": "get_api_v1_listings_productId_diagnoses",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1897",
+    "summary": "GET / /api/v1/listings/{productId}/diagnoses / 诊断历史",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/listings/{productId}/score",
+    "operationId": "get_api_v1_listings_productId_score",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1898",
+    "summary": "GET / /api/v1/listings/{productId}/score / 当前评分",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/listings/{productId}/iterations",
+    "operationId": "post_api_v1_listings_productId_iterations",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1899",
+    "summary": "POST / /api/v1/listings/{productId}/iterations / 启动迭代",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/listings/{productId}/iterations/active",
+    "operationId": "get_api_v1_listings_productId_iterations_active",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1900",
+    "summary": "GET / /api/v1/listings/{productId}/iterations/active / 当前进行中迭代",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/iterations/{iterationId}",
+    "operationId": "get_api_v1_iterations_iterationId",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1901",
+    "summary": "GET / /api/v1/iterations/{iterationId} / 迭代详情",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/iterations/{iterationId}/rounds",
+    "operationId": "post_api_v1_iterations_iterationId_rounds",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1902",
+    "summary": "POST / /api/v1/iterations/{iterationId}/rounds / 添加新轮",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/iterations/{iterationId}/rounds/{n}",
+    "operationId": "get_api_v1_iterations_iterationId_rounds_n",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1903",
+    "summary": "GET / /api/v1/iterations/{iterationId}/rounds/{n} / 单轮详情",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/iterations/{iterationId}/rounds/{n}/proposals",
+    "operationId": "post_api_v1_iterations_iterationId_rounds_n_proposals",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1904",
+    "summary": "POST / /api/v1/iterations/{iterationId}/rounds/{n}/proposals / 生成方案",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "put",
+    "path": "/api/v1/iterations/{iterationId}/rounds/{n}/decision",
+    "operationId": "put_api_v1_iterations_iterationId_rounds_n_decision",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1905",
+    "summary": "PUT / /api/v1/iterations/{iterationId}/rounds/{n}/decision / 用户决策",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/iterations/{iterationId}/preview",
+    "operationId": "post_api_v1_iterations_iterationId_preview",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1906",
+    "summary": "POST / /api/v1/iterations/{iterationId}/preview / 应用预览",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/iterations/{iterationId}/apply",
+    "operationId": "post_api_v1_iterations_iterationId_apply",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1907",
+    "summary": "POST / /api/v1/iterations/{iterationId}/apply / 应用到亚马逊",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/iterations/{iterationId}/abandon",
+    "operationId": "post_api_v1_iterations_iterationId_abandon",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1908",
+    "summary": "POST / /api/v1/iterations/{iterationId}/abandon / 放弃迭代",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/listings/{productId}/versions",
+    "operationId": "get_api_v1_listings_productId_versions",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1909",
+    "summary": "GET / /api/v1/listings/{productId}/versions / 版本列表",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/listings/{productId}/versions/{vid}",
+    "operationId": "get_api_v1_listings_productId_versions_vid",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1910",
+    "summary": "GET / /api/v1/listings/{productId}/versions/{vid} / 版本详情",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/listings/{productId}/versions/{vid}/rollback",
+    "operationId": "post_api_v1_listings_productId_versions_vid_rollback",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1911",
+    "summary": "POST / /api/v1/listings/{productId}/versions/{vid}/rollback / 回滚",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/listings/{productId}/versions/compare",
+    "operationId": "post_api_v1_listings_productId_versions_compare",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1912",
+    "summary": "POST / /api/v1/listings/{productId}/versions/compare / 对比版本",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/listings/{productId}/experiments",
+    "operationId": "get_api_v1_listings_productId_experiments",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1913",
+    "summary": "GET / /api/v1/listings/{productId}/experiments / 实验列表",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/listings/{productId}/experiments",
+    "operationId": "post_api_v1_listings_productId_experiments",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1914",
+    "summary": "POST / /api/v1/listings/{productId}/experiments / 启动实验",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/experiments/{expId}",
+    "operationId": "get_api_v1_experiments_expId",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1915",
+    "summary": "GET / /api/v1/experiments/{expId} / 实验详情",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/listings/keywords-library",
+    "operationId": "get_api_v1_listings_keywords_library",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1916",
+    "summary": "GET / /api/v1/listings/keywords-library / 关键词库",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/listings/keywords-library",
+    "operationId": "post_api_v1_listings_keywords_library",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1917",
+    "summary": "POST / /api/v1/listings/keywords-library / 新增关键词",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/listings/templates",
+    "operationId": "get_api_v1_listings_templates",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1918",
+    "summary": "GET / /api/v1/listings/templates / 模板列表",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/listings/templates/{category}",
+    "operationId": "get_api_v1_listings_templates_category",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1919",
+    "summary": "GET / /api/v1/listings/templates/{category} / 单类目模板",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/listings/{productId}/images/generate",
+    "operationId": "post_api_v1_listings_productId_images_generate",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1920",
+    "summary": "POST / /api/v1/listings/{productId}/images/generate / 生成图（主图/A+/Gallery）",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/listings/images/generations/{generationId}",
+    "operationId": "get_api_v1_listings_images_generations_generationId",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1921",
+    "summary": "GET / /api/v1/listings/images/generations/{generationId} / 生成结果",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/listings/images/generations/{generationId}/regenerate",
+    "operationId": "post_api_v1_listings_images_generations_generationId_regenerate",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1922",
+    "summary": "POST / /api/v1/listings/images/generations/{generationId}/regenerate / 重新生成",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/listings/images/generations/{generationId}/select",
+    "operationId": "post_api_v1_listings_images_generations_generationId_select",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1923",
+    "summary": "POST / /api/v1/listings/images/generations/{generationId}/select / 选定候选",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/listings/images/generations/{generationId}/edit",
+    "operationId": "post_api_v1_listings_images_generations_generationId_edit",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1924",
+    "summary": "POST / /api/v1/listings/images/generations/{generationId}/edit / 内置编辑器保存",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/listings/{productId}/images/upload",
+    "operationId": "post_api_v1_listings_productId_images_upload",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1925",
+    "summary": "POST / /api/v1/listings/{productId}/images/upload / 用户上传自有图",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/listings/images/critique",
+    "operationId": "post_api_v1_listings_images_critique",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1926",
+    "summary": "POST / /api/v1/listings/images/critique / 图像评估",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/listings/images/compliance-check",
+    "operationId": "post_api_v1_listings_images_compliance_check",
+    "module": "M1",
+    "source": "docs/modules/M1-listing-optimization.md:1927",
+    "summary": "POST / /api/v1/listings/images/compliance-check / 合规检查",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/profit/overview",
+    "operationId": "get_api_v1_profit_overview",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3028",
+    "summary": "GET / /api/v1/profit/overview / 利润总览（KPI + 趋势）",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/profit/skus",
+    "operationId": "get_api_v1_profit_skus",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3029",
+    "summary": "GET / /api/v1/profit/skus / SKU 利润排行",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/profit/skus/{productId}",
+    "operationId": "get_api_v1_profit_skus_productId",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3030",
+    "summary": "GET / /api/v1/profit/skus/{productId} / 单 SKU 利润详情",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/profit/skus/{productId}/breakdown",
+    "operationId": "get_api_v1_profit_skus_productId_breakdown",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3031",
+    "summary": "GET / /api/v1/profit/skus/{productId}/breakdown / 费用拆解",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/profit/skus/{productId}/trend",
+    "operationId": "get_api_v1_profit_skus_productId_trend",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3032",
+    "summary": "GET / /api/v1/profit/skus/{productId}/trend / 趋势数据",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/profit/skus/{productId}/scenario",
+    "operationId": "post_api_v1_profit_skus_productId_scenario",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3033",
+    "summary": "POST / /api/v1/profit/skus/{productId}/scenario / 情景模拟",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/profit/orders",
+    "operationId": "get_api_v1_profit_orders",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3034",
+    "summary": "GET / /api/v1/profit/orders / 订单列表",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/profit/orders/{orderId}",
+    "operationId": "get_api_v1_profit_orders_orderId",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3035",
+    "summary": "GET / /api/v1/profit/orders/{orderId} / 单订单瀑布",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/profit/ads/campaigns",
+    "operationId": "get_api_v1_profit_ads_campaigns",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3036",
+    "summary": "GET / /api/v1/profit/ads/campaigns / 广告活动利润",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/profit/ads/keywords",
+    "operationId": "get_api_v1_profit_ads_keywords",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3037",
+    "summary": "GET / /api/v1/profit/ads/keywords / 关键词利润",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/profit/leaks",
+    "operationId": "get_api_v1_profit_leaks",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3038",
+    "summary": "GET / /api/v1/profit/leaks / 漏点列表",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/profit/leaks/{leakId}",
+    "operationId": "get_api_v1_profit_leaks_leakId",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3039",
+    "summary": "GET / /api/v1/profit/leaks/{leakId} / 漏点详情",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/profit/leaks/{leakId}/action",
+    "operationId": "post_api_v1_profit_leaks_leakId_action",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3040",
+    "summary": "POST / /api/v1/profit/leaks/{leakId}/action / 漏点处置",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/profit/recompute",
+    "operationId": "post_api_v1_profit_recompute",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3041",
+    "summary": "POST / /api/v1/profit/recompute / 强制重算",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/inventory/reorder",
+    "operationId": "get_api_v1_inventory_reorder",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3042",
+    "summary": "GET / /api/v1/inventory/reorder / 补货建议列表",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/inventory/reorder/{recId}",
+    "operationId": "get_api_v1_inventory_reorder_recId",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3043",
+    "summary": "GET / /api/v1/inventory/reorder/{recId} / 单建议详情",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/inventory/reorder/{recId}/accept",
+    "operationId": "post_api_v1_inventory_reorder_recId_accept",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3044",
+    "summary": "POST / /api/v1/inventory/reorder/{recId}/accept / 采纳生成 PO",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/inventory/reorder/po/batch",
+    "operationId": "post_api_v1_inventory_reorder_po_batch",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3045",
+    "summary": "POST / /api/v1/inventory/reorder/po/batch / 批量生成 PO",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/inventory/slow-moving",
+    "operationId": "get_api_v1_inventory_slow_moving",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3046",
+    "summary": "GET / /api/v1/inventory/slow-moving / 滞销列表",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/inventory/slow-moving/{decId}",
+    "operationId": "get_api_v1_inventory_slow_moving_decId",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3047",
+    "summary": "GET / /api/v1/inventory/slow-moving/{decId} / 滞销决策详情",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/inventory/slow-moving/{decId}/decide",
+    "operationId": "post_api_v1_inventory_slow_moving_decId_decide",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3048",
+    "summary": "POST / /api/v1/inventory/slow-moving/{decId}/decide / 滞销选项执行",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/inventory/forecast/{productId}",
+    "operationId": "get_api_v1_inventory_forecast_productId",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3049",
+    "summary": "GET / /api/v1/inventory/forecast/{productId} / 销量预测",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/repricing/decisions",
+    "operationId": "get_api_v1_repricing_decisions",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3050",
+    "summary": "GET / /api/v1/repricing/decisions / 跟价决策列表",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/repricing/decisions",
+    "operationId": "post_api_v1_repricing_decisions",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3051",
+    "summary": "POST / /api/v1/repricing/decisions / 触发跟价测算",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/repricing/decisions/{decId}/apply",
+    "operationId": "post_api_v1_repricing_decisions_decId_apply",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3052",
+    "summary": "POST / /api/v1/repricing/decisions/{decId}/apply / 执行改价",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/costs/products",
+    "operationId": "get_api_v1_costs_products",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3053",
+    "summary": "GET / /api/v1/costs/products / 成本配置列表",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "put",
+    "path": "/api/v1/costs/products/{productId}",
+    "operationId": "put_api_v1_costs_products_productId",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3054",
+    "summary": "PUT / /api/v1/costs/products/{productId} / 更新单 SKU 成本",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/costs/products/import",
+    "operationId": "post_api_v1_costs_products_import",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3055",
+    "summary": "POST / /api/v1/costs/products/import / 批量导入",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/reports/monthly",
+    "operationId": "get_api_v1_reports_monthly",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3056",
+    "summary": "GET / /api/v1/reports/monthly / 月度报告",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/reports/export",
+    "operationId": "post_api_v1_reports_export",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3057",
+    "summary": "POST / /api/v1/reports/export / 自定义导出",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/inventory/batches",
+    "operationId": "get_api_v1_inventory_batches",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3058",
+    "summary": "GET / /api/v1/inventory/batches / 批次列表（按 SKU）",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/inventory/batches/{id}",
+    "operationId": "get_api_v1_inventory_batches_id",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3059",
+    "summary": "GET / /api/v1/inventory/batches/{id} / 单批次详情",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/inventory/transfers",
+    "operationId": "get_api_v1_inventory_transfers",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3060",
+    "summary": "GET / /api/v1/inventory/transfers / 跨仓调拨建议",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/inventory/transfers/{id}/execute",
+    "operationId": "post_api_v1_inventory_transfers_id_execute",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3061",
+    "summary": "POST / /api/v1/inventory/transfers/{id}/execute / 执行调拨",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/suppliers",
+    "operationId": "get_api_v1_suppliers",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3062",
+    "summary": "GET / /api/v1/suppliers / 供应商列表",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/suppliers",
+    "operationId": "post_api_v1_suppliers",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3063",
+    "summary": "POST / /api/v1/suppliers / 新建供应商",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/suppliers/{id}",
+    "operationId": "get_api_v1_suppliers_id",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3064",
+    "summary": "GET / /api/v1/suppliers/{id} / 单供应商画像",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "put",
+    "path": "/api/v1/suppliers/{id}/pricing",
+    "operationId": "put_api_v1_suppliers_id_pricing",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3065",
+    "summary": "PUT / /api/v1/suppliers/{id}/pricing / 更新阶梯价",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/suppliers/{id}/performance",
+    "operationId": "get_api_v1_suppliers_id_performance",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3066",
+    "summary": "GET / /api/v1/suppliers/{id}/performance / 绩效评分",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/suppliers/recommend-allocation",
+    "operationId": "post_api_v1_suppliers_recommend_allocation",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3067",
+    "summary": "POST / /api/v1/suppliers/recommend-allocation / 多供应商分配建议",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/purchase-orders",
+    "operationId": "get_api_v1_purchase_orders",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3068",
+    "summary": "GET / /api/v1/purchase-orders / PO 列表",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/purchase-orders",
+    "operationId": "post_api_v1_purchase_orders",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3069",
+    "summary": "POST / /api/v1/purchase-orders / 创建 PO",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/purchase-orders/{id}",
+    "operationId": "get_api_v1_purchase_orders_id",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3070",
+    "summary": "GET / /api/v1/purchase-orders/{id} / PO 详情",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "put",
+    "path": "/api/v1/purchase-orders/{id}",
+    "operationId": "put_api_v1_purchase_orders_id",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3071",
+    "summary": "PUT / /api/v1/purchase-orders/{id} / 更新 PO",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/purchase-orders/{id}/submit",
+    "operationId": "post_api_v1_purchase_orders_id_submit",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3072",
+    "summary": "POST / /api/v1/purchase-orders/{id}/submit / 提交给供应商",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/purchase-orders/{id}/transition",
+    "operationId": "post_api_v1_purchase_orders_id_transition",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3073",
+    "summary": "POST / /api/v1/purchase-orders/{id}/transition / 状态机转换",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/purchase-orders/{id}/reconcile",
+    "operationId": "post_api_v1_purchase_orders_id_reconcile",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3074",
+    "summary": "POST / /api/v1/purchase-orders/{id}/reconcile / 到货对账",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/purchase-orders/from-reorder",
+    "operationId": "post_api_v1_purchase_orders_from_reorder",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3075",
+    "summary": "POST / /api/v1/purchase-orders/from-reorder / 从补货建议批量生成",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/purchase-orders/consolidate",
+    "operationId": "post_api_v1_purchase_orders_consolidate",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3076",
+    "summary": "POST / /api/v1/purchase-orders/consolidate / 凑单优化",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/profit/cashflow",
+    "operationId": "get_api_v1_profit_cashflow",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3077",
+    "summary": "GET / /api/v1/profit/cashflow / 现金流时序",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/profit/cashflow/recompute",
+    "operationId": "post_api_v1_profit_cashflow_recompute",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3078",
+    "summary": "POST / /api/v1/profit/cashflow/recompute / 重算预测",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/profit/multi-store",
+    "operationId": "get_api_v1_profit_multi_store",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3079",
+    "summary": "GET / /api/v1/profit/multi-store / 跨店铺合并",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/profit/by-dimension",
+    "operationId": "get_api_v1_profit_by_dimension",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3080",
+    "summary": "GET / /api/v1/profit/by-dimension / 多维度归集",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/profit/scenario/single-sku",
+    "operationId": "post_api_v1_profit_scenario_single_sku",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3081",
+    "summary": "POST / /api/v1/profit/scenario/single-sku / 单 SKU 模拟",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/profit/scenario/global",
+    "operationId": "post_api_v1_profit_scenario_global",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3082",
+    "summary": "POST / /api/v1/profit/scenario/global / 全店模拟",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/capital-allocator/optimize",
+    "operationId": "post_api_v1_capital_allocator_optimize",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3083",
+    "summary": "POST / /api/v1/capital-allocator/optimize / 资金预算优化",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/profit/fx",
+    "operationId": "get_api_v1_profit_fx",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3084",
+    "summary": "GET / /api/v1/profit/fx / 汇率视图",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/profit/fx/sensitivity",
+    "operationId": "get_api_v1_profit_fx_sensitivity",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3085",
+    "summary": "GET / /api/v1/profit/fx/sensitivity / 敏感度分析",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/profit/withdrawals",
+    "operationId": "post_api_v1_profit_withdrawals",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3086",
+    "summary": "POST / /api/v1/profit/withdrawals / 记录提现",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/budgets",
+    "operationId": "get_api_v1_budgets",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3087",
+    "summary": "GET / /api/v1/budgets / 预算列表",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/budgets",
+    "operationId": "post_api_v1_budgets",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3088",
+    "summary": "POST / /api/v1/budgets / 新建预算",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/budgets/{id}/variance",
+    "operationId": "get_api_v1_budgets_id_variance",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3089",
+    "summary": "GET / /api/v1/budgets/{id}/variance / 预算 vs 实际偏差",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/alerts/custom",
+    "operationId": "get_api_v1_alerts_custom",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3090",
+    "summary": "GET / /api/v1/alerts/custom / 自定义报警规则",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/alerts/custom",
+    "operationId": "post_api_v1_alerts_custom",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3091",
+    "summary": "POST / /api/v1/alerts/custom / 新建规则",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/alerts/custom/{id}/test",
+    "operationId": "post_api_v1_alerts_custom_id_test",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3092",
+    "summary": "POST / /api/v1/alerts/custom/{id}/test / 测试规则",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/tax/vat",
+    "operationId": "get_api_v1_tax_vat",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3093",
+    "summary": "GET / /api/v1/tax/vat / VAT 数据",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/tax/sales-tax",
+    "operationId": "get_api_v1_tax_sales_tax",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3094",
+    "summary": "GET / /api/v1/tax/sales-tax / 销售税数据",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/tax/export",
+    "operationId": "post_api_v1_tax_export",
+    "module": "M2",
+    "source": "docs/modules/M2-realtime-profit-inventory.md:3095",
+    "summary": "POST / /api/v1/tax/export / 导出税务报表",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/ads/suggestions",
+    "operationId": "get_api_v1_ads_suggestions",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1942",
+    "summary": "GET / /api/v1/ads/suggestions / 操作清单",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/ads/suggestions/{id}",
+    "operationId": "get_api_v1_ads_suggestions_id",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1943",
+    "summary": "GET / /api/v1/ads/suggestions/{id} / 单建议详情",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/ads/suggestions/{id}/execute",
+    "operationId": "post_api_v1_ads_suggestions_id_execute",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1944",
+    "summary": "POST / /api/v1/ads/suggestions/{id}/execute / 执行",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/ads/suggestions/{id}/customize",
+    "operationId": "post_api_v1_ads_suggestions_id_customize",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1945",
+    "summary": "POST / /api/v1/ads/suggestions/{id}/customize / 自定义参数后执行",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/ads/suggestions/{id}/reject",
+    "operationId": "post_api_v1_ads_suggestions_id_reject",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1946",
+    "summary": "POST / /api/v1/ads/suggestions/{id}/reject / 拒绝（带反馈）",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/ads/suggestions/batch-execute",
+    "operationId": "post_api_v1_ads_suggestions_batch_execute",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1947",
+    "summary": "POST / /api/v1/ads/suggestions/batch-execute / 批量执行",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/ads/lifecycle",
+    "operationId": "get_api_v1_ads_lifecycle",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1948",
+    "summary": "GET / /api/v1/ads/lifecycle / 周期分组 SKU",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/ads/lifecycle/{productId}",
+    "operationId": "get_api_v1_ads_lifecycle_productId",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1949",
+    "summary": "GET / /api/v1/ads/lifecycle/{productId} / 单 SKU 周期",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "put",
+    "path": "/api/v1/ads/lifecycle/{productId}/override",
+    "operationId": "put_api_v1_ads_lifecycle_productId_override",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1950",
+    "summary": "PUT / /api/v1/ads/lifecycle/{productId}/override / 手动覆盖阶段",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/ads/campaigns",
+    "operationId": "get_api_v1_ads_campaigns",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1951",
+    "summary": "GET / /api/v1/ads/campaigns / Campaign 列表",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/ads/campaigns/{id}",
+    "operationId": "get_api_v1_ads_campaigns_id",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1952",
+    "summary": "GET / /api/v1/ads/campaigns/{id} / Campaign 详情",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/ads/keywords",
+    "operationId": "get_api_v1_ads_keywords",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1953",
+    "summary": "GET / /api/v1/ads/keywords / 关键词列表",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/ads/search-terms",
+    "operationId": "get_api_v1_ads_search_terms",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1954",
+    "summary": "GET / /api/v1/ads/search-terms / 搜索词报告",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/ads/search-terms/promote",
+    "operationId": "post_api_v1_ads_search_terms_promote",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1955",
+    "summary": "POST / /api/v1/ads/search-terms/promote / 转为手动关键词",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/ads/search-terms/negate",
+    "operationId": "post_api_v1_ads_search_terms_negate",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1956",
+    "summary": "POST / /api/v1/ads/search-terms/negate / 加入否词",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/ads/negatives",
+    "operationId": "get_api_v1_ads_negatives",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1957",
+    "summary": "GET / /api/v1/ads/negatives / 否词列表",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/ads/dayparting",
+    "operationId": "get_api_v1_ads_dayparting",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1958",
+    "summary": "GET / /api/v1/ads/dayparting / 分时段配置",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "put",
+    "path": "/api/v1/ads/dayparting",
+    "operationId": "put_api_v1_ads_dayparting",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1959",
+    "summary": "PUT / /api/v1/ads/dayparting / 更新配置",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/ads/auto-config",
+    "operationId": "get_api_v1_ads_auto_config",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1960",
+    "summary": "GET / /api/v1/ads/auto-config / 全自动配置",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "put",
+    "path": "/api/v1/ads/auto-config",
+    "operationId": "put_api_v1_ads_auto_config",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1961",
+    "summary": "PUT / /api/v1/ads/auto-config / 更新配置",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/ads/executions",
+    "operationId": "get_api_v1_ads_executions",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1962",
+    "summary": "GET / /api/v1/ads/executions / 执行历史",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/ads/executions/{id}/revert",
+    "operationId": "post_api_v1_ads_executions_id_revert",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1963",
+    "summary": "POST / /api/v1/ads/executions/{id}/revert / 回滚",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/ads/event-prep",
+    "operationId": "get_api_v1_ads_event_prep",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1964",
+    "summary": "GET / /api/v1/ads/event-prep / 活动备战",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/ads/reports/monthly",
+    "operationId": "get_api_v1_ads_reports_monthly",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1965",
+    "summary": "GET / /api/v1/ads/reports/monthly / 月度报告",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/ads/structure-health",
+    "operationId": "get_api_v1_ads_structure_health",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1966",
+    "summary": "GET / /api/v1/ads/structure-health / 结构健康分",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/ads/structure-health/improve",
+    "operationId": "post_api_v1_ads_structure_health_improve",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1967",
+    "summary": "POST / /api/v1/ads/structure-health/improve / 一键改进",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/ads/budget-allocator/optimize",
+    "operationId": "post_api_v1_ads_budget_allocator_optimize",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1968",
+    "summary": "POST / /api/v1/ads/budget-allocator/optimize / 预算分配优化",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/ads/budget-forecast",
+    "operationId": "get_api_v1_ads_budget_forecast",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1969",
+    "summary": "GET / /api/v1/ads/budget-forecast / 预算耗尽预测",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/ads/brand-defense",
+    "operationId": "get_api_v1_ads_brand_defense",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1970",
+    "summary": "GET / /api/v1/ads/brand-defense / 品牌防御状态",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/ads/brand-defense/auto-setup",
+    "operationId": "post_api_v1_ads_brand_defense_auto_setup",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1971",
+    "summary": "POST / /api/v1/ads/brand-defense/auto-setup / 自动设置防御",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/ads/competitor-attack/recommendations",
+    "operationId": "get_api_v1_ads_competitor_attack_recommendations",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1972",
+    "summary": "GET / /api/v1/ads/competitor-attack/recommendations / 攻击建议",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/ads/competitor-attack/launch",
+    "operationId": "post_api_v1_ads_competitor_attack_launch",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1973",
+    "summary": "POST / /api/v1/ads/competitor-attack/launch / 启动攻击",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/ads/creatives",
+    "operationId": "get_api_v1_ads_creatives",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1974",
+    "summary": "GET / /api/v1/ads/creatives / 创意列表",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/ads/creatives",
+    "operationId": "post_api_v1_ads_creatives",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1975",
+    "summary": "POST / /api/v1/ads/creatives / 创建创意",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/ads/creatives/ab-test",
+    "operationId": "post_api_v1_ads_creatives_ab_test",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1976",
+    "summary": "POST / /api/v1/ads/creatives/ab-test / 启动 A/B",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/ads/creatives/ab-tests/{id}",
+    "operationId": "get_api_v1_ads_creatives_ab_tests_id",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1977",
+    "summary": "GET / /api/v1/ads/creatives/ab-tests/{id} / A/B 结果",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/ads/keyword-rankings",
+    "operationId": "get_api_v1_ads_keyword_rankings",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1978",
+    "summary": "GET / /api/v1/ads/keyword-rankings / 关键词排名",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/ads/sqp",
+    "operationId": "get_api_v1_ads_sqp",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1979",
+    "summary": "GET / /api/v1/ads/sqp / SQP 数据",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/ads/inventory-link",
+    "operationId": "get_api_v1_ads_inventory_link",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1980",
+    "summary": "GET / /api/v1/ads/inventory-link / 库存联动状态",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "put",
+    "path": "/api/v1/ads/inventory-link/config",
+    "operationId": "put_api_v1_ads_inventory_link_config",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1981",
+    "summary": "PUT / /api/v1/ads/inventory-link/config / 配置规则",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/ads/promo-sync/active",
+    "operationId": "get_api_v1_ads_promo_sync_active",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1982",
+    "summary": "GET / /api/v1/ads/promo-sync/active / 活跃促销协同",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/ads/promo-sync/{id}/configure",
+    "operationId": "post_api_v1_ads_promo_sync_id_configure",
+    "module": "M3",
+    "source": "docs/modules/M3-lifecycle-ad-optimization.md:1983",
+    "summary": "POST / /api/v1/ads/promo-sync/{id}/configure / 配置协同策略",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/monitor/overview",
+    "operationId": "get_api_v1_monitor_overview",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2321",
+    "summary": "GET / /api/v1/monitor/overview / 监控总览",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/monitor/anomalies",
+    "operationId": "get_api_v1_monitor_anomalies",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2322",
+    "summary": "GET / /api/v1/monitor/anomalies / 异常列表",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/monitor/anomalies/{id}",
+    "operationId": "get_api_v1_monitor_anomalies_id",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2323",
+    "summary": "GET / /api/v1/monitor/anomalies/{id} / 单异常详情",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/monitor/anomalies/{id}/acknowledge",
+    "operationId": "post_api_v1_monitor_anomalies_id_acknowledge",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2324",
+    "summary": "POST / /api/v1/monitor/anomalies/{id}/acknowledge / 确认收到",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/monitor/anomalies/{id}/resolve",
+    "operationId": "post_api_v1_monitor_anomalies_id_resolve",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2325",
+    "summary": "POST / /api/v1/monitor/anomalies/{id}/resolve / 处置",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/monitor/anomalies/{id}/mute",
+    "operationId": "post_api_v1_monitor_anomalies_id_mute",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2326",
+    "summary": "POST / /api/v1/monitor/anomalies/{id}/mute / 静音",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/monitor/anomalies/{id}/ignore",
+    "operationId": "post_api_v1_monitor_anomalies_id_ignore",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2327",
+    "summary": "POST / /api/v1/monitor/anomalies/{id}/ignore / 忽略",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/monitor/rules",
+    "operationId": "get_api_v1_monitor_rules",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2328",
+    "summary": "GET / /api/v1/monitor/rules / 监控规则配置",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "put",
+    "path": "/api/v1/monitor/rules",
+    "operationId": "put_api_v1_monitor_rules",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2329",
+    "summary": "PUT / /api/v1/monitor/rules / 更新规则",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/reviews",
+    "operationId": "get_api_v1_reviews",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2330",
+    "summary": "GET / /api/v1/reviews / Review 列表",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/reviews/{id}",
+    "operationId": "get_api_v1_reviews_id",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2331",
+    "summary": "GET / /api/v1/reviews/{id} / 单 Review 详情",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/reviews/clusters",
+    "operationId": "get_api_v1_reviews_clusters",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2332",
+    "summary": "GET / /api/v1/reviews/clusters / 聚类列表",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/reviews/clusters/{id}",
+    "operationId": "get_api_v1_reviews_clusters_id",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2333",
+    "summary": "GET / /api/v1/reviews/clusters/{id} / 聚类详情",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/reviews/clusters/{id}/push-improvement",
+    "operationId": "post_api_v1_reviews_clusters_id_push_improvement",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2334",
+    "summary": "POST / /api/v1/reviews/clusters/{id}/push-improvement / 推送改进",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/reviews/appeals",
+    "operationId": "get_api_v1_reviews_appeals",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2335",
+    "summary": "GET / /api/v1/reviews/appeals / 申诉列表",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/reviews/appeals/draft",
+    "operationId": "post_api_v1_reviews_appeals_draft",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2336",
+    "summary": "POST / /api/v1/reviews/appeals/draft / 起草申诉",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "put",
+    "path": "/api/v1/reviews/appeals/{id}",
+    "operationId": "put_api_v1_reviews_appeals_id",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2337",
+    "summary": "PUT / /api/v1/reviews/appeals/{id} / 编辑申诉",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/reviews/appeals/{id}/submit",
+    "operationId": "post_api_v1_reviews_appeals_id_submit",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2338",
+    "summary": "POST / /api/v1/reviews/appeals/{id}/submit / 提交申诉",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/reviews/recovery-emails",
+    "operationId": "get_api_v1_reviews_recovery_emails",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2339",
+    "summary": "GET / /api/v1/reviews/recovery-emails / 挽回邮件列表",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/reviews/recovery-emails/draft",
+    "operationId": "post_api_v1_reviews_recovery_emails_draft",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2340",
+    "summary": "POST / /api/v1/reviews/recovery-emails/draft / 起草挽回",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/reviews/recovery-emails/{id}/send",
+    "operationId": "post_api_v1_reviews_recovery_emails_id_send",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2341",
+    "summary": "POST / /api/v1/reviews/recovery-emails/{id}/send / 发送",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/competitors/pool",
+    "operationId": "get_api_v1_competitors_pool",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2342",
+    "summary": "GET / /api/v1/competitors/pool / 竞品池",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/competitors/pool",
+    "operationId": "post_api_v1_competitors_pool",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2343",
+    "summary": "POST / /api/v1/competitors/pool / 添加竞品",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "delete",
+    "path": "/api/v1/competitors/pool/{id}",
+    "operationId": "delete_api_v1_competitors_pool_id",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2344",
+    "summary": "DELETE / /api/v1/competitors/pool/{id} / 移除",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/competitors/recommendations",
+    "operationId": "get_api_v1_competitors_recommendations",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2345",
+    "summary": "GET / /api/v1/competitors/recommendations / AI 推荐竞品",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/competitors/events",
+    "operationId": "get_api_v1_competitors_events",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2346",
+    "summary": "GET / /api/v1/competitors/events / 事件流",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/competitors/events/{id}",
+    "operationId": "get_api_v1_competitors_events_id",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2347",
+    "summary": "GET / /api/v1/competitors/events/{id} / 单事件",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/competitors/{asin}",
+    "operationId": "get_api_v1_competitors_asin",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2348",
+    "summary": "GET / /api/v1/competitors/{asin} / 单竞品详情",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/competitors/comparison",
+    "operationId": "get_api_v1_competitors_comparison",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2349",
+    "summary": "GET / /api/v1/competitors/comparison / 对比表",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/notifications",
+    "operationId": "get_api_v1_notifications",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2350",
+    "summary": "GET / /api/v1/notifications / 通知列表",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/notifications/{id}/read",
+    "operationId": "post_api_v1_notifications_id_read",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2351",
+    "summary": "POST / /api/v1/notifications/{id}/read / 标已读",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/notifications/preferences",
+    "operationId": "get_api_v1_notifications_preferences",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2352",
+    "summary": "GET / /api/v1/notifications/preferences / 通知配置",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "put",
+    "path": "/api/v1/notifications/preferences",
+    "operationId": "put_api_v1_notifications_preferences",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2353",
+    "summary": "PUT / /api/v1/notifications/preferences / 更新配置",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/monitor/anomalies/{id}/assign",
+    "operationId": "post_api_v1_monitor_anomalies_id_assign",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2354",
+    "summary": "POST / /api/v1/monitor/anomalies/{id}/assign / 派单",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/monitor/anomalies/{id}/escalate",
+    "operationId": "post_api_v1_monitor_anomalies_id_escalate",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2355",
+    "summary": "POST / /api/v1/monitor/anomalies/{id}/escalate / 升级",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/monitor/anomaly-groups",
+    "operationId": "get_api_v1_monitor_anomaly_groups",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2356",
+    "summary": "GET / /api/v1/monitor/anomaly-groups / 异常聚合",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/monitor/assignment-rules",
+    "operationId": "get_api_v1_monitor_assignment_rules",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2357",
+    "summary": "GET / /api/v1/monitor/assignment-rules / 派单规则",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "put",
+    "path": "/api/v1/monitor/assignment-rules",
+    "operationId": "put_api_v1_monitor_assignment_rules",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2358",
+    "summary": "PUT / /api/v1/monitor/assignment-rules / 更新派单规则",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/monitor/hijacking",
+    "operationId": "get_api_v1_monitor_hijacking",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2359",
+    "summary": "GET / /api/v1/monitor/hijacking / 跟卖事件列表",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/monitor/hijacking/{id}/test-buy",
+    "operationId": "post_api_v1_monitor_hijacking_id_test_buy",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2360",
+    "summary": "POST / /api/v1/monitor/hijacking/{id}/test-buy / 启动 Test Buy",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/monitor/hijacking/{id}/appeal",
+    "operationId": "post_api_v1_monitor_hijacking_id_appeal",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2361",
+    "summary": "POST / /api/v1/monitor/hijacking/{id}/appeal / 起草申诉",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/monitor/infringement",
+    "operationId": "get_api_v1_monitor_infringement",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2362",
+    "summary": "GET / /api/v1/monitor/infringement / 侵权告警",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/monitor/infringement/{id}/respond",
+    "operationId": "post_api_v1_monitor_infringement_id_respond",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2363",
+    "summary": "POST / /api/v1/monitor/infringement/{id}/respond / 应对侵权",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/monitor/cases",
+    "operationId": "get_api_v1_monitor_cases",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2364",
+    "summary": "GET / /api/v1/monitor/cases / 案例库",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/monitor/cases/recommendations",
+    "operationId": "get_api_v1_monitor_cases_recommendations",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2365",
+    "summary": "GET / /api/v1/monitor/cases/recommendations / 类似案例推荐",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/monitor/postmortems",
+    "operationId": "get_api_v1_monitor_postmortems",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2366",
+    "summary": "GET / /api/v1/monitor/postmortems / 复盘报告",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/monitor/postmortems/generate",
+    "operationId": "post_api_v1_monitor_postmortems_generate",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2367",
+    "summary": "POST / /api/v1/monitor/postmortems/generate / 生成复盘",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/monitor/sla",
+    "operationId": "get_api_v1_monitor_sla",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2368",
+    "summary": "GET / /api/v1/monitor/sla / SLA 看板",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/competitors/image-changes",
+    "operationId": "get_api_v1_competitors_image_changes",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2369",
+    "summary": "GET / /api/v1/competitors/image-changes / 竞品图像变化",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/messaging/auto-reply",
+    "operationId": "post_api_v1_messaging_auto_reply",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2370",
+    "summary": "POST / /api/v1/messaging/auto-reply / 客服模板回复",
+    "status": "contract_stub_until_implemented"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/monitor/inventory-capacity",
+    "operationId": "get_api_v1_monitor_inventory_capacity",
+    "module": "M4",
+    "source": "docs/modules/M4-daily-ops-monitoring.md:2371",
+    "summary": "GET / /api/v1/monitor/inventory-capacity / 库容利用率",
+    "status": "contract_stub_until_implemented"
+  }
+];
