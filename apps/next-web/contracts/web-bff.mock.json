@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "2026-05-08.web-bff.mock-contract.v1",
+  "runtimeTruth": "node-mock-gated",
+  "openApi": "../go-api-gateway/contracts/openapi.gateway.yaml",
+  "views": [
+    { "name": "DashboardActionCards", "endpoint": "GET /api/actions", "requiresMetadata": ["source", "confidence", "freshness"] },
+    { "name": "AuditQueueView", "endpoint": "GET /api/audit", "writePolicy": "audit-draft-only" },
+    { "name": "ServiceReadinessView", "endpoint": "GET /ready", "requiresMockMode": true },
+    { "name": "ProviderFreshnessView", "endpoint": "GET /api/metrics", "requiresMetadata": ["source", "confidence", "freshness"] }
+  ],
+  "forbidden": ["browser-provider-secret", "real-store-write", "payment-capture"]
+}

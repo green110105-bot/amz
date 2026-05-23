@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AMZ Operator - 卖家运营工作台</title>
+    <meta
+      name="description"
+      content="Mock-only Amazon seller operation workspace with task inbox, listing, profit, ads, monitoring, approval and setup workflows."
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#pageRoot">跳到主内容</a>
+    <div class="product-shell" data-ui="seller-operation-workspace">
+      <aside class="sidebar" aria-label="主导航">
+        <div class="brand-block">
+          <span class="brand-logo">A</span>
+          <div>
+            <strong>AMZ Operator</strong>
+            <small>卖家运营工作台</small>
+          </div>
+        </div>
+
+        <div class="store-card">
+          <span class="store-dot"></span>
+          <div>
+            <b>Mock Store · US</b>
+            <small>演示数据，不会改真实店铺</small>
+          </div>
+        </div>
+
+        <nav id="moduleNav" class="module-nav" aria-label="模块导航"></nav>
+
+        <section class="side-card" aria-label="角色与场景控制">
+          <label for="roleSelect">我现在扮演</label>
+          <select id="roleSelect">
+            <option value="operator">运营</option>
+            <option value="buyer">采购</option>
+            <option value="finance">财务</option>
+            <option value="admin">管理员</option>
+          </select>
+
+          <label for="scenarioSelect">今天模拟的店铺情况</label>
+          <select id="scenarioSelect">
+            <option value="ads-waste">广告烧钱 + 竞品攻击</option>
+            <option value="listing-risk">商品页转化下滑</option>
+            <option value="margin-stockout">利润承压 + 断货风险</option>
+            <option value="review-crisis">差评危机</option>
+            <option value="calm-growth">稳定增长</option>
+            <option value="quota-security">权限/写入阻断演练</option>
+          </select>
+          <p id="roleHint">运营可以生成草稿并提交审批；不会直接改真实店铺。</p>
+        </section>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <span class="top-eyebrow">PRD full-scope / mock-only / local preview</span>
+            <h1 id="pageTitle">今日工作台</h1>
+          </div>
+          <div class="top-actions">
+            <span class="pill danger">真实写入关闭</span>
+            <span class="pill ok">Mock 数据已加载</span>
+            <button id="mockRunButton" type="button">跑一次模拟闭环</button>
+          </div>
+        </header>
+
+        <div id="pageRoot" class="page-root" aria-live="polite"></div>
+      </main>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
