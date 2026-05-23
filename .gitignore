@@ -1,0 +1,41 @@
+# Dependencies and build output
+node_modules/
+dist/
+build/
+coverage/
+.nyc_output/
+
+# Runtime and local secrets
+.env
+.env.*
+!.env.example
+*.local
+*.secret
+secrets/
+
+# Logs and temp files
+*.log
+logs/
+tmp/
+temp/
+.cache/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.claude/settings.local.json
+
+# Competitor recon outputs (screenshots, DOM dumps, HAR — internal use only)
+tools/recon/output/
+tools/recon/.chrome-profile/
+
+# Runtime SQLite database (regenerated from seeds)
+apps/api/data/*.db
+apps/api/data/*.db-shm
+apps/api/data/*.db-wal
+apps/api/data/*.json.bak
+
+# Playwright test results
+test-results/
