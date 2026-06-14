@@ -27,16 +27,36 @@ export function buildDashboard(store) {
     return buildReorderRecommendation(product, inventory);
   });
 
+  // W1: 统一卡片 payload 契约 —— 每张卡 payload 含稳定 id / evidence /
+  // expectedImpact / confidence / recommendation / auditRequired，
+  // 使 mock 路径与 DB 路径 (extended-routes) 的卡片同构。
+  const norm = (type, idx, src) => ({
+    id: src.id || `${type}-${idx}`,
+    evidence: src.evidence || src.detail || {},
+    expectedImpact: src.expectedImpact || src.monthlyImpact || src.impact || {},
+    confidence: src.confidence != null ? src.confidence : null,
+    recommendation: src.recommendation || src.recommendedAction || src.actionType || null,
+    auditRequired: true,
+    ...src,
+  });
+  const actionCards = [
+    ...anomalies.slice(0, 3).map((anomaly, i) => ({ type: 'anomaly', priority: anomaly.severity, title: anomaly.type, payload: norm('anomaly', i, anomaly) })),
+    ...leaks.slice(0, 3).map((leak, i) => ({ type: 'profit_leak', priority: leak.severity, title: leak.type, payload: norm('profit_leak', i, leak) })),
+    ...adSuggestions.slice(0, 3).map((suggestion, i) => ({ type: 'ad_suggestion', priority: suggestion.priority, title: suggestion.actionType, payload: norm('ad_suggestion', i, suggestion) })),
+    ...reorderCards.filter((card) => card.urgency !== 'low').slice(0, 2).map((card, i) => ({ type: 'inventory', priority: card.urgency, title: 'REORDER_DECISION', payload: norm('inventory', i, card) })),
+  ];
+
   return {
     generatedAt: new Date().toISOString(),
     sourceMode: 'mock',
+    sourceMeta: { source: 'mock', mock: true, realWritesEnabled: false },
+    store: store.store || { id: store.storeId || 'mock-store' },
+    summary: {
+      queuedActions: actionCards.length,
+      auditLogs: 0,
+    },
     overview,
-    actionCards: [
-      ...anomalies.slice(0, 3).map((anomaly) => ({ type: 'anomaly', priority: anomaly.severity, title: anomaly.type, payload: anomaly })),
-      ...leaks.slice(0, 3).map((leak) => ({ type: 'profit_leak', priority: leak.severity, title: leak.type, payload: leak })),
-      ...adSuggestions.slice(0, 3).map((suggestion) => ({ type: 'ad_suggestion', priority: suggestion.priority, title: suggestion.actionType, payload: suggestion })),
-      ...reorderCards.filter((card) => card.urgency !== 'low').slice(0, 2).map((card) => ({ type: 'inventory', priority: card.urgency, title: 'REORDER_DECISION', payload: card })),
-    ],
+    actionCards,
   };
 }
 
