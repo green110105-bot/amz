@@ -18,6 +18,9 @@ const ADS_DEFAULTS = {
   'ads.sp.productAds.list':  { rate: 1.0, burst: 5 },
   'ads.sp.targets.list':     { rate: 1.0, burst: 5 },
   'ads.sp.negativeKeywords.list': { rate: 1.0, burst: 5 },
+  'ads.sp.keywords.update':  { rate: 0.5, burst: 2 },
+  'ads.sp.adGroups.update':  { rate: 0.5, burst: 2 },
+  'ads.sp.campaigns.update': { rate: 0.5, burst: 2 },
 };
 
 _registerDefaults(ADS_DEFAULTS);

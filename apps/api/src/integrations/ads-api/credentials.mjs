@@ -83,10 +83,11 @@ export function setAdsAccessToken(userId, storeId, accessToken, expiresAtIso) {
 
 export function setAdsProfileId(userId, storeId, profileId) {
   const db = getDbInstance();
-  db.prepare(`UPDATE store_credentials SET profile_id=?, updated_at=?
+  const result = db.prepare(`UPDATE store_credentials SET profile_id=?, updated_at=?
     WHERE user_id=? AND store_id=? AND provider=?`).run(
       profileId || null, nowIso(), userId, storeId, PROVIDER,
     );
+  return result.changes > 0;
 }
 
 export function recordAdsError(userId, storeId, code, message) {

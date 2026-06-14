@@ -75,6 +75,44 @@ export function setSpApiAccessToken(userId, storeId, accessToken, expiresAtIso) 
     );
 }
 
+export function updateSpApiCredentialMetadata(userId, storeId, {
+  sellingPartnerId, region, marketplaceIds, scope, status,
+} = {}) {
+  const db = getDbInstance();
+  const fields = [];
+  const params = [];
+  if (status !== undefined) {
+    // AUTH-09: allow the OAuth finalize path to demote a half-ready credential
+    // (e.g. marketplace discovery failed) from 'active' to 'needs_attention' so
+    // the 'active' semantic stays aligned with diagnostics readiness.
+    fields.push('status=?');
+    params.push(status);
+  }
+  if (sellingPartnerId !== undefined) {
+    fields.push('selling_partner_id=?');
+    params.push(sellingPartnerId || null);
+  }
+  if (region !== undefined) {
+    fields.push('region=?');
+    params.push(region || null);
+  }
+  if (marketplaceIds !== undefined) {
+    const mids = Array.isArray(marketplaceIds) ? marketplaceIds.join(',') : (marketplaceIds || '');
+    fields.push('marketplace_ids=?');
+    params.push(mids);
+  }
+  if (scope !== undefined) {
+    fields.push('scope=?');
+    params.push(scope || null);
+  }
+  if (!fields.length) return false;
+  fields.push('updated_at=?');
+  params.push(nowIso(), userId, storeId, PROVIDER);
+  const result = db.prepare(`UPDATE store_credentials SET ${fields.join(', ')}
+    WHERE user_id=? AND store_id=? AND provider=?`).run(...params);
+  return result.changes > 0;
+}
+
 export function recordSpApiError(userId, storeId, code, message) {
   const db = getDbInstance();
   db.prepare(`UPDATE store_credentials SET last_error=?, last_error_at=?, updated_at=?

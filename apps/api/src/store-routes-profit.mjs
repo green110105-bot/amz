@@ -3,7 +3,7 @@
 // 需要 Bearer + X-Store-Id；写操作走 appendAuditLog (sourceModule='M2')
 
 import { securityHeaders } from './security.mjs';
-import { whoAmI, defaultStoreIdFor, getDbInstance } from './data-store.mjs';
+import { whoAmI, defaultStoreIdFor, getDbInstance, resolveStoreScope } from './data-store.mjs';
 import {
   // 利润/订单
   getProfitOverview, recomputeProfit, listSkuProfit, getSkuWaterfall,
@@ -17,15 +17,15 @@ import {
   // 库存补货
   listReorders, createPOFromReorder, dismissReorder,
   // 滞销
-  listSlowMoving, executeSlowMoving,
+  listSlowMoving, executeSlowMoving, previewSlowMoving,
   // 调拨
-  listTransfers, approveTransfer, cancelTransfer,
+  listTransfers, approveTransfer, cancelTransfer, receiveTransfer,
   // 采购单
   listPOs, getPO, createPO, updatePO, transitionPO, payPO,
   // 供应商
   listSuppliers, getSupplier, createSupplier, updateSupplier, deleteSupplier,
   // 重定价
-  listRepricing, triggerRepricing, applyRepricing,
+  listRepricing, triggerRepricing, applyRepricing, rejectRepricing,
   // 汇率
   getFxExposures, getFxRates, getFxSensitivity,
   // 支付通道
@@ -36,7 +36,7 @@ import {
   listLtv,
   // 报警
   listAlertRules, createAlertRule, updateAlertRule, deleteAlertRule,
-  listAlertEvents, ackAlertEvent, scanAlerts,
+  listAlertEvents, ackAlertEvent, ackAlertEventsBatch, scanAlerts,
   // 维度
   listDimensions, updateDimension,
   // 库存联动
@@ -62,8 +62,9 @@ function requireAuth(request) {
   if (!token) return { error: json({ error: 'unauthorized' }, 401) };
   const u = whoAmI(token);
   if (!u) return { error: json({ error: 'unauthorized' }, 401) };
-  const storeId = request.headers.get('x-store-id') || defaultStoreIdFor(u.id) || '';
-  return { user: u, storeId, userId: u.id };
+  const scope = resolveStoreScope(u.id, request.headers.get('x-store-id'));
+  if (scope.error) return { error: json({ error: 'store_not_owned' }, 403) };
+  return { user: u, storeId: scope.storeId, userId: u.id };
 }
 
 function notFound() { return json({ error: 'not_found' }, 404); }
@@ -243,10 +244,17 @@ async function _impl(request) {
       items: listSlowMoving(db, userId, storeId, { status: params.get('status') }),
     });
   }
+  m = path.match(/^\/api\/v1\/store\/m2\/inventory\/slow-moving\/([^/]+)\/preview$/);
+  if (m && (method === 'POST' || method === 'GET')) {
+    const body = method === 'POST' ? await readJson(request) : {};
+    const r = previewSlowMoving(db, userId, storeId, m[1], body.option || params.get('option') || 'A');
+    if (!r) return notFound();
+    return json(r);
+  }
   m = path.match(/^\/api\/v1\/store\/m2\/inventory\/slow-moving\/([^/]+)\/execute$/);
   if (m && method === 'POST') {
     const body = await readJson(request);
-    const r = executeSlowMoving(db, userId, storeId, m[1], body.option);
+    const r = executeSlowMoving(db, userId, storeId, m[1], body.option, body);
     if (!r) return notFound();
     if (r.error) return json(r, 400);
     return json(r);
@@ -271,6 +279,13 @@ async function _impl(request) {
   if (m && method === 'POST') {
     const r = cancelTransfer(db, userId, storeId, m[1]);
     if (!r) return notFound();
+    return json(r);
+  }
+  m = path.match(/^\/api\/v1\/store\/m2\/inventory\/transfers\/([^/]+)\/receive$/);
+  if (m && method === 'POST') {
+    const r = receiveTransfer(db, userId, storeId, m[1]);
+    if (!r) return notFound();
+    if (r.error) return json(r, 400);
     return json(r);
   }
 
@@ -371,6 +386,14 @@ async function _impl(request) {
     if (r.error) return json(r, 400);
     return json(r);
   }
+  m = path.match(/^\/api\/v1\/store\/m2\/repricing\/([^/]+)\/reject$/);
+  if (m && method === 'POST') {
+    const body = await readJson(request);
+    const r = rejectRepricing(db, userId, storeId, m[1], body);
+    if (!r) return notFound();
+    if (r.error) return json(r, 400);
+    return json(r);
+  }
 
   // ============================================================
   // 3.10 汇率
@@ -443,7 +466,7 @@ async function _impl(request) {
   // 3.13 LTV
   // ============================================================
   if (path === '/api/v1/store/m2/ltv/skus' && method === 'GET') {
-    return json({ items: listLtv(db, userId, storeId) });
+    return json(listLtv(db, userId, storeId, rangeDays()));
   }
 
   // ============================================================
@@ -483,6 +506,12 @@ async function _impl(request) {
     const body = await readJson(request);
     return json(scanAlerts(db, userId, storeId, body));
   }
+  if (path === '/api/v1/store/m2/alerts/events/ack-batch' && method === 'POST') {
+    const body = await readJson(request);
+    const r = ackAlertEventsBatch(db, userId, storeId, body);
+    if (r && r.error) return json(r, 400);
+    return json(r);
+  }
   m = path.match(/^\/api\/v1\/store\/m2\/alerts\/events\/([^/]+)\/ack$/);
   if (m && method === 'POST') {
     const body = await readJson(request);
@@ -495,7 +524,7 @@ async function _impl(request) {
   // 3.15 维度
   // ============================================================
   if (path === '/api/v1/store/m2/dimensions' && method === 'GET') {
-    return json(listDimensions(db, userId, storeId, params.get('by')));
+    return json(listDimensions(db, userId, storeId, params.get('by'), rangeDays()));
   }
   m = path.match(/^\/api\/v1\/store\/m2\/dimensions\/([^/]+)$/);
   if (m && (method === 'PUT' || method === 'PATCH')) {
@@ -512,7 +541,9 @@ async function _impl(request) {
   }
   if (path === '/api/v1/store/m2/inventory-link/config' && (method === 'PUT' || method === 'PATCH')) {
     const body = await readJson(request);
-    return json(updateInvLinkConfig(db, userId, storeId, body));
+    const r = updateInvLinkConfig(db, userId, storeId, body);
+    if (r && r.error) return json(r, 400);
+    return json(r);
   }
   if (path === '/api/v1/store/m2/inventory-link/events' && method === 'GET') {
     return json({

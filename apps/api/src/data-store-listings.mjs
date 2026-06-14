@@ -79,6 +79,7 @@ export function initListingsSchema(db) {
     );
     CREATE INDEX IF NOT EXISTS idx_m1_research_us ON m1_research_reports(user_id, store_id);
     CREATE INDEX IF NOT EXISTS idx_m1_research_target ON m1_research_reports(user_id, store_id, target_id);
+    -- is_mock/source_meta added by idempotent migration below (ensureResearchProvenanceColumns)
 
     CREATE TABLE IF NOT EXISTS m1_listing_scores (
       id TEXT PRIMARY KEY,
@@ -204,6 +205,38 @@ export function initListingsSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_m1_metrics_us ON m1_ab_metrics(user_id, store_id);
     CREATE INDEX IF NOT EXISTS idx_m1_metrics_test ON m1_ab_metrics(user_id, store_id, ab_test_id, date);
   `);
+  ensureResearchProvenanceColumns(db);
+  ensureScoreProvenanceColumns(db);
+}
+
+// Idempotent migration: add provenance columns to m1_research_reports.
+// is_mock defaults to 1 (mock) so any legacy/unknown row is honestly flagged as mock;
+// real-data paths must explicitly write is_mock=0.
+function ensureResearchProvenanceColumns(db) {
+  const cols = db.prepare(`PRAGMA table_info(m1_research_reports)`).all().map((c) => c.name);
+  if (!cols.includes('is_mock')) {
+    db.exec(`ALTER TABLE m1_research_reports ADD COLUMN is_mock INTEGER NOT NULL DEFAULT 1`);
+  }
+  if (!cols.includes('source_meta')) {
+    db.exec(`ALTER TABLE m1_research_reports ADD COLUMN source_meta TEXT`);
+  }
+}
+
+// Idempotent migration: add provenance columns to m1_listing_scores.
+// Mirrors ensureResearchProvenanceColumns. The current scoring path is PRNG/seed
+// synthesized (mulberry32), so is_mock defaults to 1 (mock) and any legacy/unknown
+// row is honestly flagged as mock. A future real-scoring path must explicitly write
+// is_mock=0 + a real provider source_meta. (NOTE: ALTER cannot add NOT NULL with a
+// non-constant default on an existing table, but DEFAULT 1 is a constant so it is safe
+// and keeps the column non-null in practice via the default.)
+function ensureScoreProvenanceColumns(db) {
+  const cols = db.prepare(`PRAGMA table_info(m1_listing_scores)`).all().map((c) => c.name);
+  if (!cols.includes('is_mock')) {
+    db.exec(`ALTER TABLE m1_listing_scores ADD COLUMN is_mock INTEGER NOT NULL DEFAULT 1`);
+  }
+  if (!cols.includes('source_meta')) {
+    db.exec(`ALTER TABLE m1_listing_scores ADD COLUMN source_meta TEXT`);
+  }
 }
 
 // ============================================================
@@ -256,6 +289,10 @@ export function rowToResearch(r) {
     cached_until: r.cached_until,
     cachedUntil: r.cached_until,
     created_at: r.created_at,
+    is_mock: r.is_mock == null ? true : !!r.is_mock,
+    isMock: r.is_mock == null ? true : !!r.is_mock,
+    source_meta: _j(r.source_meta),
+    sourceMeta: _j(r.source_meta),
   };
 }
 
@@ -275,6 +312,10 @@ export function rowToScore(r) {
     reviews_score: r.reviews_score, reviews_detail: _j(r.reviews_detail),
     improvement_ranking: _j(r.improvement_ranking) || [],
     improvementRanking: _j(r.improvement_ranking) || [],
+    is_mock: r.is_mock == null ? true : !!r.is_mock,
+    isMock: r.is_mock == null ? true : !!r.is_mock,
+    source_meta: _j(r.source_meta),
+    sourceMeta: _j(r.source_meta),
   };
 }
 
@@ -412,6 +453,19 @@ export function resolveAsinKind(db, userId, storeId, asin) {
   if (!asin) return 'external';
   const r = db.prepare('SELECT id FROM products WHERE user_id = ? AND store_id = ? AND asin = ? LIMIT 1').get(userId, storeId, asin);
   return r ? 'own' : 'external';
+}
+
+// Single authoritative read-only / competitor-only predicate.
+// External ASINs and competitor-only targets may only be used as reference; they cannot be
+// optimized, A/B tested, or combined into new publishable versions.
+export function isReadOnly(target) {
+  if (!target) return true;
+  return Boolean(
+    target.is_competitor_only ||
+    target.isCompetitorOnly ||
+    target.asin_kind === 'external' ||
+    target.asinKind === 'external'
+  );
 }
 
 // ============================================================
@@ -581,17 +635,21 @@ export function triggerResearch(db, userId, storeId, targetId, body = {}) {
     action: '在 5 点中正面回应"尺寸合身/牢固/无异味"',
   };
 
+  // This is a deterministic-mock research path (mulberry32-generated evidence strings).
+  // No real competitor/SP-API data is fetched, so it MUST be honestly flagged is_mock=1.
+  // A future real ingestion path must write is_mock=0 + a real provider sourceMeta.
+  const researchSourceMeta = { provider: 'deterministic-mock', mode: 'mock', generatedAt: now };
   db.prepare(`INSERT INTO m1_research_reports(
     id, user_id, store_id, target_id, source, category, price_band, source_asins,
     title_pattern, bullet_structure, main_image_visual, a_plus_structure, review_keywords,
-    cached_until, created_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    cached_until, created_at, is_mock, source_meta)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     id, userId, storeId, targetId, 'auto', category, priceBand,
     JSON.stringify(sourceAsins),
     JSON.stringify(titlePattern), JSON.stringify(bulletStructure),
     JSON.stringify(mainImageVisual), JSON.stringify(aPlusStructure),
     JSON.stringify(reviewKeywords),
-    cachedUntil, now
+    cachedUntil, now, 1, JSON.stringify(researchSourceMeta)
   );
   appendAuditLog(userId, storeId, {
     sourceModule: 'M1', actionType: 'M1_RESEARCH_TRIGGER',
@@ -653,19 +711,24 @@ export function triggerScore(db, userId, storeId, targetId) {
     { field: 'reviews', dimension: '评论', suggestion: '在 5 点中正面回应负面评论关键词', expected_lift: 3 },
   ].sort((a, b) => b.expected_lift - a.expected_lift);
 
+  // This is a PRNG-synthesized scoring path (mulberry32 over a target-id seed).
+  // No real listing-quality model / SP-API signal is consulted, so it MUST be honestly
+  // flagged is_mock=1 with a 'synthetic_demo' source_meta. A future real scoring path
+  // must write is_mock=0 + a real provider source_meta.
+  const scoreSourceMeta = { provider: 'synthetic_demo', mode: 'mock', generator: 'mulberry32-seed', generatedAt: now };
   db.prepare(`INSERT INTO m1_listing_scores(
     id, user_id, store_id, target_id, scored_at, total_score,
     title_score, title_detail, bullets_score, bullets_detail,
     main_image_score, main_image_detail, a_plus_score, a_plus_detail,
-    reviews_score, reviews_detail, improvement_ranking)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    reviews_score, reviews_detail, improvement_ranking, is_mock, source_meta)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     id, userId, storeId, targetId, now, total,
     titleScore, JSON.stringify(mkDetail('标题', titleScore)),
     bulletsScore, JSON.stringify(mkDetail('5 点', bulletsScore)),
     mainImageScore, JSON.stringify(mkDetail('主图', mainImageScore)),
     aPlusScore, JSON.stringify(mkDetail('A+', aPlusScore)),
     reviewsScore, JSON.stringify(mkDetail('评论', reviewsScore)),
-    JSON.stringify(improvement)
+    JSON.stringify(improvement), 1, JSON.stringify(scoreSourceMeta)
   );
   appendAuditLog(userId, storeId, {
     sourceModule: 'M1', actionType: 'M1_SCORE_TRIGGER',
@@ -714,30 +777,255 @@ function archiveOldestNonPinnedIfNeeded(db, userId, storeId, targetId) {
   }
 }
 
+
 function buildBaselineVersion(target) {
-  // Initial version content from target (existing/asin_input) or new_listing template
+  // Initial version content from target (existing/asin_input) or new_listing template.
   if (target.mode === 'new_listing') {
     const sps = Array.isArray(target.new_selling_points) ? target.new_selling_points : [];
+    const keywords = Array.isArray(target.new_target_keywords) && target.new_target_keywords.length
+      ? target.new_target_keywords.slice(0, 3).join(' ')
+      : 'amazon ready product';
     return {
-      title: `[新品] ${target.new_category || '商品'} · ${(sps[0] || '高性能').slice(0, 40)}`,
-      bullet_1: sps[0] || '核心功能卖点 1',
-      bullet_2: sps[1] || '差异化卖点 2',
-      bullet_3: sps[2] || '使用场景卖点 3',
-      bullet_4: sps[3] || '材质工艺卖点 4',
-      bullet_5: sps[4] || '保障服务卖点 5',
-      description: `面向 ${target.new_target_audience || '通用人群'} · 价格段 ${target.new_price_band || '—'}`,
+      title: `${target.new_category || 'New Product'} ${keywords} - ${String(sps[0] || 'Durable Everyday Design').slice(0, 54)}`,
+      bullet_1: `${sps[0] || 'Core benefit'} - built for the primary customer use case with clear purchase value`,
+      bullet_2: `${sps[1] || 'Differentiated feature'} - explains the material, construction, or compatibility detail`,
+      bullet_3: `${sps[2] || 'Use scenario'} - helps shoppers understand when and why they need it`,
+      bullet_4: `${sps[3] || 'Quality detail'} - covers package contents, dimensions, care, or fit expectations`,
+      bullet_5: `${sps[4] || 'Support promise'} - sets realistic service expectations without exaggerated claims`,
+      description: `Audience: ${target.new_target_audience || 'general shoppers'}; price band: ${target.new_price_band || 'not set'}.`,
     };
   }
-  // existing/asin_input: synth a baseline from product_id/asin
+
+  const productRef = target.product_id || target.asin || target.id;
+  const ref = String(productRef).toLowerCase();
+  if (ref.includes('case') || ref.includes('phone')) {
+    return {
+      title: 'Slim Magnetic Phone Case for iPhone, Shockproof Protective Cover with Raised Camera Lip and Wireless Charging Fit',
+      bullet_1: 'Shockproof everyday protection - raised camera and screen edges help reduce damage from daily drops and desk scratches',
+      bullet_2: 'Slim phone case profile - pocket-friendly fit keeps buttons responsive while preserving the original hand feel',
+      bullet_3: 'Magnetic wireless charging compatible - aligned back design supports fast snap-on charging without removing the case',
+      bullet_4: 'Clear fit expectations - precise cutouts for speakers, port, and side buttons help avoid loose or blocked access',
+      bullet_5: 'Ready for gifting and support - includes clean retail packaging and responsive after-sales support for fit questions',
+      description: 'Imported phone case baseline prepared for Amazon listing optimization with title, five bullets, gallery images, and A+ modules.',
+    };
+  }
+  if (ref.includes('cable') || ref.includes('usb')) {
+    return {
+      title: 'Braided USB C Cable Fast Charging Cord, Durable Type C Charger Cable for Phone, Tablet, and Travel',
+      bullet_1: 'Fast charging ready - designed for everyday Type C devices with stable charging and data transfer use',
+      bullet_2: 'Braided durability - reinforced jacket helps resist fraying, bending, and daily backpack wear',
+      bullet_3: 'Travel-friendly length - flexible cable route works on desk, nightstand, car, and carry-on charging setups',
+      bullet_4: 'Secure connector fit - slim connector housing helps fit most cases without forcing the plug',
+      bullet_5: 'Clear package expectation - includes one USB C charging cable with straightforward support for compatibility questions',
+      description: 'Imported USB C cable baseline prepared for keyword coverage, image matrix, compliance, and publish readiness checks.',
+    };
+  }
   return {
-    title: `[导入] ${target.product_id || target.asin || target.id} · 待优化标题`,
-    bullet_1: 'Quality build for everyday durability',
-    bullet_2: 'Designed for daily commute and travel',
-    bullet_3: 'Compatible with major device sizes',
-    bullet_4: 'Easy setup, no manual required',
-    bullet_5: '12-month warranty + responsive support',
-    description: 'Imported baseline. Trigger AI iteration for optimized copy.',
+    title: `${productRef} Everyday Use Product with Durable Design, Clear Fit Details, and Practical Gift Packaging`,
+    bullet_1: 'Durable everyday construction - explains the core product benefit in shopper language',
+    bullet_2: 'Designed for practical use - describes the main scenario, setup, and compatibility expectations',
+    bullet_3: 'Clear size and material details - reduces returns by setting accurate fit and package expectations',
+    bullet_4: 'Gift-ready presentation - highlights packaging and simple care instructions without unsupported claims',
+    bullet_5: 'Responsive support - gives shoppers a clear path for fit, setup, and order questions',
+    description: 'Imported baseline prepared for Amazon listing optimization with structured copy, image planning, and compliance checks.',
   };
+}
+
+const M1_SOURCE_META = {
+  provider: 'm1-production-mock',
+  mode: 'mock',
+  confidence: 0.82,
+  generatedBy: 'deterministic-listing-operator-v2',
+};
+
+const M1_GALLERY_SLOTS = [
+  { slot: 'main', label: 'Main image', role: 'white_background_hero', required: true, amazonKey: 'main-image-url', noOverlay: true },
+  { slot: 'pt01', label: 'PT01 lifestyle', role: 'lifestyle_in_use', required: true, amazonKey: 'other-image-url1' },
+  { slot: 'pt02', label: 'PT02 dimensions', role: 'dimension_scale', required: true, amazonKey: 'other-image-url2' },
+  { slot: 'pt03', label: 'PT03 feature infographic', role: 'feature_callouts', required: true, amazonKey: 'other-image-url3' },
+  { slot: 'pt04', label: 'PT04 detail close-up', role: 'material_detail', required: true, amazonKey: 'other-image-url4' },
+  { slot: 'pt05', label: 'PT05 comparison', role: 'comparison_chart', required: false, amazonKey: 'other-image-url5' },
+  { slot: 'pt06', label: 'PT06 package', role: 'package_contents', required: false, amazonKey: 'other-image-url6' },
+  { slot: 'pt07', label: 'PT07 variant', role: 'variant_or_color_family', required: false, amazonKey: 'other-image-url7' },
+  { slot: 'pt08', label: 'PT08 support/FAQ', role: 'support_faq_or_warranty_scope', required: false, amazonKey: 'other-image-url8' },
+];
+
+const M1_A_PLUS_MODULES = [
+  { key: 'brand_story', title: 'Brand Story', type: 'brand_story', requiredForExperiment: true },
+  { key: 'hero_banner', title: 'A+ Hero Banner', type: 'image_text' },
+  { key: 'feature_grid', title: 'Feature Grid', type: 'four_image_text' },
+  { key: 'comparison_chart', title: 'Comparison Chart', type: 'comparison' },
+  { key: 'spec_table', title: 'Specification Table', type: 'table' },
+  { key: 'faq', title: 'FAQ / Use Notes', type: 'qa' },
+];
+
+const M1_BACKEND_SEARCH_LIMIT = 250;
+
+function sourceMeta(extra = {}) {
+  return { ...M1_SOURCE_META, generatedAt: nowIso(), ...extra };
+}
+
+function versionContent(version) {
+  if (!version) return {
+    title: '',
+    bullets: [],
+    description: '',
+    backendSearchTerms: '',
+    aPlusModules: [],
+  };
+  const bullets = [version.bullet_1, version.bullet_2, version.bullet_3, version.bullet_4, version.bullet_5].filter(Boolean);
+  return {
+    title: version.title || '',
+    bullets,
+    description: version.description || '',
+    backendSearchTerms: deriveSearchTerms(null, version).join(' '),
+    aPlusModules: Array.isArray(version.a_plus_modules) ? version.a_plus_modules : [],
+  };
+}
+
+function textBlob(version, extra = []) {
+  const v = version || {};
+  return [
+    v.title,
+    v.bullet_1, v.bullet_2, v.bullet_3, v.bullet_4, v.bullet_5,
+    v.description,
+    ...extra,
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+
+function deriveCategoryProfile(target = {}) {
+  const raw = [
+    target.new_category,
+    target.product_id,
+    target.asin,
+    ...(Array.isArray(target.new_target_keywords) ? target.new_target_keywords : []),
+  ].filter(Boolean).join(' ').toLowerCase();
+  if (/case|phone|iphone|magsafe/.test(raw)) {
+    return {
+      productType: 'PHONE_CASE',
+      categoryLabel: 'Electronics Accessories / Phone Case',
+      primaryKeywords: ['phone case', 'shockproof case', 'magsafe case', 'slim case'],
+      longTailKeywords: ['raised camera lip', 'wireless charging compatible', 'protective cover', 'precise cutouts'],
+      negativeTerms: ['samsung phone case', 'free phone case', 'amazon choice'],
+      requiredAttributes: [
+        { key: 'compatible_devices', label: 'Compatible devices', status: 'satisfied', value: 'iPhone family fixture' },
+        { key: 'material', label: 'Material', status: 'satisfied', value: 'TPU + PC fixture' },
+        { key: 'color_name', label: 'Color name', status: 'satisfied', value: 'Black / Clear variant fixture' },
+      ],
+      variationTheme: 'ColorName',
+    };
+  }
+  if (/cable|usb|charger|type c/.test(raw)) {
+    return {
+      productType: 'ELECTRONIC_CABLE',
+      categoryLabel: 'Electronics Accessories / Cable',
+      primaryKeywords: ['usb c cable', 'fast charging cable', 'type c charger cable'],
+      longTailKeywords: ['braided charging cord', 'data transfer cable', 'travel charging cable', 'durable connector'],
+      negativeTerms: ['apple original', 'free cable', 'amazon choice'],
+      requiredAttributes: [
+        { key: 'connector_type', label: 'Connector type', status: 'satisfied', value: 'USB Type C' },
+        { key: 'cable_length', label: 'Cable length', status: 'satisfied', value: '6 ft fixture' },
+        { key: 'compatible_devices', label: 'Compatible devices', status: 'satisfied', value: 'USB-C phones/tablets' },
+      ],
+      variationTheme: 'SizeName',
+    };
+  }
+  return {
+    productType: target.new_category || 'GENERIC_PRODUCT',
+    categoryLabel: target.new_category || 'General Product',
+    primaryKeywords: Array.isArray(target.new_target_keywords) && target.new_target_keywords.length
+      ? target.new_target_keywords.slice(0, 4)
+      : ['durable product', 'everyday use', 'gift ready'],
+    longTailKeywords: ['easy setup', 'package contents', 'size details', 'quality material'],
+    negativeTerms: ['free', 'best seller badge', 'amazon choice'],
+    requiredAttributes: [
+      { key: 'brand_name', label: 'Brand name', status: 'satisfied', value: 'Demo brand fixture' },
+      { key: 'item_name', label: 'Item name', status: 'satisfied', value: 'Generated title' },
+      { key: 'material', label: 'Material', status: 'warning', value: 'Needs operator confirmation' },
+    ],
+    variationTheme: 'ColorName',
+  };
+}
+
+function deriveSearchTerms(target, version) {
+  const profile = deriveCategoryProfile(target || {});
+  const terms = [
+    ...profile.primaryKeywords,
+    ...profile.longTailKeywords,
+    ...(Array.isArray(target?.new_target_keywords) ? target.new_target_keywords : []),
+  ];
+  const deduped = [];
+  const seen = new Set();
+  for (const term of terms) {
+    const t = String(term || '').trim().toLowerCase();
+    if (!t || seen.has(t)) continue;
+    seen.add(t);
+    deduped.push(t);
+  }
+  return deduped.join(' ').slice(0, M1_BACKEND_SEARCH_LIMIT).split(/\s+/).filter(Boolean);
+}
+
+function defaultAPlusModules(target) {
+  const profile = deriveCategoryProfile(target);
+  return M1_A_PLUS_MODULES.map((m, index) => ({
+    ...m,
+    status: 'draft_ready',
+    headline: index === 0 ? 'Brand promise and shopper problem' : `${m.title} for ${profile.categoryLabel}`,
+    copy: index === 3
+      ? 'Compare the optimized SKU against alternate sizes, colors, or competitor alternatives without copying competitor assets.'
+      : 'Use enhanced images and concise text to answer objections before shoppers reach reviews.',
+    imageRequired: ['brand_story', 'hero_banner', 'feature_grid', 'comparison_chart'].includes(m.key),
+    sourceMeta: sourceMeta({ confidence: 0.78 }),
+  }));
+}
+
+function promptForSlot(slotDef, target) {
+  const profile = deriveCategoryProfile(target);
+  const byRole = {
+    white_background_hero: `Pure white background ${profile.categoryLabel} hero photo, product fills 85 percent of frame, no text, no logo, no watermark`,
+    lifestyle_in_use: `${profile.categoryLabel} lifestyle image showing the product in realistic use, natural lighting, no misleading props`,
+    dimension_scale: `${profile.categoryLabel} dimension and scale image with measurement callouts for shopper fit expectations`,
+    feature_callouts: `${profile.categoryLabel} infographic with three feature callouts, clean ecommerce layout`,
+    material_detail: `${profile.categoryLabel} close-up detail image showing material texture, connector, buttons, seams, or finish`,
+    comparison_chart: `${profile.categoryLabel} comparison visual explaining why this option fits the target shopper`,
+    package_contents: `${profile.categoryLabel} package contents flat lay, exactly what is included, no extra accessories`,
+    variant_or_color_family: `${profile.categoryLabel} variant/color family image showing available child ASIN options`,
+    support_faq_or_warranty_scope: `${profile.categoryLabel} support and FAQ visual with realistic support scope and care notes`,
+  };
+  return byRole[slotDef.role] || `${profile.categoryLabel} Amazon listing image`;
+}
+
+function ensureDefaultImageSet(db, userId, storeId, targetId, versionId, target = null) {
+  if (!versionId) return [];
+  const existing = db.prepare(`SELECT * FROM m1_generated_images
+    WHERE user_id = ? AND store_id = ? AND target_id = ? AND version_id = ?`).all(userId, storeId, targetId, versionId);
+  const bySlot = new Set(existing.map((img) => img.slot));
+  const now = nowIso();
+  for (const slotDef of M1_GALLERY_SLOTS) {
+    if (bySlot.has(slotDef.slot)) continue;
+    const id = newId('m1img');
+    db.prepare(`INSERT INTO m1_generated_images(
+      id, user_id, store_id, target_id, version_id, slot, prompt, ref_image_url,
+      style_ref_asin, model, resolution, status, generated_url, post_processed,
+      error_message, generation_time_ms, created_at, completed_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      id, userId, storeId, targetId, versionId, slotDef.slot,
+      promptForSlot(slotDef, target || {}),
+      null, null, 'imagen-2', '2000x2000', 'completed',
+      `https://picsum.photos/seed/${id}/2000/2000`, 1,
+      null, 220, now, now
+    );
+  }
+  const finalRows = db.prepare(`SELECT * FROM m1_generated_images
+    WHERE user_id = ? AND store_id = ? AND target_id = ? AND version_id = ?`).all(userId, storeId, targetId, versionId);
+  const main = finalRows.find((img) => img.slot === 'main');
+  const side = finalRows.filter((img) => img.slot !== 'main').map((img) => img.id);
+  db.prepare(`UPDATE m1_listing_versions SET main_image_id = ?, side_image_ids = ? WHERE id = ?`).run(
+    main?.id || null,
+    JSON.stringify(side),
+    versionId
+  );
+  return finalRows.map(rowToImage);
 }
 
 function applyRewriteFields(baselineVersionRow, markedFields, rng) {
@@ -766,7 +1054,7 @@ export function createRun(db, userId, storeId, body) {
   if (!body || !body.targetId) return { error: 'validation_failed', message: 'targetId required' };
   const target = getTarget(db, userId, storeId, body.targetId);
   if (!target) return { error: 'not_found' };
-  if (target.is_competitor_only || target.isCompetitorOnly) {
+  if (isReadOnly(target)) {
     return { error: 'external_asin_cannot_optimize', message: 'External ASIN cannot be optimized (use only as competitor reference)' };
   }
   const roundNo = nextRoundNo(db, userId, storeId, body.targetId);
@@ -845,7 +1133,16 @@ export function rewriteRunField(db, userId, storeId, runId, body) {
   }
   const verRow = db.prepare('SELECT * FROM m1_listing_versions WHERE id = ? AND user_id = ? AND store_id = ?').get(run.version_id, userId, storeId);
   if (!verRow) return null;
-  const rng = mulberry32(hashStr(runId + '-' + field + '-' + Date.now()));
+  // Deterministic seed: runId + field + the count of prior rewrites of this run+field.
+  // This keeps the Nth rewrite of a given (run, field) reproducible (golden-snapshot stable)
+  // while still producing a fresh variant on each successive rewrite (no Date.now() drift).
+  const priorRewrites = db.prepare(
+    `SELECT COUNT(*) AS n FROM audit_logs
+     WHERE user_id = ? AND store_id = ? AND action_type = 'M1_RUN_REWRITE_FIELD'
+       AND resource_id = ? AND json_extract(payload, '$.field') = ?`
+  ).get(userId, storeId, runId, field);
+  const seqNo = (priorRewrites?.n || 0) + 1;
+  const rng = mulberry32(hashStr(runId + '-' + field + '-' + seqNo));
   const newVal = mutateField(field, verRow[field] || '', rng);
   db.prepare(`UPDATE m1_listing_versions SET ${field} = ? WHERE id = ?`).run(newVal, run.version_id);
   appendAuditLog(userId, storeId, {
@@ -873,6 +1170,435 @@ export function getVersion(db, userId, storeId, id) {
   return rowToVersion(r);
 }
 
+// ============================================================
+// Production-readiness workbench (read-only/mock-gated)
+// ============================================================
+const M1_LISTING_OPS_SOURCE = 'mock.m1_listing_ops.v1';
+const M1_LISTING_OPS_CONFIDENCE = 0.84;
+const GALLERY_SLOTS = ['main', 'pt01', 'pt02', 'pt03', 'pt04', 'pt05', 'pt06', 'pt07', 'pt08'];
+const LEGACY_GALLERY_SLOT_MAP = {
+  main: 'main',
+  side_1: 'pt01',
+  side_2: 'pt02',
+  side_3: 'pt03',
+  side_4: 'pt04',
+  side_5: 'pt05',
+  side_6: 'pt06',
+  side_7: 'pt07',
+  side_8: 'pt08',
+};
+
+function m1OpsMeta(confidence = M1_LISTING_OPS_CONFIDENCE) {
+  return { source: M1_LISTING_OPS_SOURCE, confidence, mock: true };
+}
+
+function selectedTargetVersion(db, userId, storeId, targetId, versionId) {
+  const target = getTarget(db, userId, storeId, targetId);
+  if (!target) return { target: null, version: null };
+  const row = versionId
+    ? db.prepare('SELECT * FROM m1_listing_versions WHERE id = ? AND user_id = ? AND store_id = ? AND target_id = ?').get(versionId, userId, storeId, targetId)
+    : getLatestVersionRow(db, userId, storeId, targetId);
+  return { target, version: rowToVersion(row) };
+}
+
+function parseMaybeJson(s, fallback = null) {
+  if (s == null) return fallback;
+  if (typeof s !== 'string') return s;
+  try { return JSON.parse(s); } catch { return fallback; }
+}
+
+function productForTarget(db, userId, storeId, target) {
+  if (!target) return null;
+  let row = null;
+  if (target.product_id) {
+    row = db.prepare('SELECT * FROM products WHERE id = ? AND user_id = ? AND store_id = ?').get(target.product_id, userId, storeId);
+  }
+  if (!row && target.asin) {
+    row = db.prepare('SELECT * FROM products WHERE asin = ? AND user_id = ? AND store_id = ? LIMIT 1').get(target.asin, userId, storeId);
+  }
+  if (!row) return null;
+  return { ...row, data: parseMaybeJson(row.data, {}) || {} };
+}
+
+function listingForTarget(db, userId, storeId, target) {
+  if (!target?.product_id) return null;
+  const row = db.prepare('SELECT * FROM listings WHERE product_id = ? AND user_id = ? AND store_id = ?').get(target.product_id, userId, storeId);
+  return row ? { ...row, data: parseMaybeJson(row.data, {}) || {} } : null;
+}
+
+function versionText(version) {
+  if (!version) return '';
+  const aPlus = version.a_plus_modules ? JSON.stringify(version.a_plus_modules) : '';
+  return [
+    version.title,
+    version.bullet_1,
+    version.bullet_2,
+    version.bullet_3,
+    version.bullet_4,
+    version.bullet_5,
+    version.description,
+    aPlus,
+  ].filter(Boolean).join('\n');
+}
+
+function versionBullets(version) {
+  if (!version) return [];
+  return ['bullet_1', 'bullet_2', 'bullet_3', 'bullet_4', 'bullet_5']
+    .map((k) => String(version[k] || '').trim())
+    .filter(Boolean);
+}
+
+function normalizeTerm(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
+}
+
+function escapeRe(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function termCount(haystack, term) {
+  const t = normalizeTerm(term);
+  if (!t) return 0;
+  const h = normalizeTerm(haystack);
+  const matches = h.match(new RegExp(`(^|\\s)${escapeRe(t)}(?=\\s|$)`, 'g'));
+  return matches ? matches.length : 0;
+}
+
+function defaultTermsFor(target, product) {
+  const seed = normalizeTerm([target?.new_category, target?.asin, target?.product_id, product?.title].filter(Boolean).join(' '));
+  if (seed.includes('cable')) return ['usb c cable', 'fast charging cable', 'braided cable', 'charging cord'];
+  if (seed.includes('lamp')) return ['desk lamp', 'led lamp', 'reading light', 'dimmable lamp'];
+  if (seed.includes('case') || seed.includes('phone')) return ['phone case', 'shockproof case', 'magsafe case', 'slim case'];
+  return ['primary keyword', 'long tail keyword', 'conversion keyword'];
+}
+
+function primaryTermsFor(target, product) {
+  const explicit = Array.isArray(target?.new_target_keywords) ? target.new_target_keywords.filter(Boolean) : [];
+  return explicit.length ? explicit : defaultTermsFor(target, product);
+}
+
+function imageRowsFor(db, userId, storeId, targetId, versionId) {
+  let sql = 'SELECT * FROM m1_generated_images WHERE user_id = ? AND store_id = ? AND target_id = ?';
+  const params = [userId, storeId, targetId];
+  if (versionId) { sql += ' AND version_id = ?'; params.push(versionId); }
+  sql += ' ORDER BY created_at DESC';
+  return db.prepare(sql).all(...params).map(rowToImage);
+}
+
+function buildAssetMatrix(db, userId, storeId, targetId, versionId = null) {
+  const { target, version } = selectedTargetVersion(db, userId, storeId, targetId, versionId);
+  if (!target) return null;
+  const rows = imageRowsFor(db, userId, storeId, targetId, version?.id || versionId);
+  const bySlot = new Map();
+  for (const img of rows) {
+    const normalized = LEGACY_GALLERY_SLOT_MAP[img.slot] || img.slot;
+    if (!bySlot.has(normalized)) bySlot.set(normalized, img);
+  }
+  const roleBySlot = {
+    main: 'hero-white-background',
+    pt01: 'angle-detail',
+    pt02: 'lifestyle-context',
+    pt03: 'feature-callout',
+    pt04: 'size-compatibility',
+    pt05: 'material-closeup',
+    pt06: 'comparison',
+    pt07: 'in-box-or-install',
+    pt08: 'brand-trust',
+  };
+  const gallery = GALLERY_SLOTS.map((slot) => {
+    const asset = bySlot.get(slot) || null;
+    const ready = asset?.status === 'completed';
+    return {
+      slot,
+      role: roleBySlot[slot],
+      required: slot === 'main',
+      status: ready ? 'ready' : 'missing',
+      assetId: asset?.id || null,
+      url: asset?.generatedUrl || asset?.generated_url || null,
+      prompt: asset?.prompt || null,
+      requirements: slot === 'main'
+        ? ['pure white background', 'product fills 85% frame', 'no badges or competitor marks']
+        : ['clear feature story', 'mobile-readable text if any', 'no prohibited claims'],
+      ...m1OpsMeta(ready ? 0.88 : 0.76),
+    };
+  });
+  const aPlusModules = Array.isArray(version?.a_plus_modules) ? version.a_plus_modules : [];
+  const aPlusImages = rows.filter((img) => /^(a\+|a_plus|aplus)/i.test(img.slot));
+  const completedGallerySlots = gallery.filter((s) => s.status === 'ready').length;
+  const missingRequired = gallery.filter((s) => s.required && s.status !== 'ready').map((s) => s.slot);
+  return {
+    targetId,
+    versionId: version?.id || versionId || null,
+    gallerySlots: gallery,
+    aPlus: {
+      status: (aPlusModules.length || aPlusImages.some((img) => img.status === 'completed')) ? 'ready' : 'missing',
+      modules: aPlusModules,
+      images: aPlusImages,
+      required: true,
+      ...m1OpsMeta(aPlusModules.length ? 0.86 : 0.74),
+    },
+    video: { status: 'placeholder', required: false, assetId: null, ...m1OpsMeta(0.72) },
+    threeSixty: { status: 'placeholder', required: false, assetId: null, ...m1OpsMeta(0.72) },
+    summary: {
+      completedGallerySlots,
+      expectedGallerySlots: GALLERY_SLOTS.length,
+      missingRequired,
+      ready: missingRequired.length === 0 && completedGallerySlots >= 7,
+    },
+    ...m1OpsMeta(),
+  };
+}
+
+function buildKeywordCoverage(db, userId, storeId, targetId, versionId = null) {
+  const { target, version } = selectedTargetVersion(db, userId, storeId, targetId, versionId);
+  if (!target) return null;
+  const product = productForTarget(db, userId, storeId, target);
+  const text = versionText(version);
+  const primaryTerms = primaryTermsFor(target, product);
+  const primary = primaryTerms.map((term) => {
+    const count = termCount(text, term);
+    return { term, present: count > 0, occurrences: count, fieldHint: count > 0 ? 'listing_copy' : 'missing' };
+  });
+  const longTailSeeds = primaryTerms.flatMap((term) => [`${term} for daily use`, `${term} with premium fit`]).slice(0, 6);
+  const longTail = longTailSeeds.map((term) => ({ term, present: termCount(text, term) > 0, occurrences: termCount(text, term) }));
+  const gapSeeds = defaultTermsFor(target, product).concat(['comparison chart', 'gift ready packaging', 'easy installation']);
+  const competitorGap = [...new Set(gapSeeds)]
+    .filter((term) => !primaryTerms.map(normalizeTerm).includes(normalizeTerm(term)))
+    .map((term) => ({ term, covered: termCount(text, term) > 0, source: 'mock.competitor_gap', confidence: 0.78, mock: true }))
+    .slice(0, 6);
+  const repeatedStuffing = [...new Set(primaryTerms.concat(gapSeeds))]
+    .map((term) => ({ term, occurrences: termCount(text, term) }))
+    .filter((item) => item.occurrences >= 4);
+  const negativeTerms = ['fake', 'counterfeit', 'cheap copy', 'free shipping guarantee', 'not compatible', 'no warranty'];
+  const negativeConflicts = negativeTerms
+    .map((term) => ({ term, present: termCount(text, term) > 0 }))
+    .filter((item) => item.present);
+  const covered = primary.filter((item) => item.present).length;
+  const primaryCoverageRate = primary.length ? covered / primary.length : 0;
+  return {
+    targetId,
+    versionId: version?.id || versionId || null,
+    primary,
+    longTail,
+    competitorGap,
+    repeatedStuffing,
+    negativeConflicts,
+    summary: {
+      primaryCoverageRate,
+      status: primaryCoverageRate >= 0.7 && negativeConflicts.length === 0 ? 'pass' : 'blocked',
+      covered,
+      total: primary.length,
+    },
+    ...m1OpsMeta(primaryCoverageRate >= 0.7 ? 0.87 : 0.79),
+  };
+}
+
+function fieldTextsForCompliance(target, version) {
+  const fields = [
+    { field: 'title', text: version?.title || '' },
+    ...['bullet_1', 'bullet_2', 'bullet_3', 'bullet_4', 'bullet_5'].map((field) => ({ field, text: version?.[field] || '' })),
+    { field: 'description', text: version?.description || '' },
+    { field: 'search_terms', text: Array.isArray(target?.new_target_keywords) ? target.new_target_keywords.join(' ') : '' },
+    { field: 'a_plus', text: version?.a_plus_modules ? JSON.stringify(version.a_plus_modules) : '' },
+  ];
+  return fields.filter((item) => item.text);
+}
+
+function buildComplianceReport(db, userId, storeId, targetId, versionId = null) {
+  const { target, version } = selectedTargetVersion(db, userId, storeId, targetId, versionId);
+  if (!target) return null;
+  const rules = [
+    { code: 'MEDICAL_CLAIM', severity: 'high', pattern: /\b(cure|heal|treat|therapy|pain relief|medical grade|doctor recommended)\b/i, category: 'medical' },
+    { code: 'ABSOLUTE_CLAIM', severity: 'high', pattern: /\b(best|#1|guaranteed|100%|never breaks|perfect|ultimate)\b/i, category: 'absolute' },
+    { code: 'COMPETITOR_TRADEMARK', severity: 'medium', pattern: /\b(apple|iphone|magsafe|samsung|anker)\b/i, category: 'competitor_trademark' },
+    { code: 'CERTIFICATION_CLAIM', severity: 'high', pattern: /\b(fda|ce certified|ul certified|fcc approved|certified organic)\b/i, category: 'certification' },
+    { code: 'WARRANTY_PROMISE', severity: 'medium', pattern: /\b(lifetime warranty|warranty|guarantee|30-day return|refund)\b/i, category: 'warranty' },
+  ];
+  const risks = [];
+  for (const field of fieldTextsForCompliance(target, version)) {
+    for (const rule of rules) {
+      const match = String(field.text).match(rule.pattern);
+      if (!match) continue;
+      risks.push({
+        field: field.field,
+        code: rule.code,
+        severity: rule.severity,
+        category: rule.category,
+        evidence: match[0],
+        guidance: `Review ${field.field} for ${rule.category} compliance before publishing.`,
+        ...m1OpsMeta(rule.severity === 'high' ? 0.86 : 0.8),
+      });
+    }
+  }
+  const high = risks.filter((r) => r.severity === 'high').length;
+  const medium = risks.filter((r) => r.severity === 'medium').length;
+  const low = risks.filter((r) => r.severity === 'low').length;
+  return {
+    targetId,
+    versionId: version?.id || versionId || null,
+    risks,
+    summary: { high, medium, low, status: high > 0 ? 'blocked' : (medium > 0 ? 'review' : 'pass') },
+    ...m1OpsMeta(risks.length ? 0.86 : 0.82),
+  };
+}
+
+function buildVariationMatrix(db, userId, storeId, targetId) {
+  const target = getTarget(db, userId, storeId, targetId);
+  if (!target) return null;
+  const product = productForTarget(db, userId, storeId, target);
+  const listing = listingForTarget(db, userId, storeId, target);
+  const productData = product?.data || {};
+  const listingData = listing?.data || {};
+  const category = target.new_category || listingData.category || productData.category || 'mock-category';
+  const variationTheme = category.toLowerCase().includes('case') ? 'COLOR_NAME' : 'SIZE_NAME-COLOR_NAME';
+  const attrs = {
+    brand: productData.brand || listingData.brand || target.new_brand_positioning || null,
+    item_name: product?.title || listingData.title || target.new_category || target.asin || null,
+    item_type_keyword: category || null,
+    color_name: productData.color || listingData.color || null,
+    size_name: productData.size || listingData.size || null,
+    material: target.new_physical_specs?.material || productData.material || listingData.material || null,
+  };
+  const required = ['brand', 'item_name', 'item_type_keyword'];
+  const variationAttrs = variationTheme.split('-').map((s) => s.toLowerCase());
+  const missingAttributes = required.concat(variationAttrs).filter((name, idx, arr) => arr.indexOf(name) === idx && !attrs[name]);
+  const childAsin = target.asin || product?.asin || null;
+  return {
+    targetId,
+    variationTheme,
+    parent: {
+      sku: product?.sku ? `${product.sku}-PARENT` : `${target.id}-PARENT`,
+      asin: null,
+      role: 'parent',
+    },
+    children: [{
+      sku: product?.sku || target.product_id || target.id,
+      asin: childAsin,
+      role: 'child',
+      attributes: attrs,
+    }],
+    requiredCategoryAttributes: required.map((name) => ({ name, status: attrs[name] ? 'present' : 'missing', value: attrs[name] || null })),
+    missingAttributes,
+    ...m1OpsMeta(missingAttributes.length ? 0.76 : 0.85),
+  };
+}
+
+function buildReadiness(db, userId, storeId, targetId, versionId = null) {
+  const { target, version } = selectedTargetVersion(db, userId, storeId, targetId, versionId);
+  if (!target) return null;
+  const assets = buildAssetMatrix(db, userId, storeId, targetId, versionId);
+  const keywords = buildKeywordCoverage(db, userId, storeId, targetId, versionId);
+  const compliance = buildComplianceReport(db, userId, storeId, targetId, versionId);
+  const variation = buildVariationMatrix(db, userId, storeId, targetId);
+  const bullets = versionBullets(version);
+  const searchTerms = primaryTermsFor(target, productForTarget(db, userId, storeId, target));
+  const aPlusReady = assets?.aPlus?.status === 'ready';
+  const blockers = [];
+  const checks = {
+    ownership: {
+      status: target.is_competitor_only || target.asin_kind === 'external' ? 'blocked' : 'pass',
+      code: target.is_competitor_only || target.asin_kind === 'external' ? 'EXTERNAL_ASIN_READ_ONLY' : null,
+    },
+    version: { status: version ? 'pass' : 'blocked', code: version ? null : 'LISTING_VERSION_MISSING' },
+    title: {
+      status: version?.title && version.title.length >= 50 ? 'pass' : 'blocked',
+      length: version?.title?.length || 0,
+      code: version?.title ? 'TITLE_TOO_SHORT' : 'TITLE_MISSING',
+    },
+    bullets: {
+      status: bullets.length === 5 && bullets.every((b) => b.length >= 20) ? 'pass' : 'blocked',
+      count: bullets.length,
+      code: bullets.length === 5 ? 'BULLET_TOO_SHORT' : 'BULLET_COUNT_INVALID',
+    },
+    description: {
+      status: version?.description && version.description.length >= 80 ? 'pass' : 'blocked',
+      length: version?.description?.length || 0,
+      code: version?.description ? 'DESCRIPTION_TOO_SHORT' : 'DESCRIPTION_MISSING',
+    },
+    searchTerms: {
+      status: searchTerms.length >= 3 ? 'pass' : 'blocked',
+      count: searchTerms.length,
+      code: searchTerms.length >= 3 ? null : 'SEARCH_TERMS_MISSING',
+    },
+    imageMatrix: {
+      status: assets?.summary?.ready ? 'pass' : 'blocked',
+      completedGallerySlots: assets?.summary?.completedGallerySlots || 0,
+      code: assets?.summary?.ready ? null : 'IMAGE_MATRIX_INCOMPLETE',
+    },
+    aPlus: { status: aPlusReady ? 'pass' : 'blocked', code: aPlusReady ? null : 'A_PLUS_MISSING' },
+    variationAttributes: {
+      status: variation?.requiredCategoryAttributes?.every((a) => a.status === 'present') ? 'pass' : 'blocked',
+      missingAttributes: variation?.missingAttributes || [],
+      code: variation?.requiredCategoryAttributes?.every((a) => a.status === 'present') ? null : 'CATEGORY_ATTRIBUTES_MISSING',
+    },
+    compliance: { status: compliance?.summary?.high ? 'blocked' : 'pass', code: compliance?.summary?.high ? 'COMPLIANCE_HIGH_RISK' : null },
+    keywordCoverage: { status: keywords?.summary?.status === 'pass' ? 'pass' : 'blocked', code: keywords?.summary?.status === 'pass' ? null : 'KEYWORD_COVERAGE_LOW' },
+  };
+  for (const [name, check] of Object.entries(checks)) {
+    if (check.status === 'blocked') blockers.push({ check: name, code: check.code || `${name.toUpperCase()}_BLOCKED` });
+  }
+  return {
+    targetId,
+    versionId: version?.id || versionId || null,
+    status: blockers.length ? 'blocked' : 'pass',
+    publishAllowed: blockers.length === 0,
+    checks,
+    blockers,
+    assets,
+    keywords,
+    compliance,
+    variation,
+    ...m1OpsMeta(blockers.length ? 0.81 : 0.88),
+  };
+}
+
+export function getListingWorkbench(db, userId, storeId, targetId, versionId = null) {
+  const { target, version } = selectedTargetVersion(db, userId, storeId, targetId, versionId);
+  if (!target) return null;
+  return {
+    target,
+    version,
+    readiness: buildReadiness(db, userId, storeId, targetId, versionId),
+    assets: buildAssetMatrix(db, userId, storeId, targetId, versionId),
+    keywords: buildKeywordCoverage(db, userId, storeId, targetId, versionId),
+    compliance: buildComplianceReport(db, userId, storeId, targetId, versionId),
+    variation: buildVariationMatrix(db, userId, storeId, targetId),
+    ...m1OpsMeta(),
+  };
+}
+
+export function checkListingReadiness(db, userId, storeId, targetId, versionId = null) {
+  const readiness = buildReadiness(db, userId, storeId, targetId, versionId);
+  if (!readiness) return null;
+  const audit = appendAuditLog(userId, storeId, {
+    sourceModule: 'M1',
+    actionType: 'M1_READINESS_CHECK',
+    resourceType: 'm1_listing_readiness',
+    resourceId: targetId,
+    status: readiness.status === 'pass' ? 'success' : 'blocked',
+    targetId,
+    versionId: readiness.versionId,
+    readinessStatus: readiness.status,
+    blockers: readiness.blockers,
+    source: readiness.source,
+    confidence: readiness.confidence,
+    mock: readiness.mock,
+  });
+  return { ...readiness, auditId: audit.id };
+}
+
+export function getAssetMatrix(db, userId, storeId, targetId, versionId = null) {
+  return buildAssetMatrix(db, userId, storeId, targetId, versionId);
+}
+
+export function getKeywordCoverage(db, userId, storeId, targetId, versionId = null) {
+  return buildKeywordCoverage(db, userId, storeId, targetId, versionId);
+}
+
+export function getComplianceReport(db, userId, storeId, targetId, versionId = null) {
+  return buildComplianceReport(db, userId, storeId, targetId, versionId);
+}
+
 export function pinVersion(db, userId, storeId, id, pinned) {
   const cur = db.prepare('SELECT id FROM m1_listing_versions WHERE id = ? AND user_id = ? AND store_id = ?').get(id, userId, storeId);
   if (!cur) return null;
@@ -889,6 +1615,18 @@ export function deleteVersion(db, userId, storeId, id) {
   if (!cur) return { error: 'not_found' };
   if (cur.round_no === 1) {
     return { error: 'cannot_delete_baseline', message: 'Cannot delete round_no=1 baseline version' };
+  }
+  // Block deletion if an active A/B test references this version, otherwise the test detail /
+  // adopt-winner would point at a non-existent version.
+  const ref = db.prepare(
+    `SELECT id FROM m1_ab_tests
+     WHERE user_id = ? AND store_id = ?
+       AND (control_version_id = ? OR treatment_version_id = ?)
+       AND status IN ('running', 'completed', 'ready_for_manual_publish')
+     LIMIT 1`
+  ).get(userId, storeId, id, id);
+  if (ref) {
+    return { error: 'version_referenced_by_ab', message: `Version is referenced by A/B test ${ref.id}` };
   }
   db.prepare('DELETE FROM m1_listing_versions WHERE id = ? AND user_id = ? AND store_id = ?').run(id, userId, storeId);
   appendAuditLog(userId, storeId, {
@@ -910,6 +1648,9 @@ export function diffVersions(db, userId, storeId, aId, bId) {
 export function combinedPick(db, userId, storeId, targetId, fieldPicks) {
   const target = getTarget(db, userId, storeId, targetId);
   if (!target) return null;
+  if (isReadOnly(target)) {
+    return { error: 'external_asin_cannot_optimize', message: 'External ASIN cannot be optimized (use only as competitor reference)' };
+  }
   if (!fieldPicks || typeof fieldPicks !== 'object') {
     return { error: 'validation_failed', message: 'fieldPicks required' };
   }
@@ -922,14 +1663,25 @@ export function combinedPick(db, userId, storeId, targetId, fieldPicks) {
     ORDER BY created_at DESC LIMIT 1`).get(userId, storeId, targetId, fpHash);
   if (existing) return rowToVersion(existing);
 
-  // Build content by reading each field's chosen version
+  // Build content by reading each field's chosen version.
+  // Every referenced version must exist AND belong to this target. If a referenced vId is
+  // missing/foreign we reject (validation_failed) rather than silently dropping it.
+  // If no valid field pick survives, we must not create an empty version.
   const keys = ['title', 'bullet_1', 'bullet_2', 'bullet_3', 'bullet_4', 'bullet_5', 'description'];
   const content = {};
+  let validPicks = 0;
   for (const k of keys) {
     const vId = fieldPicks[k];
     if (!vId) continue;
-    const row = db.prepare('SELECT * FROM m1_listing_versions WHERE id = ? AND user_id = ? AND store_id = ?').get(vId, userId, storeId);
-    if (row) content[k] = row[k];
+    const row = db.prepare('SELECT * FROM m1_listing_versions WHERE id = ? AND user_id = ? AND store_id = ? AND target_id = ?').get(vId, userId, storeId, targetId);
+    if (!row) {
+      return { error: 'validation_failed', message: `fieldPicks.${k} references unknown or foreign version ${vId}` };
+    }
+    content[k] = row[k];
+    validPicks += 1;
+  }
+  if (validPicks === 0) {
+    return { error: 'validation_failed', message: 'fieldPicks must reference at least one valid version' };
   }
   const roundNo = nextRoundNo(db, userId, storeId, targetId);
   const id = newId('m1v');
@@ -948,10 +1700,12 @@ export function combinedPick(db, userId, storeId, targetId, fieldPicks) {
     fpHash, 0, 0, 0, now
   );
   archiveOldestNonPinnedIfNeeded(db, userId, storeId, targetId);
+  // combinedPick produces a LOCAL draft version (uploaded_to_amazon=0); it is NOT an Amazon
+  // upload. Auditing it as M1_VERSION_COMBINE keeps it out of '已发布' / publish-rate stats.
   appendAuditLog(userId, storeId, {
-    sourceModule: 'M1', actionType: 'M1_LISTING_UPLOAD',
+    sourceModule: 'M1', actionType: 'M1_VERSION_COMBINE',
     resourceType: 'm1_listing_version', resourceId: id,
-    targetId, fieldPicks, source: 'combined_pick',
+    targetId, fieldPicks, source: 'combined_pick', uploadedToAmazon: false,
   });
   return getVersion(db, userId, storeId, id);
 }
@@ -1016,6 +1770,7 @@ export function regenerateImage(db, userId, storeId, id, body = {}) {
   return rowToImage(db.prepare('SELECT * FROM m1_generated_images WHERE id = ?').get(id));
 }
 
+
 // ============================================================
 // A/B tests CRUD
 // ============================================================
@@ -1051,6 +1806,21 @@ export function createAbTest(db, userId, storeId, body) {
   }
   const target = getTarget(db, userId, storeId, body.targetId);
   if (!target) return { error: 'not_found' };
+  if (isReadOnly(target)) {
+    return { error: 'external_asin_cannot_optimize', message: 'External ASIN cannot be A/B tested (use only as competitor reference)' };
+  }
+  // control / treatment must be distinct, must exist, and must belong to this target.
+  if (body.controlVersionId === body.treatmentVersionId) {
+    return { error: 'validation_failed', message: 'controlVersionId and treatmentVersionId must differ' };
+  }
+  const controlRow = db.prepare('SELECT target_id FROM m1_listing_versions WHERE id = ? AND user_id = ? AND store_id = ?').get(body.controlVersionId, userId, storeId);
+  const treatmentRow = db.prepare('SELECT target_id FROM m1_listing_versions WHERE id = ? AND user_id = ? AND store_id = ?').get(body.treatmentVersionId, userId, storeId);
+  if (!controlRow || controlRow.target_id !== body.targetId) {
+    return { error: 'validation_failed', message: 'controlVersionId not found or does not belong to target' };
+  }
+  if (!treatmentRow || treatmentRow.target_id !== body.targetId) {
+    return { error: 'validation_failed', message: 'treatmentVersionId not found or does not belong to target' };
+  }
   const asin = target.asin || `B0${(body.targetId).slice(-8).toUpperCase()}`;
   const id = newId('m1ab');
   const now = nowIso();
@@ -1078,7 +1848,7 @@ export function createAbTest(db, userId, storeId, body) {
   return result;
 }
 
-function zTestSignificance(controlMetrics, treatmentMetrics) {
+export function zTestSignificance(controlMetrics, treatmentMetrics) {
   // Aggregate impressions/clicks/orders across days
   const agg = (arr) => arr.reduce((a, m) => ({
     impressions: a.impressions + (m.impressions || 0),
@@ -1117,18 +1887,30 @@ function erf(x) {
   return sign * y;
 }
 
+// Conversion baseline used for BOTH control and treatment synthetic arms.
+// They are deliberately identical so the synthetic data carries NO built-in winner bias;
+// any observed lift is pure RNG noise (honest demo). The data is clearly labeled synthetic
+// (amazon_experiment_id stays null) and the UI renders a '合成演示数据' banner.
+const SYNTHETIC_CVR_BASELINE = 0.10;
+const SYNTHETIC_CVR_SPREAD = 0.05;
+
 export function startAbTest(db, userId, storeId, id) {
   const cur = getAbTest(db, userId, storeId, id);
   if (!cur) return null;
   if (cur.status === 'manual_required') return cur;
   if (cur.status === 'running') return cur;
   const now = nowIso();
-  const ends = new Date(Date.now() + (cur.duration_days || 14) * 24 * 3600 * 1000).toISOString();
+  const startedMs = Date.parse(now);
+  const durationDays = cur.duration_days || 14;
+  // ends_at derived deterministically from started_at + duration.
+  const ends = new Date(startedMs + durationDays * 24 * 3600 * 1000).toISOString();
   db.prepare(`UPDATE m1_ab_tests SET status = 'running', started_at = ?, ends_at = ?, updated_at = ? WHERE id = ?`).run(now, ends, now, id);
 
-  // Mock 14 days of metrics, 2 rows / day
+  // Mock 14 days of metrics, 2 rows / day. RNG seed is content-derived (deterministic);
+  // baseDate is derived from started_at (NOT Date.now()) so a fixed started_at yields a
+  // golden-snapshot-stable metrics series.
   const rng = mulberry32(hashStr(id + '-ab'));
-  const baseDate = new Date(Date.now() - 14 * 24 * 3600 * 1000);
+  const baseDate = new Date(startedMs - 14 * 24 * 3600 * 1000);
   const stmt = db.prepare(`INSERT INTO m1_ab_metrics(
     id, user_id, store_id, ab_test_id, date, arm,
     impressions, clicks, orders, units, ctr, cvr, sales, raw)
@@ -1141,11 +1923,11 @@ export function startAbTest(db, userId, storeId, id) {
       // Control arm
       const cImp = 800 + Math.floor(rng() * 400);
       const cClk = Math.floor(cImp * (0.04 + rng() * 0.02));
-      const cOrd = Math.floor(cClk * (0.10 + rng() * 0.05));
-      // Treatment arm (slight lift)
+      const cOrd = Math.floor(cClk * (SYNTHETIC_CVR_BASELINE + rng() * SYNTHETIC_CVR_SPREAD));
+      // Treatment arm — SAME conversion baseline as control (no built-in bias).
       const tImp = 800 + Math.floor(rng() * 400);
       const tClk = Math.floor(tImp * (0.045 + rng() * 0.025));
-      const tOrd = Math.floor(tClk * (0.115 + rng() * 0.05));
+      const tOrd = Math.floor(tClk * (SYNTHETIC_CVR_BASELINE + rng() * SYNTHETIC_CVR_SPREAD));
       stmt.run(newId('m1met'), userId, storeId, id, date, 'control',
         cImp, cClk, cOrd, cOrd, cClk / cImp, cClk > 0 ? cOrd / cClk : 0, cOrd * 19.99, JSON.stringify({}));
       stmt.run(newId('m1met'), userId, storeId, id, date, 'treatment',
@@ -1179,41 +1961,67 @@ export function getAbMetrics(db, userId, storeId, id) {
   const rows = db.prepare(`SELECT * FROM m1_ab_metrics WHERE user_id = ? AND store_id = ? AND ab_test_id = ?
     ORDER BY date ASC, arm ASC`).all(userId, storeId, id);
   const metrics = rows.map(rowToAbMetric);
-  // Compute z-test on current metrics
+  // Compute z-test on current metrics. This is a PURE read: no DB writes here.
+  // State固化 (lift/significance/winner/status) is performed only by finalizeAbTest.
   const control = metrics.filter((m) => m.arm === 'control');
   const treatment = metrics.filter((m) => m.arm === 'treatment');
   const stats = (control.length && treatment.length) ? zTestSignificance(control, treatment) : null;
-  // Update test row if running & enough data
-  if (stats && test.status === 'running' && metrics.length >= 14) {
-    db.prepare(`UPDATE m1_ab_tests SET lift = ?, significance = ?, winner = ?, status = ?, updated_at = ? WHERE id = ?`).run(
-      stats.lift, stats.significance, stats.winner,
-      Math.abs(stats.z) > 1.96 ? 'completed' : 'running',
-      nowIso(), id
-    );
+  return { test, metrics, stats };
+}
+
+// Finalize固化: compute stats and persist lift/significance/winner/status. Only acts on a
+// running test with sufficient data; idempotent otherwise (returns current row).
+export function finalizeAbTest(db, userId, storeId, id) {
+  const cur = getAbTest(db, userId, storeId, id);
+  if (!cur) return null;
+  if (cur.status !== 'running') {
+    return { error: 'not_running', message: `A/B test is not running (status=${cur.status})`, test: cur };
   }
-  return { test: getAbTest(db, userId, storeId, id), metrics, stats };
+  const rows = db.prepare(`SELECT * FROM m1_ab_metrics WHERE user_id = ? AND store_id = ? AND ab_test_id = ?
+    ORDER BY date ASC, arm ASC`).all(userId, storeId, id);
+  const metrics = rows.map(rowToAbMetric);
+  const control = metrics.filter((m) => m.arm === 'control');
+  const treatment = metrics.filter((m) => m.arm === 'treatment');
+  if (!control.length || !treatment.length || metrics.length < 14) {
+    return { error: 'insufficient_data', message: 'not enough metrics to finalize', test: cur };
+  }
+  const stats = zTestSignificance(control, treatment);
+  db.prepare(`UPDATE m1_ab_tests SET lift = ?, significance = ?, winner = ?, status = 'completed', updated_at = ? WHERE id = ?`).run(
+    stats.lift, stats.significance, stats.winner, nowIso(), id
+  );
+  appendAuditLog(userId, storeId, {
+    sourceModule: 'M1', actionType: 'M1_AB_FINALIZE',
+    resourceType: 'm1_ab_test', resourceId: id,
+    winner: stats.winner, lift: stats.lift, significance: stats.significance,
+  });
+  return getAbTest(db, userId, storeId, id);
 }
 
 export function adoptAbWinner(db, userId, storeId, id) {
   const cur = getAbTest(db, userId, storeId, id);
   if (!cur) return null;
-  if (!cur.winner) {
-    // Force compute first
-    const m = getAbMetrics(db, userId, storeId, id);
-    if (m?.test) Object.assign(cur, m.test);
+  // Adoption requires a finalized test. We do NOT implicitly固化 here (read/write separation):
+  // the caller must POST /finalize first.
+  if (cur.status !== 'completed' && cur.status !== 'ready_for_manual_publish') {
+    return { error: 'not_finalized', message: `A/B test must be finalized before adopting a winner (status=${cur.status})` };
   }
   const winnerVersionId = cur.winner === 'treatment' ? cur.treatment_version_id
     : (cur.winner === 'control' ? cur.control_version_id : null);
-  if (winnerVersionId) {
-    // Mark winner version uploaded_to_amazon = 1
-    db.prepare(`UPDATE m1_listing_versions SET uploaded_to_amazon = 1, uploaded_at = ? WHERE id = ?`).run(nowIso(), winnerVersionId);
-  }
-  db.prepare(`UPDATE m1_ab_tests SET status = 'completed', updated_at = ? WHERE id = ?`).run(nowIso(), id);
-  appendAuditLog(userId, storeId, {
+  const guidance = 'Winner adoption only prepares a manual publish package. SP-API publish adapter required before uploaded_to_amazon can be set.';
+  const audit = appendAuditLog(userId, storeId, {
     sourceModule: 'M1', actionType: 'M1_AB_ADOPT_WINNER',
     resourceType: 'm1_ab_test', resourceId: id,
     winner: cur.winner, winnerVersionId, lift: cur.lift,
+    publishState: 'ready_for_manual_publish',
+    manualPublishRequired: true,
+    publishAdapterRequired: 'SP-API',
+    uploadedToAmazon: false,
+    amazonReceiptId: null,
+    guidance,
   });
+  db.prepare(`UPDATE m1_ab_tests
+    SET status = 'ready_for_manual_publish', manual_guidance = ?, audit_id = ?, updated_at = ?
+    WHERE id = ?`).run(guidance, audit.id, nowIso(), id);
   return getAbTest(db, userId, storeId, id);
 }
 
@@ -1337,19 +2145,21 @@ export function seedListingsForUser(db, userId, storeId) {
         { field: 'bullets', dimension: '5 点', suggestion: '按场景/痛点/方案重写', expected_lift: 7 },
         { field: 'title', dimension: '标题', suggestion: '前置核心关键词', expected_lift: 5 },
       ];
+      // Seed scores are mulberry32-synthesized demo data → honestly flag is_mock=1 + synthetic_demo.
+      const seedScoreSourceMeta = { provider: 'synthetic_demo', mode: 'mock', generator: 'mulberry32-seed', seeded: true, generatedAt: now };
       db.prepare(`INSERT OR IGNORE INTO m1_listing_scores(
         id, user_id, store_id, target_id, scored_at, total_score,
         title_score, title_detail, bullets_score, bullets_detail,
         main_image_score, main_image_detail, a_plus_score, a_plus_detail,
-        reviews_score, reviews_detail, improvement_ranking)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+        reviews_score, reviews_detail, improvement_ranking, is_mock, source_meta)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
         sid, userId, storeId, targetId, now, total,
         ts, JSON.stringify(detail('标题', ts)),
         bs, JSON.stringify(detail('5 点', bs)),
         ms, JSON.stringify(detail('主图', ms)),
         aps, JSON.stringify(detail('A+', aps)),
         rs, JSON.stringify(detail('评论', rs)),
-        JSON.stringify(improvement)
+        JSON.stringify(improvement), 1, JSON.stringify(seedScoreSourceMeta)
       );
     }
     insertScore(t1Id, 's1');

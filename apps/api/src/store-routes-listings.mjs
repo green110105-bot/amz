@@ -3,7 +3,7 @@
 // Bearer + X-Store-Id 必需；写操作走 appendAuditLog (sourceModule='M1')。
 
 import { securityHeaders } from './security.mjs';
-import { whoAmI, defaultStoreIdFor, getDbInstance } from './data-store.mjs';
+import { whoAmI, defaultStoreIdFor, getDbInstance, resolveStoreScope } from './data-store.mjs';
 import {
   listTargets, getTarget, createTarget, updateTarget, deleteTarget,
   getResearch, triggerResearch, clearResearchCache,
@@ -12,7 +12,8 @@ import {
   listVersions, getVersion, pinVersion, deleteVersion, diffVersions, combinedPick,
   listImages, generateImage, regenerateImage,
   listAbTests, getAbTest, createAbTest, startAbTest, abortAbTest,
-  getAbMetrics, adoptAbWinner,
+  getAbMetrics, finalizeAbTest, adoptAbWinner,
+  getListingWorkbench, checkListingReadiness, getAssetMatrix, getKeywordCoverage, getComplianceReport,
 } from './data-store-listings.mjs';
 
 function getDb() { return getDbInstance(); }
@@ -34,8 +35,9 @@ function requireAuth(request) {
   if (!token) return { error: json({ error: 'unauthorized' }, 401) };
   const u = whoAmI(token);
   if (!u) return { error: json({ error: 'unauthorized' }, 401) };
-  const storeId = request.headers.get('x-store-id') || defaultStoreIdFor(u.id) || '';
-  return { user: u, storeId, userId: u.id };
+  const scope = resolveStoreScope(u.id, request.headers.get('x-store-id'));
+  if (scope.error) return { error: json({ error: 'store_not_owned' }, 403) };
+  return { user: u, storeId: scope.storeId, userId: u.id };
 }
 
 function notFound() { return json({ error: 'not_found' }, 404); }
@@ -65,6 +67,39 @@ async function _impl(request) {
   const { userId, storeId } = a;
   const db = getDb();
   const params = url.searchParams;
+  let m;
+
+  // ============================================================
+  // 3.0 Production-readiness workbench (read-only/mock-gated)
+  // ============================================================
+  m = path.match(/^\/api\/v1\/store\/m1\/workbench\/([\w-]+)$/);
+  if (m && method === 'GET') {
+    const r = getListingWorkbench(db, userId, storeId, m[1], params.get('versionId'));
+    return r ? json(r) : notFound();
+  }
+  if (path === '/api/v1/store/m1/readiness/check' && method === 'POST') {
+    const body = await readJson(request);
+    if (!body.targetId) return validationError('targetId required');
+    const r = checkListingReadiness(db, userId, storeId, body.targetId, body.versionId || body.version_id || null);
+    return r ? json(r) : notFound();
+  }
+  if (path === '/api/v1/store/m1/assets/matrix' && method === 'GET') {
+    const targetId = params.get('targetId');
+    if (!targetId) return validationError('targetId required');
+    const r = getAssetMatrix(db, userId, storeId, targetId, params.get('versionId'));
+    return r ? json(r) : notFound();
+  }
+  if (path === '/api/v1/store/m1/keywords/coverage' && method === 'GET') {
+    const targetId = params.get('targetId');
+    if (!targetId) return validationError('targetId required');
+    const r = getKeywordCoverage(db, userId, storeId, targetId, params.get('versionId'));
+    return r ? json(r) : notFound();
+  }
+  m = path.match(/^\/api\/v1\/store\/m1\/compliance\/([\w-]+)$/);
+  if (m && method === 'GET') {
+    const r = getComplianceReport(db, userId, storeId, m[1], params.get('versionId'));
+    return r ? json(r) : notFound();
+  }
 
   // ============================================================
   // 3.1 Targets
@@ -82,7 +117,6 @@ async function _impl(request) {
       return json(r, 201);
     }
   }
-  let m;
   m = path.match(/^\/api\/v1\/store\/m1\/targets\/([\w-]+)$/);
   if (m) {
     const id = m[1];
@@ -151,7 +185,7 @@ async function _impl(request) {
     if (method === 'POST') {
       const body = await readJson(request);
       const r = createRun(db, userId, storeId, body);
-      if (r && r.error === 'external_asin_cannot_optimize') return json(r, 400);
+      if (r && r.error === 'external_asin_cannot_optimize') return json(r, 422);
       if (r && r.error === 'validation_failed') return json(r, 400);
       if (r && r.error === 'not_found') return notFound();
       return json(r, 201);
@@ -183,7 +217,8 @@ async function _impl(request) {
     const body = await readJson(request);
     if (!body.targetId || !body.fieldPicks) return validationError('targetId, fieldPicks required');
     const r = combinedPick(db, userId, storeId, body.targetId, body.fieldPicks);
-    if (r && r.error === 'validation_failed') return json(r, 400);
+    if (r && r.error === 'external_asin_cannot_optimize') return json(r, 422);
+    if (r && r.error === 'validation_failed') return json(r, 422);
     return r ? json(r, 201) : notFound();
   }
   if (path === '/api/v1/store/m1/versions' && method === 'GET') {
@@ -202,6 +237,7 @@ async function _impl(request) {
     if (method === 'DELETE') {
       const r = deleteVersion(db, userId, storeId, id);
       if (r && r.error === 'cannot_delete_baseline') return json(r, 400);
+      if (r && r.error === 'version_referenced_by_ab') return json(r, 409);
       if (r && r.error === 'not_found') return notFound();
       return json({ ok: true });
     }
@@ -256,13 +292,16 @@ async function _impl(request) {
     if (method === 'POST') {
       const body = await readJson(request);
       const r = createAbTest(db, userId, storeId, body);
-      if (r && r.error === 'validation_failed') return json(r, 400);
+      if (r && r.error === 'external_asin_cannot_optimize') return json(r, 422);
+      if (r && r.error === 'validation_failed') return json(r, 422);
       if (r && r.error === 'not_found') return notFound();
       if (r && r._manualRequired) {
-        // 422 with manual guidance per spec
+        // M1-008: manual A/B is a single success contract — 201 + manualRequired:true.
+        // The row IS persisted (manual_required status) so the operator can see it and follow
+        // the manual guidance; no 422 third-state.
         const clean = { ...r };
         delete clean._manualRequired;
-        return json({ ...clean, error: 'manual_required', manualGuidance: clean.manual_guidance }, 422);
+        return json({ ...clean, manualRequired: true, manualGuidance: clean.manual_guidance }, 201);
       }
       return json(r, 201);
     }
@@ -287,10 +326,20 @@ async function _impl(request) {
     const r = getAbMetrics(db, userId, storeId, m[1]);
     return r ? json(r) : notFound();
   }
+  m = path.match(/^\/api\/v1\/store\/m1\/ab\/([\w-]+)\/finalize$/);
+  if (m && method === 'POST') {
+    const r = finalizeAbTest(db, userId, storeId, m[1]);
+    if (!r) return notFound();
+    if (r.error === 'not_running') return json(r, 409);
+    if (r.error === 'insufficient_data') return json(r, 409);
+    return json(r);
+  }
   m = path.match(/^\/api\/v1\/store\/m1\/ab\/([\w-]+)\/adopt-winner$/);
   if (m && method === 'POST') {
     const r = adoptAbWinner(db, userId, storeId, m[1]);
-    return r ? json(r) : notFound();
+    if (!r) return notFound();
+    if (r.error === 'not_finalized') return json(r, 409);
+    return json(r);
   }
 
   return null;

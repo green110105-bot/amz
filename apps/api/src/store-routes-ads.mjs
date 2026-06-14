@@ -3,7 +3,9 @@
 // 需要 Bearer token (Authorization 头) + X-Store-Id 头
 
 import { securityHeaders } from './security.mjs';
-import { whoAmI, defaultStoreIdFor, getDbInstance } from './data-store.mjs';
+import { whoAmI, defaultStoreIdFor, getDbInstance, resolveStoreScope } from './data-store.mjs';
+import { realWritesEnabled, isRealMode } from './integrations/provider-mode.mjs';
+import { executeRealAdsActionQueueItem } from './integrations/ads-api/live-action-executor.mjs';
 import {
   // strategies
   listStrategies, getStrategy, createStrategy, updateStrategy, deleteStrategy,
@@ -12,6 +14,7 @@ import {
   copyCampaign, bulkChangeBudget, promoteToManual,
   // suggestions
   listSuggestions, getSuggestion, acceptSuggestion, rejectSuggestion, revertSuggestion,
+  settleObservations,
   // manual changes
   listManualChanges, applyManualChangeAlternative, ignoreManualChange,
   // portfolios
@@ -43,6 +46,9 @@ import {
   listSearchTermReports, listSqp, listCampaignReports, takeSqpAction,
   // bulk
   bulkCreateCampaigns, bulkImport,
+  // action queue
+  listActionQueue, getActionQueueItem, approveActionQueueItem, removeActionQueueItem,
+  executeActionQueueItem, executeActionQueueBatch, enqueueManualAction,
 } from './data-store-ads.mjs';
 
 function getDb() {
@@ -161,8 +167,11 @@ function requireAuth(request) {
   if (!token) return { error: json({ error: 'unauthorized' }, 401) };
   const u = whoAmI(token);
   if (!u) return { error: json({ error: 'unauthorized' }, 401) };
-  const storeId = request.headers.get('x-store-id') || defaultStoreIdFor(u.id) || '';
-  return { user: u, storeId, userId: u.id };
+  // X-P1-04: x-store-id ownership check. A spoofed store-id owned by another tenant
+  // must be rejected with 403 store_not_owned, never silently honored.
+  const scope = resolveStoreScope(u.id, request.headers.get('x-store-id'));
+  if (scope.error) return { error: json({ error: 'store_not_owned' }, 403) };
+  return { user: u, storeId: scope.storeId, userId: u.id };
 }
 
 function notFound() { return json({ error: 'not_found' }, 404); }
@@ -259,6 +268,14 @@ async function _handleAdsRequestImpl(request) {
     return json({ items: listSuggestions(db, userId, storeId, {
       state: params.get('state'), sku: params.get('sku'), strategy: params.get('strategy'),
     }) });
+  }
+  // N5-m3-observation-settle: on-demand (non-cron) settlement trigger. Settles
+  // every observing suggestion whose observation window has elapsed into
+  // succeeded/failed using a deterministic simulation honestly flagged
+  // sourceMeta.simulated=true. Never touches real Amazon; writes audit only.
+  if (path === '/api/v1/store/ads/observations/settle' && method === 'POST') {
+    const r = settleObservations(db, userId, storeId);
+    return json(r, 200);
   }
   m = path.match(/^\/api\/v1\/store\/ads\/suggestions\/([\w-]+)$/);
   if (m && method === 'GET') {
@@ -668,5 +685,81 @@ async function _handleAdsRequestImpl(request) {
     return json(r, 201);
   }
 
+  // ============================================================
+  // 3.7 Action queue (M3 dry-run + gated real write)
+  // ============================================================
+  if (path === '/api/v1/store/ads/action-queue' && method === 'GET') {
+    return json({ items: listActionQueue(db, userId, storeId, { state: params.get('state') }) });
+  }
+  // M3-P0-05: BudgetAllocator/Dayparting (and other LX write surfaces) enqueue here.
+  // enqueueManualAction recomputes guardrail server-side (M3-P0-04, hard needs_review),
+  // forces dryRun=1 + auditRequired, and never trusts a client-supplied guardrail/state.
+  if (path === '/api/v1/store/ads/action-queue/enqueue' && method === 'POST') {
+    const body = await readJson(request);
+    const r = enqueueManualAction(db, userId, storeId, body);
+    // A benign dedupe returns the existing item with duplicate:true (200, frontend → info).
+    if (r && r.duplicate) return json({ ...r, queued: false }, 200);
+    return json({ ...r, queued: true }, 201);
+  }
+  // GET /active?entityKind=&entityId= → the active queued action for an entity (pending badge).
+  if (path === '/api/v1/store/ads/action-queue/active' && method === 'GET') {
+    const entityKind = params.get('entityKind');
+    const entityId = params.get('entityId');
+    const active = listActionQueue(db, userId, storeId).find((item) => (
+      ['queued', 'approved', 'executing'].includes(item.state)
+      && (item.entity?.kind || item.typedAction?.entityKind || null) === entityKind
+      && (item.entity?.id || item.typedAction?.resourceId || null) === entityId
+    ));
+    return json(active || null);
+  }
+  m = path.match(/^\/api\/v1\/store\/ads\/action-queue\/([\w-]+)$/);
+  if (m && method === 'GET') {
+    const r = getActionQueueItem(db, userId, storeId, m[1]);
+    return r ? json(r) : notFound();
+  }
+  m = path.match(/^\/api\/v1\/store\/ads\/action-queue\/([\w-]+)\/approve$/);
+  if (m && method === 'POST') {
+    const body = await readJson(request);
+    const r = approveActionQueueItem(db, userId, storeId, m[1], body);
+    return r ? json(r) : notFound();
+  }
+  m = path.match(/^\/api\/v1\/store\/ads\/action-queue\/([\w-]+)\/remove$/);
+  if (m && method === 'POST') {
+    const body = await readJson(request);
+    const r = removeActionQueueItem(db, userId, storeId, m[1], body);
+    return r ? json(r) : notFound();
+  }
+  // Batch real writes stay blocked: a reviewed real write must be one action at a time.
+  if (path === '/api/v1/store/ads/action-queue/execute-batch' && method === 'POST') {
+    const body = await readJson(request);
+    if (serverRequiresRealStoreWrite(body)) {
+      throw new TypeError('batch_real_write_not_supported');
+    }
+    const r = executeActionQueueBatch(db, userId, storeId, body);
+    return json(r);
+  }
+  m = path.match(/^\/api\/v1\/store\/ads\/action-queue\/([\w-]+)\/execute$/);
+  if (m && method === 'POST') {
+    const body = await readJson(request);
+    // Server decides real-vs-dry-run; the frontend body flag is NEVER trusted on its
+    // own. A real write requires the server-side gate (REAL_WRITES_ENABLED + real
+    // provider mode) AND the live-action-executor re-checks isRealMode() + every env
+    // gate before touching Amazon.
+    if (serverRequiresRealStoreWrite(body)) {
+      const r = await executeRealAdsActionQueueItem(db, userId, storeId, m[1], body);
+      return r ? json(r) : notFound();
+    }
+    const r = executeActionQueueItem(db, userId, storeId, m[1], body);
+    return r ? json(r) : notFound();
+  }
+
   return null;
+}
+
+// X-P0-04 / W3: the server alone decides whether a real store write is requested.
+// When REAL_WRITES_ENABLED!=='true' this hard-forces false; it never unconditionally
+// trusts the frontend body.requiresRealStoreWrite flag.
+function serverRequiresRealStoreWrite(body = {}) {
+  if (!realWritesEnabled()) return false;
+  return body.requiresRealStoreWrite === true || body.realWriteEnabled === true;
 }

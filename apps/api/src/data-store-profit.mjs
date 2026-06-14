@@ -21,9 +21,8 @@
 import { randomBytes } from 'node:crypto';
 import { appendAuditLog } from './data-store.mjs';
 import {
-  toggleCampaign as _toggleCampaign,
-  updateCampaignBudget as _updateCampaignBudget,
   listCampaigns as _listCampaigns,
+  enqueueManualAction as _enqueueManualAction,
 } from './data-store-ads.mjs';
 
 function nowIso() { return new Date().toISOString(); }
@@ -140,6 +139,10 @@ export function initProfitSchema(db) {
     );
     CREATE INDEX IF NOT EXISTS idx_m2_cf_us ON m2_cashflow_events(user_id, store_id);
     CREATE INDEX IF NOT EXISTS idx_m2_cf_date ON m2_cashflow_events(user_id, store_id, event_date);
+    -- 出账唯一真相源兜底：同一 (ref_id, source) 不可重复入账（po_deposit/po_balance）
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_m2_cf_ref_src
+      ON m2_cashflow_events(user_id, store_id, ref_id, source)
+      WHERE ref_id IS NOT NULL AND source IN ('po_deposit','po_balance');
 
     CREATE TABLE IF NOT EXISTS m2_leaks (
       id TEXT PRIMARY KEY,
@@ -484,6 +487,7 @@ export function initProfitSchema(db) {
       acknowledged_at TEXT,
       acknowledged_by TEXT,
       pushed_to_m4 INTEGER DEFAULT 0,
+      is_simulated INTEGER DEFAULT 0,
       triggered_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_m2_ae_us ON m2_alert_events(user_id, store_id);
@@ -551,6 +555,13 @@ export function initProfitSchema(db) {
     );
     CREATE INDEX IF NOT EXISTS idx_m4_notif_us ON m4_notifications(user_id, store_id);
   `);
+  // 幂等迁移：旧库补 m2_alert_events.is_simulated 列（M2-P0-07）
+  try {
+    const cols = db.prepare("PRAGMA table_info(m2_alert_events)").all();
+    if (!cols.some((c) => c.name === 'is_simulated')) {
+      db.exec('ALTER TABLE m2_alert_events ADD COLUMN is_simulated INTEGER DEFAULT 0');
+    }
+  } catch { /* best-effort migration */ }
 }
 
 export const PROFIT_TABLES_TO_CLEAN = [
@@ -769,6 +780,7 @@ export function rowToAlertEvent(r) {
     matchedValue: _j(r.matched_value), message: r.message,
     acknowledged: !!r.acknowledged, acknowledgedAt: r.acknowledged_at,
     acknowledgedBy: r.acknowledged_by, pushedToM4: !!r.pushed_to_m4,
+    isSimulated: !!r.is_simulated,
     triggeredAt: r.triggered_at,
   };
 }
@@ -880,7 +892,7 @@ export function recomputeProfit(db, userId, storeId, rangeDays = 30) {
   const cutoff = new Date(Date.now() - rangeDays * 86400000).toISOString();
   const rows = db.prepare(`SELECT sku, asin, product_id,
     SUM(revenue) AS rev, SUM(net_profit) AS np, COUNT(*) AS units,
-    AVG(confidence) AS conf
+    AVG(confidence) AS conf, MIN(ordered_at) AS firstAt, MAX(ordered_at) AS lastAt
     FROM m2_orders WHERE user_id=? AND store_id=? AND ordered_at>=?
     GROUP BY sku`).all(userId, storeId, cutoff);
   const tx = db.transaction(() => {
@@ -895,6 +907,21 @@ export function recomputeProfit(db, userId, storeId, rangeDays = 30) {
       const breakdown = {};
       for (const c of costs) breakdown[c.cost_type] = _r2(c.s);
       const totalCost = Object.values(breakdown).reduce((a, b) => a + b, 0);
+      // 真实推算 velocity / days_cover / lifecycle（去掉硬编 'mature'/30）
+      const units = r.units || 0;
+      const velocity = _r2(units / Math.max(1, rangeDays)); // 件/天
+      const invSnap = db.prepare(`SELECT SUM(on_hand) AS onHand FROM m2_inventory_snapshots
+        WHERE user_id=? AND store_id=? AND sku=?`).get(userId, storeId, r.sku) || {};
+      const onHand = invSnap.onHand || 0;
+      const daysCover = velocity > 0 ? Math.round(onHand / velocity) : (onHand > 0 ? 999 : 0);
+      // lifecycle 推断：首单距今天数 + 销量趋势
+      const firstMs = r.firstAt ? Date.parse(r.firstAt) : Date.now();
+      const ageDays = Math.max(0, Math.round((Date.now() - firstMs) / 86400000));
+      let lifecycle;
+      if (velocity <= 0.05) lifecycle = 'declining';
+      else if (ageDays <= 14) lifecycle = 'launch';
+      else if (ageDays <= 45) lifecycle = 'growth';
+      else lifecycle = 'mature';
       const id = newId('skupf');
       db.prepare(`INSERT INTO m2_sku_profit_snapshots(
         id, user_id, store_id, sku, asin, product_id, range_days,
@@ -907,7 +934,7 @@ export function recomputeProfit(db, userId, storeId, rangeDays = 30) {
         breakdown.ad_alloc || 0, breakdown.refund_provision || 0,
         breakdown.storage || 0, _r2(totalCost),
         _r2(r.np), r.rev > 0 ? _r2(r.np / r.rev) : 0,
-        r.units || 0, 'mature', 30, nowIso(), JSON.stringify(breakdown)
+        units, lifecycle, daysCover, nowIso(), JSON.stringify(breakdown)
       );
     }
   });
@@ -918,7 +945,8 @@ export function recomputeProfit(db, userId, storeId, rangeDays = 30) {
     resourceType: 'm2_sku_profit_snapshots', resourceId: jobId,
     rangeDays, count: rows.length,
   });
-  return { queued: true, jobId, etaSeconds: 1 };
+  // 同步执行，返回真实结果而非伪异步契约（M2-P1-02）
+  return { recomputed: true, count: rows.length };
 }
 
 export function listSkuProfit(db, userId, storeId, filters = {}) {
@@ -1154,32 +1182,81 @@ export function ignoreLeak(db, userId, storeId, id, reason) {
 // ============================================================
 // 现金流
 // ============================================================
-export function getCashflowTimeline(db, userId, storeId, days = 30) {
-  const today = new Date();
+// 现金流期初余额：取最早一行 (按 event_date, created_at) 的 (balance - 该行自身净流量)。
+// 该锚点不随后续插入漂移（M2-P0-03）；不再使用 350000 魔数；无任何已知 balance 返回 0。
+// 关键：锚点行（最早一行）的 balance 由 _backfillCashflowBalances 显式保护、永不被重写，
+// 始终保留其原始口径（balance = opening + 该行自身净流量）。因此即便在锚点日期（=今天）追加
+// 新的 inflow/outflow，opening 仍恒定，新增净流量会被并入“当日累计”从而拉低之后所有 running balance。
+function _cashflowOpeningBalance(db, userId, storeId) {
+  // 第一条带非 NULL balance 的最早行（按时间序）。
+  const anchor = db.prepare(`SELECT event_date, inflow, outflow, balance FROM m2_cashflow_events
+    WHERE user_id=? AND store_id=? AND balance IS NOT NULL
+    ORDER BY event_date ASC, created_at ASC LIMIT 1`).get(userId, storeId);
+  if (!anchor) return 0;
+  // 严格早于锚点日期的净流量累计（锚点行自身之外的更早数据）。
+  const priorNet = db.prepare(`SELECT
+      COALESCE(SUM(inflow),0) - COALESCE(SUM(outflow),0) AS net
+    FROM m2_cashflow_events
+    WHERE user_id=? AND store_id=? AND event_date < ?`).get(userId, storeId, anchor.event_date).net || 0;
+  const anchorNet = (anchor.inflow || 0) - (anchor.outflow || 0);
+  // opening = anchor.balance - priorNet - anchorNet
+  return _r2(anchor.balance - priorNet - anchorNet);
+}
+
+// 由 inflow/outflow 增量重算每日 running balance（不信任稀疏 balance 列）。
+// 返回按日期升序的逐日序列 [{date, inflow, outflow, balance, label}]。
+function _cashflowDailySeries(db, userId, storeId) {
   const rows = db.prepare(`SELECT * FROM m2_cashflow_events
-    WHERE user_id=? AND store_id=? ORDER BY event_date ASC`).all(userId, storeId);
+    WHERE user_id=? AND store_id=? ORDER BY event_date ASC, created_at ASC`).all(userId, storeId);
   const map = new Map();
   for (const r of rows) {
-    if (!map.has(r.event_date)) map.set(r.event_date, { date: r.event_date, inflow: 0, outflow: 0, balance: r.balance, label: r.label });
+    if (!map.has(r.event_date)) map.set(r.event_date, { date: r.event_date, inflow: 0, outflow: 0, label: r.label });
     const cur = map.get(r.event_date);
     cur.inflow += r.inflow || 0;
     cur.outflow += r.outflow || 0;
-    if (r.balance != null) cur.balance = r.balance;
     if (r.label && !cur.label) cur.label = r.label;
   }
   const points = Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
-  // 控制到 days 个点
-  const sliced = points.slice(0, Math.max(7, Math.min(180, days)));
+  const opening = _cashflowOpeningBalance(db, userId, storeId);
+  let running = opening;
+  for (const p of points) {
+    running = _r2(running + (p.inflow || 0) - (p.outflow || 0));
+    p.balance = running;
+  }
+  return points;
+}
+
+export function getCashflowTimeline(db, userId, storeId, days = 30) {
+  const points = _cashflowDailySeries(db, userId, storeId); // 升序：最旧→最新
+  // 取最近 days 天（含今天）；序列升序，故 slice(-N) 末尾即最新日期。
+  const window = Math.max(7, Math.min(180, days));
+  const sliced = points.slice(-window);
   const balances = sliced.map((p) => p.balance || 0);
   const minBalance = balances.length ? Math.min(...balances) : 0;
   const minBalanceIdx = balances.indexOf(minBalance);
-  const minBalanceDate = sliced[minBalanceIdx]?.date || sliced[0]?.date;
+  const minBalanceDate = sliced[minBalanceIdx]?.date || sliced[sliced.length - 1]?.date;
+  // “今天”= 序列中最新一天（末尾元素），其 running balance 已含今天的流入/流出。
+  const lastIdx = sliced.length - 1;
+  const todayBalance = balances[lastIdx] || 0;
+  const todayStr = sliced[lastIdx]?.date || nowIso().slice(0, 10);
+  const t0 = new Date(todayStr + 'T00:00:00Z').getTime();
+  // future30/future90 从“今天”向后预测：取 <= target 的最后一个点余额（forward-fill）；
+  // 无未来数据时 fallback 为今天余额。
+  function balanceAtOffset(offsetDays) {
+    const target = new Date(t0 + offsetDays * 86400000).toISOString().slice(0, 10);
+    let bal = todayBalance;
+    for (const p of sliced) {
+      if (p.date <= target) bal = p.balance || 0;
+      else break;
+    }
+    return bal;
+  }
   return {
     points: sliced,
     summary: {
-      today: balances[0] || 0,
-      future30: balances[Math.min(29, balances.length - 1)] || 0,
-      future90: balances[Math.min(89, balances.length - 1)] || 0,
+      today: todayBalance,
+      future30: balanceAtOffset(30),
+      future90: balanceAtOffset(90),
       minBalance, minBalanceDate,
     },
   };
@@ -1198,35 +1275,70 @@ export function getCashflowAlerts(db, userId, storeId) {
   return { alerts };
 }
 
+// 插入 cashflow 行后，事务内回算 event_date>= 插入点的所有行 balance。
+function _backfillCashflowBalances(db, userId, storeId, fromDate) {
+  const series = _cashflowDailySeries(db, userId, storeId);
+  // series 已含全量逐日 running balance；把 >= fromDate 的明细行 balance 对齐到当日序列值。
+  const balByDate = new Map(series.map((p) => [p.date, p.balance]));
+  // 锚点行（最早一行带非 NULL balance）定义 opening，其 balance 必须永不被重写——否则同一日
+  // （= 今天 = 锚点日期）追加事件时 opening 会随之漂移，余额曲线无法下移（M2-P0-03）。
+  const anchor = db.prepare(`SELECT id FROM m2_cashflow_events
+    WHERE user_id=? AND store_id=? AND balance IS NOT NULL
+    ORDER BY event_date ASC, created_at ASC LIMIT 1`).get(userId, storeId);
+  const anchorId = anchor?.id || null;
+  const rows = db.prepare(`SELECT id, event_date FROM m2_cashflow_events
+    WHERE user_id=? AND store_id=? AND event_date >= ?`).all(userId, storeId, fromDate);
+  for (const r of rows) {
+    if (r.id === anchorId) continue; // 保护锚点行原始 balance
+    const b = balByDate.get(r.event_date);
+    if (b != null) db.prepare('UPDATE m2_cashflow_events SET balance=? WHERE id=?').run(b, r.id);
+  }
+}
+
 export function addCashflowEvent(db, userId, storeId, body) {
   if (!body.event_date && !body.eventDate) return { error: 'validation_error', message: 'event_date required' };
   const id = newId('cfe');
   const date = body.event_date || body.eventDate;
-  // 取上一行 balance 作为基础
-  const last = db.prepare(`SELECT balance FROM m2_cashflow_events
-    WHERE user_id=? AND store_id=? AND event_date <= ? ORDER BY event_date DESC LIMIT 1`)
-    .get(userId, storeId, date);
   const inflow = Number(body.inflow) || 0;
   const outflow = Number(body.outflow) || 0;
-  const balance = (last?.balance || 350000) + inflow - outflow;
-  db.prepare(`INSERT INTO m2_cashflow_events(
-    id, user_id, store_id, event_date, label, inflow, outflow, balance,
-    source, ref_id, currency, is_forecast, created_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-    id, userId, storeId, date, body.label || null, inflow, outflow, balance,
-    body.source || 'manual', body.refId || body.ref_id || null,
-    body.currency || 'CNY', body.isForecast ? 1 : 0, nowIso()
-  );
+  let resultBalance = 0;
+  const tx = db.transaction(() => {
+    db.prepare(`INSERT INTO m2_cashflow_events(
+      id, user_id, store_id, event_date, label, inflow, outflow, balance,
+      source, ref_id, currency, is_forecast, created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      id, userId, storeId, date, body.label || null, inflow, outflow, null,
+      body.source || 'manual', body.refId || body.ref_id || null,
+      body.currency || 'CNY', body.isForecast ? 1 : 0, nowIso()
+    );
+    // 回算插入点及其后所有行的 balance
+    _backfillCashflowBalances(db, userId, storeId, date);
+    const fresh = db.prepare('SELECT balance FROM m2_cashflow_events WHERE id=?').get(id);
+    resultBalance = fresh?.balance ?? 0;
+  });
+  tx();
   appendAuditLog(userId, storeId, {
     sourceModule: 'M2', actionType: 'CASHFLOW_EVENT_CREATE',
     resourceType: 'm2_cashflow_event', resourceId: id, ...body,
   });
-  return { id, eventDate: date, label: body.label, inflow, outflow, balance };
+  return { id, eventDate: date, label: body.label, inflow, outflow, balance: resultBalance };
 }
 
 // ============================================================
 // 情景模拟
 // ============================================================
+// 单件利润计算：preview / save 共用唯一真相源（M2-P1-01）。
+// unitCost 必须由 baseline 传入（来自 listSkuProfit 真实成本）；缺失才回退 price*0.45。
+function computeUnitProfit({ price, acos, returnRate, unitCost }) {
+  const p = Number(price) || 0;
+  const ac = Number(acos) || 0;
+  const rr = Number(returnRate) || 0;
+  const uc = (unitCost === undefined || unitCost === null || !Number.isFinite(Number(unitCost)))
+    ? p * 0.45
+    : Number(unitCost);
+  return p * (1 - 0.15 - ac - rr) - uc;
+}
+
 export function previewScenario(body) {
   const baseline = body.baseline || {};
   const v = body.variables || {};
@@ -1234,11 +1346,15 @@ export function previewScenario(body) {
   const acos = (baseline.acos || 0) + (Number(v.acosDelta) || 0) / 100;
   const volume = (baseline.monthlyVolume || 0) * (1 + (Number(v.volumeDelta) || 0) / 100);
   const returnRate = (baseline.returnRate || 0) + (Number(v.returnDelta) || 0) / 100;
-  const unitProfit = price * (1 - 0.15 - acos - returnRate) - (baseline.unitCost || price * 0.45);
+  const unitProfit = computeUnitProfit({ price, acos, returnRate, unitCost: baseline.unitCost });
   const monthlyProfit = unitProfit * volume;
   const monthlyRevenue = price * volume;
   const margin = monthlyRevenue > 0 ? monthlyProfit / monthlyRevenue : 0;
-  const baselineMonthlyProfit = ((baseline.price || 0) * (1 - 0.15 - (baseline.acos || 0) - (baseline.returnRate || 0)) - (baseline.unitCost || (baseline.price || 0) * 0.45)) * (baseline.monthlyVolume || 0);
+  const baselineUnitProfit = computeUnitProfit({
+    price: baseline.price, acos: baseline.acos,
+    returnRate: baseline.returnRate, unitCost: baseline.unitCost,
+  });
+  const baselineMonthlyProfit = baselineUnitProfit * (baseline.monthlyVolume || 0);
   return {
     simulated: {
       price: _r2(price), acos: _r2(acos), volume: Math.round(volume),
@@ -1246,6 +1362,10 @@ export function previewScenario(body) {
       monthlyRevenue: _r2(monthlyRevenue), margin: _r2(margin),
     },
     delta: _r2(monthlyProfit - baselineMonthlyProfit),
+    // 净利率<0 → 不可行（前端据此禁用"采用"）
+    feasible: margin >= 0 && unitProfit >= 0,
+    // 成本口径声明：未含 FBA/头程/资金成本逐项，与利润页可能不符
+    costNote: 'estimate_simplified_cost',
   };
 }
 
@@ -1287,6 +1407,18 @@ export function listReorders(db, userId, storeId, filters = {}) {
   return db.prepare(sql).all(...params).map(rowToReorder);
 }
 
+// PO 编号数值排序 + 零填充（M2-P2-04）：避免 PO-999 字典序压过 PO-1000。
+// 取所有 PO-N 的最大 N（数值），+1，4 位零填充。
+function _nextPoNumber(db, userId, storeId) {
+  const rows = db.prepare(`SELECT po_number FROM m2_purchase_orders WHERE user_id=? AND store_id=?`).all(userId, storeId);
+  let max = 0;
+  for (const row of rows) {
+    const m = String(row.po_number || '').match(/PO-(\d+)/);
+    if (m) { const n = Number(m[1]); if (n > max) max = n; }
+  }
+  return `PO-${String(max + 1).padStart(4, '0')}`;
+}
+
 export function createPOFromReorder(db, userId, storeId, reorderId, body = {}) {
   const reorder = db.prepare('SELECT * FROM m2_reorder_recommendations WHERE id=? AND user_id=? AND store_id=?')
     .get(reorderId, userId, storeId);
@@ -1297,15 +1429,7 @@ export function createPOFromReorder(db, userId, storeId, reorderId, body = {}) {
     ? db.prepare('SELECT * FROM m2_suppliers WHERE id=? AND user_id=? AND store_id=?').get(body.supplierId, userId, storeId)
     : null;
   const poId = newId('po');
-  // 计算下一个 PO 编号
-  const maxNum = db.prepare(`SELECT po_number FROM m2_purchase_orders
-    WHERE user_id=? AND store_id=? ORDER BY po_number DESC LIMIT 1`).get(userId, storeId);
-  let nextNum = 1;
-  if (maxNum?.po_number) {
-    const m = maxNum.po_number.match(/PO-(\d+)/);
-    if (m) nextNum = Number(m[1]) + 1;
-  }
-  const poNumber = `PO-${String(nextNum).padStart(3, '0')}`;
+  const poNumber = _nextPoNumber(db, userId, storeId);
   const unitCost = reorder.capital_required && reorder.recommended_qty
     ? reorder.capital_required / reorder.recommended_qty : 10;
   const totalLanded = _r2(unitCost * reorder.recommended_qty * 1.1); // +10% 运费
@@ -1365,7 +1489,48 @@ export function listSlowMoving(db, userId, storeId, filters = {}) {
   return db.prepare(sql).all(...params).map(rowToSlow);
 }
 
-export function executeSlowMoving(db, userId, storeId, id, option) {
+// 解析某 SKU 的真实在售价：优先最近订单成交单价，其次重定价记录 our_price。
+function _resolveListingPrice(db, userId, storeId, sku) {
+  const ord = db.prepare(`SELECT unit_price FROM m2_orders
+    WHERE user_id=? AND store_id=? AND sku=? AND unit_price IS NOT NULL
+    ORDER BY ordered_at DESC LIMIT 1`).get(userId, storeId, sku);
+  if (ord && Number.isFinite(Number(ord.unit_price)) && Number(ord.unit_price) > 0) return _r2(ord.unit_price);
+  const rp = db.prepare(`SELECT our_price FROM m2_repricing_recommendations
+    WHERE user_id=? AND store_id=? AND sku=? AND our_price IS NOT NULL
+    ORDER BY detected_at DESC LIMIT 1`).get(userId, storeId, sku);
+  if (rp && Number.isFinite(Number(rp.our_price)) && Number(rp.our_price) > 0) return _r2(rp.our_price);
+  return null;
+}
+
+// 滞销 option A 降价计算：预览与执行同源。
+// oldPrice = 真实在售价；breakEven = 单件成本（保本下限）。
+// 默认降到保本价与 7 折在售价的较高者，不会跌破成本。
+// confirmBelowBreakeven=true 时允许跌破成本（亏本甩卖）。
+export function computeSlowMovingPriceA(oldPrice, breakEven, confirmBelowBreakeven = false) {
+  const base = Number(oldPrice) || 0;
+  const floor = Number.isFinite(Number(breakEven)) && Number(breakEven) > 0 ? Number(breakEven) : 0;
+  const discounted = _r2(base * 0.7);
+  let newPrice;
+  if (confirmBelowBreakeven) {
+    newPrice = discounted;
+  } else {
+    newPrice = floor > 0 ? _r2(Math.max(discounted, floor)) : discounted;
+  }
+  const unitLoss = floor > 0 && newPrice < floor ? _r2(floor - newPrice) : 0;
+  return { oldPrice: _r2(base), newPrice, breakEven: _r2(floor), unitLoss, belowBreakeven: floor > 0 && newPrice < floor };
+}
+
+export function previewSlowMoving(db, userId, storeId, id, option = 'A') {
+  const cur = db.prepare('SELECT * FROM m2_slow_moving_decisions WHERE id=? AND user_id=? AND store_id=?')
+    .get(id, userId, storeId);
+  if (!cur) return null;
+  if (option !== 'A') return { option, note: '该选项不涉及降价' };
+  const unitCost = _r2((cur.inventory_value || 0) / Math.max(1, cur.inventory || 1));
+  const listingPrice = _resolveListingPrice(db, userId, storeId, cur.sku) || _r2(unitCost / 0.7);
+  return { option, ...computeSlowMovingPriceA(listingPrice, unitCost, false) };
+}
+
+export function executeSlowMoving(db, userId, storeId, id, option, body = {}) {
   const cur = db.prepare('SELECT * FROM m2_slow_moving_decisions WHERE id=? AND user_id=? AND store_id=?')
     .get(id, userId, storeId);
   if (!cur) return null;
@@ -1379,16 +1544,21 @@ export function executeSlowMoving(db, userId, storeId, id, option) {
   });
 
   let m1VersionId = null;
-  // option=A 触发 M1 listing version （降价 30%）
+  let pricing = null;
+  // option=A 触发 M1 listing version（降价草稿）
   if (option === 'A') {
+    const unitCost = _r2((cur.inventory_value || 0) / Math.max(1, cur.inventory || 1));
+    const oldPrice = _resolveListingPrice(db, userId, storeId, cur.sku) || _r2(unitCost / 0.7);
+    pricing = computeSlowMovingPriceA(oldPrice, unitCost, body.confirmBelowBreakeven === true);
+    const newPrice = pricing.newPrice;
     try {
-      const oldPrice = _r2((cur.inventory_value || 0) / Math.max(1, cur.inventory || 1));
-      const newPrice = _r2(oldPrice * 0.7);
       // 子 audit: REPRICE_DOWN（spec § 7.1 父子链）
       const repriceAudit = appendAuditLog(userId, storeId, {
         sourceModule: 'M2', actionType: 'REPRICE_DOWN',
         resourceType: 'm2_slow_moving_decision', resourceId: id,
-        sku: cur.sku, oldPrice, newPrice, parentAuditId: audit?.id,
+        sku: cur.sku, oldPrice: pricing.oldPrice, newPrice,
+        breakEven: pricing.breakEven, belowBreakeven: pricing.belowBreakeven,
+        parentAuditId: audit?.id,
       });
       m1VersionId = _writeM1ListingVersionFromM2(db, userId, storeId, cur.sku, newPrice, repriceAudit?.id || audit?.id);
     } catch (e) {
@@ -1401,7 +1571,9 @@ export function executeSlowMoving(db, userId, storeId, id, option) {
 
   return {
     id, status: 'executed', executedAt: nowIso(), auditId: audit?.id || null,
-    m1VersionId,
+    m1VersionId, pricing,
+    // M1 草稿仅入库（uploaded_to_amazon=0），需到 M1 上架方真实改价
+    draftStatus: m1VersionId ? 'm1_price_draft_pending_upload' : null,
   };
 }
 
@@ -1419,11 +1591,50 @@ export function approveTransfer(db, userId, storeId, id) {
   const cur = db.prepare('SELECT * FROM m2_inventory_transfers WHERE id=? AND user_id=? AND store_id=?').get(id, userId, storeId);
   if (!cur) return null;
   if (cur.status !== 'recommended') return { error: 'invalid_status', message: `current: ${cur.status}` };
-  db.prepare('UPDATE m2_inventory_transfers SET status=?, approved_at=? WHERE id=?').run('approved', nowIso(), id);
-  appendAuditLog(userId, storeId, {
+  const qty = Number(cur.transfer_qty) || 0;
+  const beforeState = {};
+  const tx = db.transaction(() => {
+    // 真实位移 on_hand：from 仓减、to 仓加（M2-P1-05）
+    const fromSnap = db.prepare(`SELECT * FROM m2_inventory_snapshots
+      WHERE user_id=? AND store_id=? AND sku=? AND warehouse=?`).get(userId, storeId, cur.sku, cur.from_warehouse);
+    const toSnap = db.prepare(`SELECT * FROM m2_inventory_snapshots
+      WHERE user_id=? AND store_id=? AND sku=? AND warehouse=?`).get(userId, storeId, cur.sku, cur.to_warehouse);
+    beforeState.from = { warehouse: cur.from_warehouse, onHand: fromSnap?.on_hand ?? null };
+    beforeState.to = { warehouse: cur.to_warehouse, onHand: toSnap?.on_hand ?? null };
+    if (fromSnap) {
+      db.prepare('UPDATE m2_inventory_snapshots SET on_hand=?, snapshot_at=? WHERE id=?')
+        .run(Math.max(0, (fromSnap.on_hand || 0) - qty), nowIso(), fromSnap.id);
+    }
+    if (toSnap) {
+      db.prepare('UPDATE m2_inventory_snapshots SET on_hand=?, snapshot_at=? WHERE id=?')
+        .run((toSnap.on_hand || 0) + qty, nowIso(), toSnap.id);
+    } else {
+      const sid = newId('inv');
+      db.prepare(`INSERT INTO m2_inventory_snapshots(
+        id, user_id, store_id, sku, warehouse, on_hand, snapshot_at)
+        VALUES (?,?,?,?,?,?,?)`).run(sid, userId, storeId, cur.sku, cur.to_warehouse, qty, nowIso());
+    }
+    db.prepare('UPDATE m2_inventory_transfers SET status=?, approved_at=? WHERE id=?').run('in_transit', nowIso(), id);
+  });
+  tx();
+  const audit = appendAuditLog(userId, storeId, {
     sourceModule: 'M2', actionType: 'INVENTORY_TRANSFER_APPROVE',
     resourceType: 'm2_inventory_transfer', resourceId: id,
-    before: { status: cur.status }, after: { status: 'approved' },
+    sku: cur.sku, qty, before: { status: cur.status, ...beforeState },
+    after: { status: 'in_transit' },
+  });
+  db.prepare('UPDATE m2_inventory_transfers SET audit_id=? WHERE id=?').run(audit?.id || null, id);
+  return rowToTransfer(db.prepare('SELECT * FROM m2_inventory_transfers WHERE id=?').get(id));
+}
+export function receiveTransfer(db, userId, storeId, id) {
+  const cur = db.prepare('SELECT * FROM m2_inventory_transfers WHERE id=? AND user_id=? AND store_id=?').get(id, userId, storeId);
+  if (!cur) return null;
+  if (cur.status !== 'in_transit') return { error: 'invalid_status', message: `current: ${cur.status}` };
+  db.prepare('UPDATE m2_inventory_transfers SET status=?, received_at=? WHERE id=?').run('received', nowIso(), id);
+  appendAuditLog(userId, storeId, {
+    sourceModule: 'M2', actionType: 'INVENTORY_TRANSFER_RECEIVE',
+    resourceType: 'm2_inventory_transfer', resourceId: id,
+    before: { status: cur.status }, after: { status: 'received' },
   });
   return rowToTransfer(db.prepare('SELECT * FROM m2_inventory_transfers WHERE id=?').get(id));
 }
@@ -1470,14 +1681,7 @@ export function createPO(db, userId, storeId, body) {
     ? db.prepare('SELECT * FROM m2_suppliers WHERE id=? AND user_id=? AND store_id=?').get(body.supplierId, userId, storeId)
     : null;
   const poId = newId('po');
-  const maxNum = db.prepare(`SELECT po_number FROM m2_purchase_orders
-    WHERE user_id=? AND store_id=? ORDER BY po_number DESC LIMIT 1`).get(userId, storeId);
-  let nextNum = 1;
-  if (maxNum?.po_number) {
-    const mm = maxNum.po_number.match(/PO-(\d+)/);
-    if (mm) nextNum = Number(mm[1]) + 1;
-  }
-  const poNumber = `PO-${String(nextNum).padStart(3, '0')}`;
+  const poNumber = _nextPoNumber(db, userId, storeId);
   const totalLanded = _r2(body.items.reduce((s, it) => s + (Number(it.unitCost) || 0) * (Number(it.qty) || 0), 0) * 1.1);
   const deposit = _r2(totalLanded * 0.3);
   const balance = _r2(totalLanded - deposit);
@@ -1565,29 +1769,7 @@ export function transitionPO(db, userId, storeId, id, body) {
     params.push(id, userId, storeId);
     db.prepare(`UPDATE m2_purchase_orders SET ${updates.join(', ')} WHERE id=? AND user_id=? AND store_id=?`).run(...params);
 
-    // 出账：ordered -> 写定金 cashflow
-    if (to === 'ordered' && cur.deposit) {
-      const cfId = newId('cfe');
-      const today = nowIso().slice(0, 10);
-      db.prepare(`INSERT INTO m2_cashflow_events(
-        id, user_id, store_id, event_date, label, inflow, outflow, balance,
-        source, ref_id, currency, is_forecast, created_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-        cfId, userId, storeId, today, `${cur.po_number} 定金`, 0, cur.deposit,
-        null, 'po_deposit', id, 'USD', 0, nowIso()
-      );
-    }
-    if (to === 'in_transit' && cur.balance) {
-      const cfId = newId('cfe');
-      const today = nowIso().slice(0, 10);
-      db.prepare(`INSERT INTO m2_cashflow_events(
-        id, user_id, store_id, event_date, label, inflow, outflow, balance,
-        source, ref_id, currency, is_forecast, created_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-        cfId, userId, storeId, today, `${cur.po_number} 尾款`, 0, cur.balance,
-        null, 'po_balance', id, 'USD', 0, nowIso()
-      );
-    }
+    // 出账唯一真相源：只由 payPO 触发，transitionPO 不再写 cashflow（M2-P0-02）
     // received -> 入库 inventory_snapshot
     if (to === 'received') {
       const items = db.prepare('SELECT * FROM m2_purchase_order_items WHERE po_id=? AND user_id=? AND store_id=?')
@@ -1623,12 +1805,16 @@ export function payPO(db, userId, storeId, id, body) {
   if (!cur) return null;
   const phase = body.phase;
   if (!['deposit', 'balance'].includes(phase)) return { error: 'validation_error', message: 'phase required' };
+  // 幂等守卫：对应 phase 已置位则拒绝，不重复入账（M2-P0-02）
+  if (phase === 'deposit' && cur.deposit_paid) return { error: 'already_paid', message: 'deposit already paid' };
+  if (phase === 'balance' && cur.balance_paid) return { error: 'already_paid', message: 'balance already paid' };
   const tx = db.transaction(() => {
     if (phase === 'deposit') db.prepare('UPDATE m2_purchase_orders SET deposit_paid=1, updated_at=? WHERE id=?').run(nowIso(), id);
     else db.prepare('UPDATE m2_purchase_orders SET balance_paid=1, updated_at=? WHERE id=?').run(nowIso(), id);
     const cfId = newId('cfe');
     const date = body.paidAt ? body.paidAt.slice(0, 10) : nowIso().slice(0, 10);
     const amount = Number(body.amount) || (phase === 'deposit' ? cur.deposit : cur.balance);
+    // 唯一索引 (ref_id, source) 兜底：重复 (poId, po_deposit/po_balance) 会触发 SQLITE_CONSTRAINT → 409
     db.prepare(`INSERT INTO m2_cashflow_events(
       id, user_id, store_id, event_date, label, inflow, outflow, balance,
       source, ref_id, currency, is_forecast, created_at)
@@ -1636,6 +1822,8 @@ export function payPO(db, userId, storeId, id, body) {
       cfId, userId, storeId, date, `${cur.po_number} ${phase}`, 0, amount || 0,
       null, `po_${phase}`, id, 'USD', 0, nowIso()
     );
+    // 出账行写真实 running balance（M2-P0-03）：回算插入点及其后行
+    _backfillCashflowBalances(db, userId, storeId, date);
     appendAuditLog(userId, storeId, {
       sourceModule: 'M2', actionType: 'PO_PAYMENT',
       resourceType: 'm2_purchase_order', resourceId: id,
@@ -1756,7 +1944,23 @@ export function applyRepricing(db, userId, storeId, id, body) {
   const cur = db.prepare('SELECT * FROM m2_repricing_recommendations WHERE id=? AND user_id=? AND store_id=?').get(id, userId, storeId);
   if (!cur) return null;
   if (cur.status === 'applied') return { error: 'invalid_status', message: 'already applied' };
-  const newPrice = Number(body.price) || cur.recommended_price;
+  // 价格护栏：price 必须是有限数；不允许 0 静默替换为 recommended_price
+  const rawPrice = body.price;
+  const newPrice = (rawPrice === undefined || rawPrice === null || rawPrice === '')
+    ? Number(cur.recommended_price)
+    : Number(rawPrice);
+  if (!Number.isFinite(newPrice) || newPrice <= 0) {
+    return { error: 'validation_error', message: 'price must be a positive finite number' };
+  }
+  // 保本价护栏：低于保本价必须显式 confirmBelowBreakeven 才能继续
+  const breakEven = Number(cur.break_even_price);
+  if (Number.isFinite(breakEven) && breakEven > 0 && newPrice < breakEven && body.confirmBelowBreakeven !== true) {
+    return {
+      error: 'validation_error',
+      message: `price ${newPrice} below break-even ${breakEven}; pass confirmBelowBreakeven=true to override`,
+      breakEvenPrice: _r2(breakEven),
+    };
+  }
 
   let m1VersionId = null;
   const audit = appendAuditLog(userId, storeId, {
@@ -1775,6 +1979,23 @@ export function applyRepricing(db, userId, storeId, id, body) {
     WHERE id=?`).run('applied', newPrice, nowIso(), audit?.id || null, m1VersionId, id);
 
   return { id, status: 'applied', auditId: audit?.id || null, m1VersionId };
+}
+
+// 拒绝重定价建议（M2-P2-06）：写 status='rejected' + 审计，使 'rejected' 筛选成为真控件。
+export function rejectRepricing(db, userId, storeId, id, body = {}) {
+  const cur = db.prepare('SELECT * FROM m2_repricing_recommendations WHERE id=? AND user_id=? AND store_id=?').get(id, userId, storeId);
+  if (!cur) return null;
+  if (cur.status === 'applied') return { error: 'invalid_status', message: 'already applied' };
+  if (cur.status === 'rejected') return { error: 'invalid_status', message: 'already rejected' };
+  db.prepare('UPDATE m2_repricing_recommendations SET status=? WHERE id=?').run('rejected', id);
+  const audit = appendAuditLog(userId, storeId, {
+    sourceModule: 'M2', actionType: 'REPRICE_REJECT',
+    resourceType: 'm2_repricing_recommendation', resourceId: id,
+    sku: cur.sku, reason: body.reason || null,
+    before: { status: cur.status }, after: { status: 'rejected' },
+  });
+  db.prepare('UPDATE m2_repricing_recommendations SET audit_id=? WHERE id=?').run(audit?.id || null, id);
+  return rowToReprice(db.prepare('SELECT * FROM m2_repricing_recommendations WHERE id=?').get(id));
 }
 
 // 跨模块联动 helper: 写入 M1 listing version
@@ -1882,9 +2103,23 @@ export function listPaymentChannels(db, userId, storeId) {
   return db.prepare('SELECT * FROM m2_payment_channels WHERE user_id=? AND store_id=? ORDER BY is_primary DESC, created_at')
     .all(userId, storeId).map(rowToPaymentChannel);
 }
+// monthly_cost 单一真相源（M2-P1-06）：fee_pct*monthlyVolume + fee_fixed_per_tx*txCount。
+// 前端不自算，server 据 fee 字段权威计算。
+function _computePaymentMonthlyCost({ feePct, feeFixedPerTx, monthlyVolume, txCount }) {
+  const pct = Number(feePct) || 0;
+  const fixed = Number(feeFixedPerTx) || 0;
+  const vol = Number(monthlyVolume) || 0;
+  const tx = Number(txCount) || 0;
+  return _r2(pct * vol + fixed * tx);
+}
+
 export function createPaymentChannel(db, userId, storeId, body) {
   if (!body.name) return { error: 'validation_error', message: 'name required' };
   const id = newId('pc');
+  const feePct = body.feePct ?? 0.01;
+  const feeFixedPerTx = body.feeFixedPerTx ?? 0;
+  const monthlyVolume = body.monthlyVolume ?? 0;
+  const monthlyCost = _computePaymentMonthlyCost({ feePct, feeFixedPerTx, monthlyVolume, txCount: body.txCount });
   db.prepare(`INSERT INTO m2_payment_channels(
     id, user_id, store_id, name, provider, is_primary, enabled,
     fee_pct, fee_fixed_per_tx, currency, monthly_volume, monthly_cost,
@@ -1892,8 +2127,8 @@ export function createPaymentChannel(db, userId, storeId, body) {
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     id, userId, storeId, body.name, body.provider || 'payoneer',
     body.isPrimary ? 1 : 0, body.enabled !== false ? 1 : 0,
-    body.feePct || 0.01, body.feeFixedPerTx || 0,
-    body.currency || 'USD', body.monthlyVolume || 0, body.monthlyCost || 0,
+    feePct, feeFixedPerTx,
+    body.currency || 'USD', monthlyVolume, monthlyCost,
     body.warning ? 1 : 0, body.warningMessage || null,
     JSON.stringify(body.accountInfo || {}), nowIso()
   );
@@ -1906,15 +2141,25 @@ export function createPaymentChannel(db, userId, storeId, body) {
 export function updatePaymentChannel(db, userId, storeId, id, patch) {
   const cur = db.prepare('SELECT * FROM m2_payment_channels WHERE id=? AND user_id=? AND store_id=?').get(id, userId, storeId);
   if (!cur) return null;
+  // monthly_cost 是计算列，禁止前端直接写入（M2-P1-06）
   const map = {
     name: 'name', provider: 'provider', feePct: 'fee_pct',
     feeFixedPerTx: 'fee_fixed_per_tx', currency: 'currency',
-    monthlyVolume: 'monthly_volume', monthlyCost: 'monthly_cost',
+    monthlyVolume: 'monthly_volume',
     warningMessage: 'warning_message',
   };
   const fields = []; const params = [];
   for (const [k, c] of Object.entries(map)) {
     if (patch[k] !== undefined) { fields.push(`${c}=?`); params.push(patch[k]); }
+  }
+  // 任一计算输入变更（或显式 txCount）→ 服务端重算 monthly_cost
+  if (patch.feePct !== undefined || patch.feeFixedPerTx !== undefined
+      || patch.monthlyVolume !== undefined || patch.txCount !== undefined) {
+    const feePct = patch.feePct ?? cur.fee_pct;
+    const feeFixedPerTx = patch.feeFixedPerTx ?? cur.fee_fixed_per_tx;
+    const monthlyVolume = patch.monthlyVolume ?? cur.monthly_volume;
+    fields.push('monthly_cost=?');
+    params.push(_computePaymentMonthlyCost({ feePct, feeFixedPerTx, monthlyVolume, txCount: patch.txCount }));
   }
   if (patch.isPrimary !== undefined) { fields.push('is_primary=?'); params.push(patch.isPrimary ? 1 : 0); }
   if (patch.enabled !== undefined) { fields.push('enabled=?'); params.push(patch.enabled ? 1 : 0); }
@@ -1992,9 +2237,11 @@ export function fileTaxRecord(db, userId, storeId, id, body) {
 // ============================================================
 // LTV
 // ============================================================
-export function listLtv(db, userId, storeId) {
-  return db.prepare('SELECT * FROM m2_ltv_snapshots WHERE user_id=? AND store_id=? ORDER BY ltv DESC')
+export function listLtv(db, userId, storeId, rangeDays = 30) {
+  // LTV 为累计指标，不随周期线性变化；range 仅用于声明口径 + computedAt（M2-P2-05）。
+  const items = db.prepare('SELECT * FROM m2_ltv_snapshots WHERE user_id=? AND store_id=? ORDER BY ltv DESC')
     .all(userId, storeId).map(rowToLtv);
+  return { items, rangeDays, cumulative: true, computedAt: nowIso() };
 }
 
 // ============================================================
@@ -2065,27 +2312,197 @@ export function listAlertEvents(db, userId, storeId, filters = {}) {
   sql += ' ORDER BY triggered_at DESC LIMIT 200';
   return db.prepare(sql).all(...params).map(rowToAlertEvent);
 }
+// 比较运算（M2-P0-07）
+function _evalOp(actual, op, expected) {
+  const a = Number(actual);
+  const e = Number(expected);
+  if (!Number.isFinite(a) || !Number.isFinite(e)) return false;
+  switch (op) {
+    case '<': return a < e;
+    case '<=': return a <= e;
+    case '>': return a > e;
+    case '>=': return a >= e;
+    case '==': case '=': return a === e;
+    case '!=': return a !== e;
+    default: return false;
+  }
+}
+
+// 对单条 condition 求值。返回:
+//   { matched, value, sku?, sourceMeta?, hasSource }
+// 其中:
+//   - sourceMeta: 命中时标注命中的真实 DB 来源（表名 + 行主键 + 字段 + 字段值），
+//     未命中=无 sourceMeta（绝不写死 simulated_trigger 假事件）。
+//   - hasSource: 该字段的求值是否落在至少一条真实 DB 数据行上。
+//       true  → 数据来自真实 DB 查询（事件 is_simulated 应为 false）。
+//       false → 无真实数据源（空表/聚合 0 行）→ 派生为合成，事件 is_simulated 应为 true。
+// 支持 field: sku.margin / sku.days_cover / campaign.acos / cashflow.balance
+//            / inventory.days_cover / leak.monthly_impact
+function _evalCondition(db, userId, storeId, cond) {
+  const field = String(cond.field || '');
+  const op = cond.op || '<';
+  const target = cond.value;
+
+  if (field === 'cashflow.balance') {
+    // 真实来源：m2_cashflow_events 派生的余额序列。最新一天的实际行作为 sourceMeta。
+    const rows = db.prepare(`SELECT * FROM m2_cashflow_events
+      WHERE user_id=? AND store_id=? ORDER BY event_date ASC, created_at ASC`).all(userId, storeId);
+    const series = _cashflowDailySeries(db, userId, storeId);
+    const hasSource = rows.length > 0;
+    const value = series.length ? series[0].balance : 0;
+    const matched = _evalOp(value, op, target);
+    if (matched && hasSource) {
+      const latest = rows[rows.length - 1];
+      return {
+        matched: true, value: _r2(value), hasSource: true,
+        sourceMeta: { table: 'm2_cashflow_events', rowId: latest.id, field: 'balance', fieldValue: _r2(value) },
+      };
+    }
+    return { matched, value: _r2(value), hasSource };
+  }
+
+  if (field === 'sku.margin') {
+    // 真实来源：m2_sku_profit_snapshots 行。任一 SKU 满足即触发；返回最坏（最低 margin）值。
+    const rows = db.prepare(`SELECT id, sku, margin FROM m2_sku_profit_snapshots
+      WHERE user_id=? AND store_id=? ORDER BY margin ASC`).all(userId, storeId);
+    const hasSource = rows.length > 0;
+    for (const row of rows) {
+      if (_evalOp(row.margin, op, target)) {
+        return {
+          matched: true, value: _r2(row.margin), sku: row.sku, hasSource: true,
+          sourceMeta: { table: 'm2_sku_profit_snapshots', rowId: row.id, sku: row.sku, field: 'margin', fieldValue: _r2(row.margin) },
+        };
+      }
+    }
+    return { matched: false, value: hasSource ? _r2(rows[0].margin) : null, hasSource };
+  }
+
+  if (field === 'sku.days_cover') {
+    const rows = db.prepare(`SELECT id, sku, days_cover FROM m2_sku_profit_snapshots
+      WHERE user_id=? AND store_id=? AND days_cover IS NOT NULL ORDER BY days_cover ASC`).all(userId, storeId);
+    const hasSource = rows.length > 0;
+    for (const row of rows) {
+      if (_evalOp(row.days_cover, op, target)) {
+        return {
+          matched: true, value: row.days_cover, sku: row.sku, hasSource: true,
+          sourceMeta: { table: 'm2_sku_profit_snapshots', rowId: row.id, sku: row.sku, field: 'days_cover', fieldValue: row.days_cover },
+        };
+      }
+    }
+    return { matched: false, value: hasSource ? rows[0].days_cover : null, hasSource };
+  }
+
+  if (field === 'inventory.days_cover') {
+    // 真实来源：m2_inventory_snapshots 行（在库 days_cover / in_stock_days）。
+    const rows = db.prepare(`SELECT id, sku, warehouse, days_cover, in_stock_days FROM m2_inventory_snapshots
+      WHERE user_id=? AND store_id=? AND days_cover IS NOT NULL ORDER BY days_cover ASC`).all(userId, storeId);
+    const hasSource = rows.length > 0;
+    for (const row of rows) {
+      if (_evalOp(row.days_cover, op, target)) {
+        return {
+          matched: true, value: row.days_cover, sku: row.sku, hasSource: true,
+          sourceMeta: { table: 'm2_inventory_snapshots', rowId: row.id, sku: row.sku, warehouse: row.warehouse, field: 'days_cover', fieldValue: row.days_cover },
+        };
+      }
+    }
+    return { matched: false, value: hasSource ? rows[0].days_cover : null, hasSource };
+  }
+
+  if (field === 'leak.monthly_impact') {
+    // 真实来源：m2_leaks 行（已检测到的真实漏损快照）。任一未关闭 leak 满足即触发。
+    const rows = db.prepare(`SELECT id, sku, type, severity, monthly_impact FROM m2_leaks
+      WHERE user_id=? AND store_id=? AND status!='resolved' AND monthly_impact IS NOT NULL
+      ORDER BY monthly_impact DESC`).all(userId, storeId);
+    const hasSource = rows.length > 0;
+    for (const row of rows) {
+      if (_evalOp(row.monthly_impact, op, target)) {
+        return {
+          matched: true, value: _r2(row.monthly_impact), sku: row.sku, hasSource: true,
+          sourceMeta: { table: 'm2_leaks', rowId: row.id, sku: row.sku, leakType: row.type, severity: row.severity, field: 'monthly_impact', fieldValue: _r2(row.monthly_impact) },
+        };
+      }
+    }
+    return { matched: false, value: hasSource ? _r2(rows[0].monthly_impact) : null, hasSource };
+  }
+
+  if (field === 'campaign.acos') {
+    // ad cost / revenue 近似 ACOS。真实来源：m2_orders revenue + m2_order_costs(ad_alloc)。
+    const agg = db.prepare(`SELECT SUM(revenue) AS rev, COUNT(*) AS n FROM m2_orders WHERE user_id=? AND store_id=?`).get(userId, storeId) || {};
+    const cost = db.prepare(`SELECT SUM(amount) AS c, COUNT(*) AS n FROM m2_order_costs
+      WHERE user_id=? AND store_id=? AND cost_type='ad_alloc'`).get(userId, storeId) || {};
+    const hasSource = (agg.n || 0) > 0;
+    const acos = (agg.rev || 0) > 0 ? (cost.c || 0) / agg.rev : 0;
+    const matched = _evalOp(acos, op, target);
+    if (matched && hasSource) {
+      return {
+        matched: true, value: _r2(acos), hasSource: true,
+        sourceMeta: { table: 'm2_orders+m2_order_costs', field: 'acos', fieldValue: _r2(acos), revenue: _r2(agg.rev || 0), adCost: _r2(cost.c || 0), orderRows: agg.n || 0 },
+      };
+    }
+    return { matched, value: _r2(acos), hasSource };
+  }
+
+  // 未知字段：不匹配（不再无条件写事件）
+  return { matched: false, value: null, unknownField: true, hasSource: false };
+}
+
 /**
- * scanAlerts —— 遍历启用的规则，匹配则写 m2_alert_events 一行
- * 简单实现：对启用的规则模拟一次"触发"，写 1 条事件 + 增 trigger_count + 写 audit
- * 也尝试给 M4 推一条 notification（如果 m4_notifications 表存在）
+ * scanAlerts —— 按真实指标对每条启用规则的 conditions 求值（M2-P0-07 / N1-scanAlerts-real）。
+ *
+ * 真实化不变量（绝不造假事件）：
+ *  (1) 事件来源必须是真实 DB 数据（m2_leaks / m2_inventory_snapshots / m2_sku_profit_snapshots /
+ *      m2_cashflow_events / m2_orders+m2_order_costs）。_evalCondition 命中真实数据才生成事件。
+ *  (2) 每条事件 matched_value 带 sourceMeta（来自哪条真实数据行 + 字段 + 字段值）。
+ *      无命中=不写事件（created 0），绝不写死 simulated_trigger 假事件。
+ *  (3) is_simulated 反映“数据真伪”而非仅 mock 模式：
+ *        - 命中的求值全部落在真实 DB 行上（hasSource=true）→ is_simulated=false（即使 mock 模式）。
+ *        - 命中的求值存在无真实数据源的派生（hasSource=false）→ is_simulated=true 并在 sourceMeta 标注 synthetic。
+ *  (4) 保留 cooldown 去重 + M4 推送 + audit。
  */
 export function scanAlerts(db, userId, storeId, body = {}) {
   const rules = db.prepare(`SELECT * FROM m2_alert_rules
     WHERE user_id=? AND store_id=? AND enabled=1`).all(userId, storeId);
   const created = [];
   const ruleId = body.ruleId;  // optional: only scan one
+  const nowMs = Date.now();
   for (const r of rules) {
     if (ruleId && r.id !== ruleId) continue;
+    const conditions = _j(r.conditions) || [];
+    if (!Array.isArray(conditions) || conditions.length === 0) continue;
+    // 全部 condition 必须匹配（AND 语义）
+    const evals = conditions.map((c) => _evalCondition(db, userId, storeId, c));
+    const allMatched = evals.length > 0 && evals.every((e) => e.matched);
+    // 无命中 → 绝不写事件（空态）。这是“不造假”的核心闸口。
+    if (!allMatched) continue;
+    // cooldown 去重：last_triggered + cooldown_hours 内不再触发
+    if (r.last_triggered) {
+      const cooldownMs = (Number(r.cooldown_hours) || 0) * 3600000;
+      if (nowMs - Date.parse(r.last_triggered) < cooldownMs) continue;
+    }
     const eventId = newId('ae');
-    const message = `${r.name} 触发：扫描时检测到匹配条件 (rule=${r.id})`;
+    const matchedEvals = evals.filter((e) => e.matched);
+    const primary = matchedEvals[0] || {};
+    // 真实性判定：命中求值是否全部基于真实 DB 行。
+    //   任一命中求值无真实数据源（hasSource!==true）→ 该事件为合成派生（simulated）。
+    const dataReal = matchedEvals.every((e) => e.hasSource === true);
+    const simulated = !dataReal;
+    // 收集每个命中条件的 sourceMeta；缺失来源的标注 synthetic（不伪造行 id）。
+    const sourceMeta = matchedEvals.map((e) => e.sourceMeta
+      || { synthetic: true, field: 'derived', fieldValue: e.value });
+    const message = `${r.name} 触发：${conditions.map((c) => `${c.field} ${c.op} ${c.value}`).join(' AND ')}`;
     db.prepare(`INSERT INTO m2_alert_events(
       id, user_id, store_id, rule_id, rule_name, severity, matched_value,
-      message, acknowledged, pushed_to_m4, triggered_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
+      message, acknowledged, pushed_to_m4, is_simulated, triggered_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       eventId, userId, storeId, r.id, r.name, r.severity,
-      JSON.stringify({ source: 'scan', value: 'simulated_trigger' }),
-      message, 0, 0, nowIso()
+      JSON.stringify({
+        source: 'scan', value: primary.value,
+        sku: primary.sku || null,
+        sourceMeta,        // 真实数据来源标注（每个命中条件一条）
+        dataReal,          // true=全部来自真实 DB 行
+        evals,
+      }),
+      message, 0, 0, simulated ? 1 : 0, nowIso()
     );
     db.prepare(`UPDATE m2_alert_rules SET trigger_count=trigger_count+1, last_triggered=?
       WHERE id=?`).run(nowIso(), r.id);
@@ -2101,41 +2518,90 @@ export function scanAlerts(db, userId, storeId, body = {}) {
     appendAuditLog(userId, storeId, {
       sourceModule: 'M2', actionType: 'ALERT_SCAN',
       resourceType: 'm2_alert_event', resourceId: eventId,
-      ruleId: r.id, ruleName: r.name,
+      ruleId: r.id, ruleName: r.name, matchedValue: primary.value,
+      sourceMeta, isSimulated: simulated,
     });
-    created.push({ eventId, ruleId: r.id, ruleName: r.name, severity: r.severity });
+    created.push({
+      eventId, ruleId: r.id, ruleName: r.name, severity: r.severity,
+      matchedValue: primary.value, sourceMeta, isSimulated: simulated,
+    });
   }
   return { scanned: rules.length, created: created.length, events: created };
 }
 export function ackAlertEvent(db, userId, storeId, id, body = {}) {
   const cur = db.prepare('SELECT * FROM m2_alert_events WHERE id=? AND user_id=? AND store_id=?').get(id, userId, storeId);
   if (!cur) return null;
+  const ackBy = body.ackBy || body.by || 'operator';
   db.prepare('UPDATE m2_alert_events SET acknowledged=1, acknowledged_at=?, acknowledged_by=? WHERE id=?')
-    .run(nowIso(), body.by || 'operator', id);
+    .run(nowIso(), ackBy, id);
   appendAuditLog(userId, storeId, {
     sourceModule: 'M2', actionType: 'ALERT_ACK',
-    resourceType: 'm2_alert_event', resourceId: id, by: body.by,
+    resourceType: 'm2_alert_event', resourceId: id, ackBy,
   });
   return rowToAlertEvent(db.prepare('SELECT * FROM m2_alert_events WHERE id=?').get(id));
+}
+// 批量确认（M2-P3-01）：返回 { acknowledged: <count>, events: [...] }
+export function ackAlertEventsBatch(db, userId, storeId, body = {}) {
+  const ids = Array.isArray(body.ids) ? body.ids : (body.id ? [body.id] : []);
+  if (!ids.length) return { error: 'validation_error', message: 'ids required' };
+  const ackBy = body.ackBy || body.by || 'operator';
+  const events = [];
+  const tx = db.transaction(() => {
+    for (const id of ids) {
+      const cur = db.prepare('SELECT * FROM m2_alert_events WHERE id=? AND user_id=? AND store_id=?').get(id, userId, storeId);
+      if (!cur) continue;
+      db.prepare('UPDATE m2_alert_events SET acknowledged=1, acknowledged_at=?, acknowledged_by=? WHERE id=?')
+        .run(nowIso(), ackBy, id);
+      events.push(rowToAlertEvent(db.prepare('SELECT * FROM m2_alert_events WHERE id=?').get(id)));
+    }
+    appendAuditLog(userId, storeId, {
+      sourceModule: 'M2', actionType: 'ALERT_ACK_BATCH',
+      resourceType: 'm2_alert_event', resourceId: ids.join(','), ackBy, count: events.length,
+    });
+  });
+  tx();
+  return { acknowledged: events.length, events };
 }
 
 // ============================================================
 // 维度
 // ============================================================
-export function listDimensions(db, userId, storeId, by) {
+export function listDimensions(db, userId, storeId, by, rangeDays = 30) {
   let sql = 'SELECT * FROM m2_dimensions WHERE user_id=? AND store_id=?';
   const params = [userId, storeId];
   if (by) { sql += ' AND dim_type=?'; params.push(by); }
   sql += ' ORDER BY name';
   const items = db.prepare(sql).all(...params).map(rowToDimension);
+  // range 实时归并重算：基于 m2_sku_profit_snapshots(range_days) 的 SKU 利润聚合（M2-P2-05）
+  const skuRows = db.prepare(`SELECT sku, revenue, net_profit FROM m2_sku_profit_snapshots
+    WHERE user_id=? AND store_id=? AND range_days=?`).all(userId, storeId, rangeDays);
+  const skuMap = new Map(skuRows.map((r) => [r.sku, r]));
+  const hasRangeData = skuRows.length > 0;
   return {
-    items: items.map((d) => ({
-      id: d.id, name: d.name, members: d.members, dimType: d.dimType,
-      skus: d.metrics?.skus || (d.skuIds?.length || 0),
-      gmv: d.metrics?.gmv || 0,
-      profit: d.metrics?.profit || 0,
-      margin: d.metrics?.margin || 0,
-    })),
+    rangeDays, computedAt: nowIso(),
+    // 有当期快照则按 range 实时归并；否则回退冻结 metrics 并标注
+    recomputed: hasRangeData,
+    items: items.map((d) => {
+      if (hasRangeData && Array.isArray(d.skuIds) && d.skuIds.length) {
+        let gmv = 0, profit = 0;
+        for (const sku of d.skuIds) {
+          const row = skuMap.get(sku);
+          if (row) { gmv += row.revenue || 0; profit += row.net_profit || 0; }
+        }
+        return {
+          id: d.id, name: d.name, members: d.members, dimType: d.dimType,
+          skus: d.skuIds.length, gmv: _r2(gmv), profit: _r2(profit),
+          margin: gmv > 0 ? _r2(profit / gmv) : 0,
+        };
+      }
+      return {
+        id: d.id, name: d.name, members: d.members, dimType: d.dimType,
+        skus: d.metrics?.skus || (d.skuIds?.length || 0),
+        gmv: d.metrics?.gmv || 0,
+        profit: d.metrics?.profit || 0,
+        margin: d.metrics?.margin || 0,
+      };
+    }),
   };
 }
 export function updateDimension(db, userId, storeId, id, patch) {
@@ -2173,9 +2639,25 @@ export function getInvLinkConfig(db, userId, storeId) {
 }
 export function updateInvLinkConfig(db, userId, storeId, patch) {
   const cur = getInvLinkConfig(db, userId, storeId);
+  const t = patch.thresholds || patch;
+  // 阈值单调性校验（M2-P2-03）：剩余天数越少越紧急。
+  // 必须满足 stopAt < reduce50At < reduce20At < alertAt（任一矛盾即拒绝）。
+  const merged = {
+    stopAt: t.stopAt !== undefined ? Number(t.stopAt) : cur.stopAt,
+    reduce50At: t.reduce50At !== undefined ? Number(t.reduce50At) : cur.reduce50At,
+    reduce20At: t.reduce20At !== undefined ? Number(t.reduce20At) : cur.reduce20At,
+    alertAt: t.alertAt !== undefined ? Number(t.alertAt) : cur.alertAt,
+  };
+  const seq = [merged.stopAt, merged.reduce50At, merged.reduce20At, merged.alertAt];
+  if (seq.every((n) => Number.isFinite(n))) {
+    for (let i = 1; i < seq.length; i++) {
+      if (!(seq[i - 1] < seq[i])) {
+        return { error: 'validation_error', message: 'thresholds must satisfy stopAt < reduce50At < reduce20At < alertAt' };
+      }
+    }
+  }
   const fields = []; const params = [];
   if (patch.enabled !== undefined) { fields.push('enabled=?'); params.push(patch.enabled ? 1 : 0); }
-  const t = patch.thresholds || patch;
   if (t.stopAt !== undefined) { fields.push('stop_at=?'); params.push(t.stopAt); }
   if (t.reduce50At !== undefined) { fields.push('reduce_50_at=?'); params.push(t.reduce50At); }
   if (t.reduce20At !== undefined) { fields.push('reduce_20_at=?'); params.push(t.reduce20At); }
@@ -2219,14 +2701,67 @@ export function executeInvLinkEvent(db, userId, storeId, id) {
     );
     for (const c of skuCampaigns) {
       if (cur.action === 'stop_all') {
-        const updated = _toggleCampaign(db, userId, storeId, c.id, false);
-        if (updated) impacted.push(c.id);
+        const item = _enqueueManualAction(db, userId, storeId, {
+          sourceStrategyName: 'M2 inventory guardrail',
+          entity: { kind: 'campaign', id: c.id, name: c.name },
+          typedAction: {
+            actionPrimitive: 'M2_PAUSE_CAMPAIGN_FOR_INVENTORY',
+            sourceSurface: 'm2-inventory-link',
+            entityKind: 'campaign',
+            resourceId: c.id,
+            currentValue: { enabled: c.enabled, sku: cur.sku, daysLeft: cur.days_left },
+            recommendedValue: { enabled: false, sku: cur.sku, inventoryAction: cur.action },
+            dryRun: true,
+            auditRequired: true,
+          },
+          guardrail: { status: 'needs_review', reasons: ['m2_inventory_m3_write_requires_action_queue'] },
+          rollbackPlan: { method: 'queue_resume_campaign', needsManualReview: true },
+          sourceMeta: { source: 'm2-domain', mode: 'queued-not-written' },
+          note: `M2 inventory link queued campaign pause for ${cur.sku}`,
+        });
+        if (item) impacted.push(c.id);
       } else if (cur.action === 'bid_reduce_50') {
-        const updated = _updateCampaignBudget(db, userId, storeId, c.id, _r2((c.dailyBudget || 100) * 0.5), 'm2_inventory_link');
-        if (updated) impacted.push(c.id);
+        const nextBudget = _r2((c.dailyBudget || 100) * 0.5);
+        const item = _enqueueManualAction(db, userId, storeId, {
+          sourceStrategyName: 'M2 inventory guardrail',
+          entity: { kind: 'campaign', id: c.id, name: c.name },
+          typedAction: {
+            actionPrimitive: 'M2_REDUCE_CAMPAIGN_BUDGET_FOR_INVENTORY',
+            sourceSurface: 'm2-inventory-link',
+            entityKind: 'campaign',
+            resourceId: c.id,
+            currentValue: { dailyBudget: c.dailyBudget, sku: cur.sku, daysLeft: cur.days_left },
+            recommendedValue: { dailyBudget: nextBudget, reduction: 0.5, sku: cur.sku, inventoryAction: cur.action },
+            dryRun: true,
+            auditRequired: true,
+          },
+          guardrail: { status: 'needs_review', reasons: ['m2_inventory_m3_write_requires_action_queue'] },
+          rollbackPlan: { method: 'restore_previous_campaign_budget', needsManualReview: true },
+          sourceMeta: { source: 'm2-domain', mode: 'queued-not-written' },
+          note: `M2 inventory link queued 50% budget reduction for ${cur.sku}`,
+        });
+        if (item) impacted.push(c.id);
       } else if (cur.action === 'bid_reduce_20') {
-        const updated = _updateCampaignBudget(db, userId, storeId, c.id, _r2((c.dailyBudget || 100) * 0.8), 'm2_inventory_link');
-        if (updated) impacted.push(c.id);
+        const nextBudget = _r2((c.dailyBudget || 100) * 0.8);
+        const item = _enqueueManualAction(db, userId, storeId, {
+          sourceStrategyName: 'M2 inventory guardrail',
+          entity: { kind: 'campaign', id: c.id, name: c.name },
+          typedAction: {
+            actionPrimitive: 'M2_REDUCE_CAMPAIGN_BUDGET_FOR_INVENTORY',
+            sourceSurface: 'm2-inventory-link',
+            entityKind: 'campaign',
+            resourceId: c.id,
+            currentValue: { dailyBudget: c.dailyBudget, sku: cur.sku, daysLeft: cur.days_left },
+            recommendedValue: { dailyBudget: nextBudget, reduction: 0.2, sku: cur.sku, inventoryAction: cur.action },
+            dryRun: true,
+            auditRequired: true,
+          },
+          guardrail: { status: 'needs_review', reasons: ['m2_inventory_m3_write_requires_action_queue'] },
+          rollbackPlan: { method: 'restore_previous_campaign_budget', needsManualReview: true },
+          sourceMeta: { source: 'm2-domain', mode: 'queued-not-written' },
+          note: `M2 inventory link queued 20% budget reduction for ${cur.sku}`,
+        });
+        if (item) impacted.push(c.id);
       }
       // alert_only：不动 M3
     }
@@ -2234,21 +2769,30 @@ export function executeInvLinkEvent(db, userId, storeId, id) {
     console.warn('[M2 invLink M3 call failed]', e?.message);
   }
 
+  // 无真实 Amazon 凭证：动作仅入队待 M3 审核，不得伪装"已执行"（M2-P0-06）
   db.prepare(`UPDATE m2_inventory_link_events
     SET status=?, executed_at=?, impact_campaigns=?, audit_id=?
-    WHERE id=?`).run('auto_executed', nowIso(), JSON.stringify(impacted), audit?.id || null, id);
+    WHERE id=?`).run('queued_pending_review', nowIso(), JSON.stringify(impacted), audit?.id || null, id);
 
-  // 同时推 M4 通知
+  // M4 通知 severity 降级、去掉完成暗示（中性"已入队待审"）
   try {
     appendM4Notification(db, userId, storeId, {
-      source: 'M2', type: 'inventory_link', severity: cur.days_left < 3 ? 'P0' : 'P1',
-      title: `库存联动: ${cur.sku} 触发 ${cur.action}`,
-      detail: { sku: cur.sku, daysLeft: cur.days_left, action: cur.action, impactCampaigns: impacted },
+      source: 'M2', type: 'inventory_link',
+      severity: cur.days_left < 3 ? 'P2' : 'P3',
+      title: `库存联动: ${cur.sku} 已入队待 M3 审核 (${cur.action})`,
+      detail: {
+        sku: cur.sku, daysLeft: cur.days_left, action: cur.action,
+        impactCampaigns: impacted, status: 'queued_pending_review',
+        note: '动作已入 ad_action_queue（dryRun，需人工审核），尚未真实写入广告平台',
+      },
       relatedId: id,
     });
   } catch {}
 
-  return rowToInvLinkEvent(db.prepare('SELECT * FROM m2_inventory_link_events WHERE id=?').get(id));
+  return {
+    ...rowToInvLinkEvent(db.prepare('SELECT * FROM m2_inventory_link_events WHERE id=?').get(id)),
+    needsManualReview: true,
+  };
 }
 
 // ============================================================
@@ -2562,7 +3106,9 @@ export function seedProfitForUser(db, userId, storeId) {
       r += (rng() - 0.5) * 0.05;
       r = Math.max(6.85, Math.min(7.05, r));
       const date = new Date(now - (29 - d) * 86400000).toISOString().slice(0, 10);
-      fxInsert.run(newId('fx'), userId, storeId, 'USD', 'CNY', _r2(r), date, 'central_bank', nowIso());
+      // M2-P1-03: these are deterministic SEED rows, NOT a central-bank feed.
+      // Label them honestly as 'seed' so the UI never presents them as authoritative FX.
+      fxInsert.run(newId('fx'), userId, storeId, 'USD', 'CNY', _r2(r), date, 'seed', nowIso());
     }
 
     // ---- m2_fx_exposures（4 币种）----

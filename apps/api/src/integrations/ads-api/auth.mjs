@@ -13,15 +13,23 @@ function isMock() {
   return v === '1' || v === 'true' || v === 'yes';
 }
 
+function envFirst(names) {
+  for (const name of names) {
+    const v = process.env[name];
+    if (v) return v;
+  }
+  return '';
+}
+
 function clientId() {
   if (isMock()) return 'mock-ads-client-id';
-  const v = process.env.ADS_LWA_CLIENT_ID;
+  const v = envFirst(['ADS_LWA_CLIENT_ID', 'ADS_CLIENT_ID']);
   if (!v) throw new Error('ads_lwa_client_id_missing');
   return v;
 }
 function clientSecret() {
   if (isMock()) return 'mock-ads-client-secret';
-  const v = process.env.ADS_LWA_CLIENT_SECRET;
+  const v = envFirst(['ADS_LWA_CLIENT_SECRET', 'ADS_CLIENT_SECRET']);
   if (!v) throw new Error('ads_lwa_client_secret_missing');
   return v;
 }

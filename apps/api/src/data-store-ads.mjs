@@ -11,6 +11,16 @@ import { pathToFileURL, fileURLToPath } from 'node:url';
 import { dirname, resolve as pathResolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { appendAuditLog } from './data-store.mjs';
+import { enqueueAdAction } from './ad-action-queue.mjs';
+
+// X-P0-06: pause / budget (and any M-module-initiated) Ads write intent must funnel
+// through ad_action_queue via enqueueAdAction. This is the single gated boundary: the
+// queue consults isRealMode() and clamps requiresRealStoreWrite. Direct entity helpers
+// (toggleCampaign / updateCampaignBudget) remain local mock mutations; an intent that
+// asks for a real store side-effect is recorded here so it can never bypass the queue.
+export function enqueueAdsWriteIntent(db, userId, storeId, action = {}) {
+  return enqueueAdAction(db, userId, storeId, action);
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WEB_V2_UTILS_DIR = pathResolve(__dirname, '../../web-v2/src/utils');
@@ -81,10 +91,80 @@ export function initAdsSchema(db) {
       reject_reason TEXT,
       reverted_at TEXT,
       revert_reason TEXT,
+      next_eligible_at TEXT,
       created_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_ad_sug_us ON ad_suggestions(user_id, store_id);
     CREATE INDEX IF NOT EXISTS idx_ad_sug_state ON ad_suggestions(user_id, store_id, state);
+
+    CREATE TABLE IF NOT EXISTS ad_action_queue (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      store_id TEXT NOT NULL,
+      suggestion_id TEXT,
+      source_strategy_id TEXT,
+      source_strategy_name TEXT,
+      state TEXT NOT NULL DEFAULT 'queued',
+      priority_score REAL DEFAULT 0,
+      severity TEXT,
+      entity TEXT,
+      typed_action TEXT,
+      evidence_refs TEXT,
+      guardrail TEXT,
+      rollback_plan TEXT,
+      impact_estimate TEXT,
+      source_meta TEXT,
+      confidence_breakdown TEXT,
+      dry_run INTEGER NOT NULL DEFAULT 1,
+      audit_required INTEGER NOT NULL DEFAULT 1,
+      approved_at TEXT,
+      executed_at TEXT,
+      removed_at TEXT,
+      reverted_at TEXT,
+      note TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_ad_aq_us ON ad_action_queue(user_id, store_id);
+    CREATE INDEX IF NOT EXISTS idx_ad_aq_state ON ad_action_queue(user_id, store_id, state);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ad_aq_active_suggestion
+      ON ad_action_queue(user_id, store_id, suggestion_id)
+      WHERE suggestion_id IS NOT NULL AND state IN ('queued','approved','executing');
+
+    CREATE TABLE IF NOT EXISTS ad_action_runs (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      store_id TEXT NOT NULL,
+      queue_item_id TEXT NOT NULL,
+      batch_id TEXT,
+      action_type TEXT,
+      status TEXT NOT NULL,
+      dry_run INTEGER NOT NULL DEFAULT 1,
+      request_payload TEXT,
+      response_payload TEXT,
+      error_message TEXT,
+      created_at TEXT NOT NULL,
+      completed_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_ad_ar_us ON ad_action_runs(user_id, store_id);
+    CREATE INDEX IF NOT EXISTS idx_ad_ar_queue ON ad_action_runs(user_id, store_id, queue_item_id);
+
+    CREATE TABLE IF NOT EXISTS ad_goal_profiles (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      store_id TEXT NOT NULL,
+      primary_goal TEXT NOT NULL,
+      risk_preference TEXT NOT NULL,
+      automation_level TEXT NOT NULL,
+      protected_entities TEXT,
+      budget_boundary TEXT,
+      guardrail_policy TEXT,
+      evidence_policy TEXT,
+      source_meta TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ad_goal_profiles_us ON ad_goal_profiles(user_id, store_id);
 
     CREATE TABLE IF NOT EXISTS ad_manual_changes (
       id TEXT PRIMARY KEY,
@@ -377,6 +457,25 @@ export function initAdsSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_asb_cmp ON ad_strategy_bindings(user_id, store_id, campaign_id);
     CREATE INDEX IF NOT EXISTS idx_asb_strat ON ad_strategy_bindings(strategy_id);
   `);
+  // M3-P2-23: additive migration for pre-existing DBs — CREATE TABLE IF NOT
+  // EXISTS does not add new columns to an already-created ad_suggestions table.
+  ensureAdsColumn(db, 'ad_suggestions', 'next_eligible_at', 'TEXT');
+  // N5-m3-observation-settle: explicit, assertable observation settlement.
+  // observing → succeeded/failed once the observation window has elapsed. There is
+  // NO real Amazon effect data without real credentials, so the outcome is a
+  // deterministic simulation honestly flagged via settlement_meta.simulated=true.
+  ensureAdsColumn(db, 'ad_suggestions', 'settled_at', 'TEXT');
+  ensureAdsColumn(db, 'ad_suggestions', 'settlement_outcome', 'TEXT');
+  ensureAdsColumn(db, 'ad_suggestions', 'settlement_meta', 'TEXT');
+}
+
+function ensureAdsColumn(db, table, column, type) {
+  try {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+    if (!cols.some((c) => c.name === column)) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    }
+  } catch { /* table may not exist yet in some harnesses */ }
 }
 
 // ============================================================
@@ -760,6 +859,502 @@ function extractMetrics(obj) {
   return out;
 }
 
+const ACTION_PRIMITIVE_META = {
+  ADJUST_BID: { label: '调竞价', risk: 'low', automationLevel: 'L3' },
+  ADJUST_BUDGET: { label: '调预算', risk: 'medium', automationLevel: 'L2' },
+  GOVERN_KEYWORD: { label: '治理关键词', risk: 'high', automationLevel: 'L1' },
+  CREATE_OR_EVOLVE_STRUCTURE: { label: '创建/演化结构', risk: 'high', automationLevel: 'L1' },
+  PAUSE_OR_THROTTLE: { label: '暂停/限流', risk: 'high', automationLevel: 'L1' },
+  SYNC_CONTEXT: { label: '同步上下文', risk: 'low', automationLevel: 'L3' },
+  CROSS_MODULE_TASK: { label: '跨模块任务', risk: 'medium', automationLevel: 'L2' },
+  GUARDRAIL_ONLY: { label: '护栏保护', risk: 'medium', automationLevel: 'L2' },
+};
+
+const GUARDRAIL_REASON_LABELS = {
+  low_confidence: '置信度偏低，需要人工复核',
+  high_risk_action: '动作会改变关键词/结构/暂停状态',
+  budget_risk: '预算变化需要确认总预算边界',
+  cross_module: '需要跨模块协同，不应直接写广告',
+  p0_urgent: 'P0 紧急项，需要优先处理',
+  dry_run_only: '当前仍为 mock/sandbox，真实写入关闭',
+  profile_manual_review: '目标档案要求人工确认',
+  profile_protected_entity: '命中受保护实体',
+  profile_blocked_primitive: '目标档案禁止该动作类型',
+  profile_delta_too_large: '变化幅度超过目标档案护栏',
+  profile_evidence_missing: '证据不足或未映射证据面',
+};
+
+const DEFAULT_GOAL_PROFILE = Object.freeze({
+  primaryGoal: 'balanced_profit',
+  riskPreference: 'balanced',
+  automationLevel: 'assisted',
+  protectedEntities: { skus: [], asins: [], campaigns: [], keywords: [] },
+  budgetBoundary: {
+    currency: 'USD',
+    monthlySpendCap: 25000,
+    dailyBudgetIncreasePctMax: 0.2,
+    bidChangePctMax: 0.25,
+    minGrossMarginPct: 0.18,
+    minInventoryDays: 14,
+  },
+  guardrailPolicy: {
+    realWriteEnabled: false,
+    minConfidenceToAutoExecute: 0.72,
+    requireReviewPrimitives: ['ADJUST_BUDGET', 'GOVERN_KEYWORD', 'CREATE_OR_EVOLVE_STRUCTURE', 'PAUSE_OR_THROTTLE', 'CROSS_MODULE_TASK'],
+    blockedPrimitives: [],
+    allowAutoExecutePrimitives: ['ADJUST_BID', 'SYNC_CONTEXT'],
+  },
+  evidencePolicy: { minEvidenceRefs: 1, maxFreshnessHours: 24, requireMetricKeys: true },
+  sourceMeta: { source: 'mock', adapter: 'strategy_os_goal_profile', realWriteEnabled: false },
+});
+
+function cloneJson(v) {
+  return JSON.parse(JSON.stringify(v));
+}
+
+function defaultGoalProfile(now = nowIso()) {
+  return {
+    id: null,
+    ...cloneJson(DEFAULT_GOAL_PROFILE),
+    createdAt: now,
+    updatedAt: null,
+  };
+}
+
+function normalizeStringArray(arr) {
+  if (!Array.isArray(arr)) return [];
+  return Array.from(new Set(arr.map((x) => String(x || '').trim()).filter(Boolean)));
+}
+
+function normalizeGoalProfilePatch(patch = {}, base = defaultGoalProfile()) {
+  const allowedGoals = new Set(['balanced_profit', 'profit_first', 'growth_first', 'inventory_clearance', 'brand_defense']);
+  const allowedRisk = new Set(['conservative', 'balanced', 'aggressive']);
+  const allowedAutomation = new Set(['manual_review', 'assisted', 'guarded_auto']);
+  const next = {
+    ...base,
+    protectedEntities: { ...(base.protectedEntities || {}) },
+    budgetBoundary: { ...(base.budgetBoundary || {}) },
+    guardrailPolicy: { ...(base.guardrailPolicy || {}) },
+    evidencePolicy: { ...(base.evidencePolicy || {}) },
+    sourceMeta: { ...(base.sourceMeta || {}) },
+  };
+
+  if (patch.primaryGoal !== undefined) {
+    if (!allowedGoals.has(patch.primaryGoal)) throw new TypeError('invalid_primary_goal');
+    next.primaryGoal = patch.primaryGoal;
+  }
+  if (patch.riskPreference !== undefined) {
+    if (!allowedRisk.has(patch.riskPreference)) throw new TypeError('invalid_risk_preference');
+    next.riskPreference = patch.riskPreference;
+  }
+  if (patch.automationLevel !== undefined) {
+    if (!allowedAutomation.has(patch.automationLevel)) throw new TypeError('invalid_automation_level');
+    next.automationLevel = patch.automationLevel;
+  }
+  if (patch.protectedEntities && typeof patch.protectedEntities === 'object') {
+    next.protectedEntities = {
+      skus: normalizeStringArray(patch.protectedEntities.skus ?? next.protectedEntities.skus),
+      asins: normalizeStringArray(patch.protectedEntities.asins ?? next.protectedEntities.asins),
+      campaigns: normalizeStringArray(patch.protectedEntities.campaigns ?? next.protectedEntities.campaigns),
+      keywords: normalizeStringArray(patch.protectedEntities.keywords ?? next.protectedEntities.keywords),
+    };
+  }
+  if (patch.budgetBoundary && typeof patch.budgetBoundary === 'object') {
+    for (const key of ['monthlySpendCap', 'dailyBudgetIncreasePctMax', 'bidChangePctMax', 'minGrossMarginPct', 'minInventoryDays']) {
+      if (patch.budgetBoundary[key] !== undefined) next.budgetBoundary[key] = Number(patch.budgetBoundary[key]);
+    }
+    if (patch.budgetBoundary.currency !== undefined) next.budgetBoundary.currency = String(patch.budgetBoundary.currency || 'USD').toUpperCase();
+  }
+  if (patch.guardrailPolicy && typeof patch.guardrailPolicy === 'object') {
+    if (patch.guardrailPolicy.realWriteEnabled !== undefined) next.guardrailPolicy.realWriteEnabled = !!patch.guardrailPolicy.realWriteEnabled;
+    if (patch.guardrailPolicy.minConfidenceToAutoExecute !== undefined) {
+      next.guardrailPolicy.minConfidenceToAutoExecute = clampNumber(patch.guardrailPolicy.minConfidenceToAutoExecute, 0, 1);
+    }
+    for (const key of ['requireReviewPrimitives', 'blockedPrimitives', 'allowAutoExecutePrimitives']) {
+      if (patch.guardrailPolicy[key] !== undefined) next.guardrailPolicy[key] = normalizeStringArray(patch.guardrailPolicy[key]);
+    }
+  }
+  if (patch.evidencePolicy && typeof patch.evidencePolicy === 'object') {
+    if (patch.evidencePolicy.minEvidenceRefs !== undefined) next.evidencePolicy.minEvidenceRefs = Math.max(0, Number(patch.evidencePolicy.minEvidenceRefs) || 0);
+    if (patch.evidencePolicy.maxFreshnessHours !== undefined) next.evidencePolicy.maxFreshnessHours = Math.max(1, Number(patch.evidencePolicy.maxFreshnessHours) || 24);
+    if (patch.evidencePolicy.requireMetricKeys !== undefined) next.evidencePolicy.requireMetricKeys = !!patch.evidencePolicy.requireMetricKeys;
+  }
+  next.guardrailPolicy.realWriteEnabled = false;
+  next.sourceMeta = { ...next.sourceMeta, source: 'mock', realWriteEnabled: false };
+  return next;
+}
+
+function clampNumber(n, min = 0, max = 1) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return min;
+  return Math.max(min, Math.min(max, x));
+}
+
+function safeLowerText(...parts) {
+  return parts
+    .filter((p) => p !== null && p !== undefined)
+    .map((p) => {
+      if (typeof p === 'string') return p;
+      try { return JSON.stringify(p); } catch { return String(p); }
+    })
+    .join(' ')
+    .toLowerCase();
+}
+
+function nonEmptyObject(obj) {
+  const out = {};
+  for (const [k, v] of Object.entries(obj || {})) {
+    if (v !== undefined && v !== null && v !== '') out[k] = v;
+  }
+  return out;
+}
+
+function parseArrowAmount(text) {
+  const raw = String(text || '');
+  const m = raw.match(/\$?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:→|->|=>|至|到|to)\s*\$?\s*([0-9]+(?:\.[0-9]+)?)/i);
+  if (!m) return null;
+  const from = Number(m[1]);
+  const to = Number(m[2]);
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return null;
+  return { from, to, delta: Number((to - from).toFixed(4)), deltaPct: from ? Number(((to - from) / from).toFixed(4)) : null };
+}
+
+function parseMoneyAmount(text) {
+  const m = String(text || '').match(/\$\s*([0-9]+(?:\.[0-9]+)?)/);
+  return m ? Number(m[1]) : null;
+}
+
+function inferActionPrimitive(s) {
+  const text = safeLowerText(s.actionType?.label, s.title, s.summary, s.detail, s.sourceStrategyName, s.crossModule);
+  if (/guardrail|护栏|clamp|限流|skip|熔断|保护/.test(text)) return 'GUARDRAIL_ONLY';
+  if (/listing|m1|跨模块|cross|改主图|改 listing|标题/.test(text)) return 'CROSS_MODULE_TASK';
+  if (/budget|预算|调拨|reallocate|增加日预算|加预算/.test(text)) return 'ADJUST_BUDGET';
+  if (/negative|否词|关键词|search term|升手动|manual exact|promote|加否/.test(text)) return 'GOVERN_KEYWORD';
+  if (/pause|暂停|断货|stockout|throttle|限速/.test(text)) return 'PAUSE_OR_THROTTLE';
+  if (/campaign|ad group|sd |asin-targeting|a\/b|ab test|创意|新建|结构|attack|攻击竞品/.test(text)) return 'CREATE_OR_EVOLVE_STRUCTURE';
+  if (/bid|出价|竞价|placement|cpc|降/.test(text)) return 'ADJUST_BID';
+  if (/sync|同步|data/.test(text)) return 'SYNC_CONTEXT';
+  return 'ADJUST_BID';
+}
+
+function buildTypedAction(s) {
+  const primitive = inferActionPrimitive(s);
+  const meta = ACTION_PRIMITIVE_META[primitive] || ACTION_PRIMITIVE_META.ADJUST_BID;
+  const entity = s.entity || {};
+  const text = `${s.title || ''} ${s.summary || ''}`;
+  const arrowAmount = parseArrowAmount(text);
+  const moneyAmount = parseMoneyAmount(text);
+  const primaryAlternative = (s.alternatives || []).find((a) => a?.primary) || (s.alternatives || [])[0] || null;
+  const currentValue = {};
+  const recommendedValue = {};
+  const delta = {};
+
+  if (arrowAmount) {
+    if (primitive === 'ADJUST_BID') {
+      currentValue.bid = arrowAmount.from;
+      recommendedValue.bid = arrowAmount.to;
+    } else if (primitive === 'ADJUST_BUDGET') {
+      currentValue.budget = arrowAmount.from;
+      recommendedValue.budget = arrowAmount.to;
+    } else {
+      currentValue.value = arrowAmount.from;
+      recommendedValue.value = arrowAmount.to;
+    }
+    delta.absolute = arrowAmount.delta;
+    delta.percent = arrowAmount.deltaPct;
+  }
+
+  if (primitive === 'ADJUST_BUDGET' && moneyAmount !== null) {
+    recommendedValue.dailyBudgetShift = moneyAmount;
+  }
+  if (primitive === 'GOVERN_KEYWORD') {
+    recommendedValue.keyword = entity.keyword || null;
+    recommendedValue.matchType = /manual exact|精确|exact/i.test(text) ? 'exact' : 'negative_exact';
+  }
+  if (primitive === 'CREATE_OR_EVOLVE_STRUCTURE') {
+    recommendedValue.structureIntent = /sd|asin-targeting|竞品|对手/i.test(text) ? 'sd_product_targeting' : 'campaign_or_creative_test';
+  }
+  if (primitive === 'CROSS_MODULE_TASK') {
+    recommendedValue.targetModule = s.crossModule || primaryAlternative?.target || 'M1';
+  }
+
+  return {
+    actionPrimitive: primitive,
+    actionPrimitiveLabel: meta.label,
+    actionType: s.actionType?.label || null,
+    entityPath: nonEmptyObject({
+      sku: entity.sku,
+      asin: entity.asin,
+      campaign: entity.campaign,
+      campaignId: entity.campaignId,
+      adGroup: entity.adGroup,
+      adGroupId: entity.adGroupId,
+      keyword: entity.keyword,
+    }),
+    currentValue,
+    recommendedValue,
+    delta,
+    primaryAlternative: primaryAlternative?.label || null,
+    dryRun: true,
+    auditRequired: true,
+    executionMode: 'sandbox_audit_first',
+  };
+}
+
+function inferMetricKeys(e) {
+  const text = safeLowerText(e?.label, e?.value, e?.baseline);
+  const keys = [];
+  const pairs = [
+    ['acos', /acos/], ['roas', /roas/], ['ctr', /ctr|点击率/],
+    ['cvr', /cvr|转化率/], ['cpc', /cpc/], ['clicks', /点击|click/],
+    ['orders', /订单|转化数|转化/], ['spend', /花费|浪费|spend/],
+    ['sales', /销售|sales/], ['inventoryDays', /库存|断货/],
+    ['marginalRoi', /roi|边际/], ['rating', /评分/],
+    ['reviews', /差评|review/], ['organicRank', /排名/],
+    ['impressions', /曝光/], ['budget', /预算/],
+  ];
+  for (const [key, re] of pairs) if (re.test(text) && !keys.includes(key)) keys.push(key);
+  return keys.length ? keys : ['metric'];
+}
+
+function inferEvidenceSurface(s, e, primitive) {
+  const text = safeLowerText(s.title, s.summary, s.detail, e?.label, s.crossModule);
+  if (/listing|主图|标题|m1/.test(text)) return { surfaceKey: 'listing_quality', tabKey: 'creative_cvr', entityKind: 'sku' };
+  if (/竞品|对手|rival|asin-targeting|评分|差评/.test(text)) return { surfaceKey: 'competitor_window', tabKey: 'competitive_snapshot', entityKind: 'competitor_asin' };
+  if (primitive === 'ADJUST_BUDGET' || /budget|预算|campaign/.test(text)) return { surfaceKey: 'sp_campaign', tabKey: 'budget_daily', entityKind: 'campaign' };
+  if (primitive === 'GOVERN_KEYWORD' || /搜索词|关键词|negative|否词|manual/.test(text)) return { surfaceKey: 'sp_search_term', tabKey: 'user_search_terms', entityKind: 'keyword' };
+  if (/placement|广告位/.test(text)) return { surfaceKey: 'sp_placement', tabKey: 'placement_daily', entityKind: 'campaign' };
+  return { surfaceKey: 'sp_keyword', tabKey: 'daily', entityKind: s.entity?.keyword ? 'keyword' : 'sku' };
+}
+
+function buildEvidenceLink(s, surface) {
+  const entity = s.entity || {};
+  const query = nonEmptyObject({
+    sku: entity.sku,
+    asin: entity.asin,
+    campaign: entity.campaign,
+    keyword: entity.keyword,
+    surface: surface.surfaceKey,
+    tab: surface.tabKey,
+  });
+  if (surface.surfaceKey === 'listing_quality') return { routePath: '/listings/optimize', routeQuery: query };
+  if (surface.surfaceKey === 'competitor_window') return { routePath: '/ads/competitor-attack', routeQuery: query };
+  if (surface.surfaceKey === 'sp_campaign') return { routePath: '/ads/reports/campaigns', routeQuery: query };
+  if (surface.surfaceKey === 'sp_search_term') return { routePath: '/ads/reports/search-terms', routeQuery: query };
+  if (surface.surfaceKey === 'sp_placement') return { routePath: '/ads/placements', routeQuery: query };
+  return { routePath: '/ads/keywords', routeQuery: query };
+}
+
+function buildEvidenceRefs(s, typedAction) {
+  const legacyEvidence = Array.isArray(s.evidence) ? s.evidence : [];
+  const primitive = typedAction?.actionPrimitive || inferActionPrimitive(s);
+  const sourceRows = legacyEvidence.length ? legacyEvidence : [{ label: s.sourceStrategyName || s.title || 'strategy_signal', value: null, signal: 'info' }];
+  return sourceRows.map((e, index) => {
+    const surface = inferEvidenceSurface(s, e, primitive);
+    const link = buildEvidenceLink(s, surface);
+    return {
+      id: `${s.id || 'sug'}-ev-${index + 1}`,
+      surfaceKey: surface.surfaceKey,
+      tabKey: surface.tabKey,
+      entityKind: surface.entityKind,
+      entityKey: s.entity?.keyword || s.entity?.campaign || s.entity?.sku || s.entity?.asin || null,
+      metricKeys: inferMetricKeys(e),
+      label: e?.label || null,
+      legacyValue: e?.value ?? null,
+      baseline: e?.baseline ?? null,
+      signal: e?.signal || 'info',
+      source: 'mock_lingxing_equivalent',
+      freshness: 'mock_seed_2026-05-14',
+      routePath: link.routePath,
+      routeQuery: link.routeQuery,
+    };
+  });
+}
+
+function profileHitsProtectedEntity(profile, entity = {}) {
+  const p = profile?.protectedEntities || {};
+  const contains = (arr, value) => normalizeStringArray(arr).map((x) => x.toLowerCase()).includes(String(value || '').toLowerCase());
+  return (
+    contains(p.skus, entity.sku) ||
+    contains(p.asins, entity.asin) ||
+    contains(p.campaigns, entity.campaignId || entity.campaign) ||
+    contains(p.keywords, entity.keyword)
+  );
+}
+
+function actionDeltaPct(typedAction) {
+  const pct = typedAction?.delta?.percent;
+  if (Number.isFinite(Number(pct))) return Math.abs(Number(pct));
+  const current = typedAction?.currentValue?.bid ?? typedAction?.currentValue?.budget ?? typedAction?.currentValue?.value;
+  const recommended = typedAction?.recommendedValue?.bid ?? typedAction?.recommendedValue?.budget ?? typedAction?.recommendedValue?.value;
+  if (!Number.isFinite(Number(current)) || !Number.isFinite(Number(recommended)) || Number(current) === 0) return null;
+  return Math.abs((Number(recommended) - Number(current)) / Number(current));
+}
+
+function buildGuardrailResult(s, typedAction, goalProfile = defaultGoalProfile()) {
+  const primitive = typedAction?.actionPrimitive || inferActionPrimitive(s);
+  const meta = ACTION_PRIMITIVE_META[primitive] || ACTION_PRIMITIVE_META.ADJUST_BID;
+  const reasons = ['dry_run_only'];
+  let status = 'passed';
+
+  if ((s.confidence ?? 0.7) < 0.6) {
+    status = 'needs_review';
+    reasons.push('low_confidence');
+  }
+  if (['GOVERN_KEYWORD', 'CREATE_OR_EVOLVE_STRUCTURE', 'PAUSE_OR_THROTTLE'].includes(primitive)) {
+    status = 'needs_review';
+    reasons.push('high_risk_action');
+  }
+  if (primitive === 'ADJUST_BUDGET') {
+    status = 'needs_review';
+    reasons.push('budget_risk');
+  }
+  if (primitive === 'CROSS_MODULE_TASK') {
+    status = 'needs_review';
+    reasons.push('cross_module');
+  }
+  if (s.severity?.label === 'P0') {
+    reasons.push('p0_urgent');
+  }
+
+  const profile = normalizeGoalProfilePatch({}, goalProfile || defaultGoalProfile());
+  const blockedPrimitives = new Set(profile.guardrailPolicy?.blockedPrimitives || []);
+  const requireReviewPrimitives = new Set(profile.guardrailPolicy?.requireReviewPrimitives || []);
+  const allowAutoPrimitives = new Set(profile.guardrailPolicy?.allowAutoExecutePrimitives || []);
+  const deltaPct = actionDeltaPct(typedAction);
+  const maxDelta = primitive === 'ADJUST_BUDGET'
+    ? profile.budgetBoundary?.dailyBudgetIncreasePctMax
+    : profile.budgetBoundary?.bidChangePctMax;
+
+  if (profile.automationLevel === 'manual_review') {
+    status = 'needs_review';
+    reasons.push('profile_manual_review');
+  }
+  if (blockedPrimitives.has(primitive)) {
+    status = 'blocked';
+    reasons.push('profile_blocked_primitive');
+  } else if (requireReviewPrimitives.has(primitive)) {
+    status = status === 'blocked' ? status : 'needs_review';
+  }
+  if (profileHitsProtectedEntity(profile, s.entity)) {
+    status = status === 'blocked' ? status : 'needs_review';
+    reasons.push('profile_protected_entity');
+  }
+  if (deltaPct !== null && Number.isFinite(Number(maxDelta)) && deltaPct > Number(maxDelta)) {
+    status = status === 'blocked' ? status : 'needs_review';
+    reasons.push('profile_delta_too_large');
+  }
+  if ((s.evidenceRefs?.length || s.evidence?.length || 0) < (profile.evidencePolicy?.minEvidenceRefs || 0)) {
+    status = status === 'blocked' ? status : 'needs_review';
+    reasons.push('profile_evidence_missing');
+  }
+
+  const automationLevel = status === 'passed' ? meta.automationLevel : (meta.risk === 'high' ? 'L1' : 'L2');
+  const canAutoExecute = status === 'passed'
+    && meta.risk === 'low'
+    && profile.automationLevel === 'guarded_auto'
+    && allowAutoPrimitives.has(primitive)
+    && (s.confidence ?? 0.7) >= (profile.guardrailPolicy?.minConfidenceToAutoExecute ?? 0.72);
+  return {
+    status,
+    statusLabel: status === 'passed' ? '护栏通过' : status === 'blocked' ? '已阻断' : '需要复核',
+    reasons: Array.from(new Set(reasons)),
+    reasonLabels: Array.from(new Set(reasons)).map((r) => GUARDRAIL_REASON_LABELS[r] || r),
+    automationLevel: profile.automationLevel === 'manual_review' ? 'L1' : automationLevel,
+    maxRisk: meta.risk,
+    canAutoExecute,
+    dryRunOnly: true,
+    profileSnapshot: {
+      primaryGoal: profile.primaryGoal,
+      riskPreference: profile.riskPreference,
+      automationLevel: profile.automationLevel,
+    },
+    gates: {
+      budgetBoundary: primitive === 'ADJUST_BUDGET' ? 'needs_user_limit' : 'not_touched',
+      protectedEntity: profileHitsProtectedEntity(profile, s.entity)
+        ? 'profile_protected'
+        : s.entity?.keyword && /brand|品牌/i.test(s.entity.keyword) ? 'brand_term_review' : 'passed',
+      inventoryBoundary: /库存|断货|stockout/i.test(`${s.summary || ''} ${s.detail || ''}`) ? 'inventory_signal_present' : 'not_applicable',
+      realWrite: profile.guardrailPolicy?.realWriteEnabled ? 'requested_but_adapter_mocked' : 'disabled',
+    },
+  };
+}
+
+function buildRollbackPlan(s, typedAction) {
+  const primitive = typedAction?.actionPrimitive || inferActionPrimitive(s);
+  const map = {
+    ADJUST_BID: { method: 'restore_previous_bid', label: '恢复原竞价', windowDays: 7, needsManualReview: false },
+    ADJUST_BUDGET: { method: 'restore_previous_budget', label: '恢复原预算/调拨', windowDays: 7, needsManualReview: true },
+    GOVERN_KEYWORD: { method: 'delete_created_targeting_or_negative', label: '删除新增否词/投放词', windowDays: 7, needsManualReview: true },
+    CREATE_OR_EVOLVE_STRUCTURE: { method: 'archive_created_structure', label: '归档新增 Campaign/实验', windowDays: 14, needsManualReview: true },
+    PAUSE_OR_THROTTLE: { method: 'restore_previous_state', label: '恢复投放状态', windowDays: 3, needsManualReview: true },
+    SYNC_CONTEXT: { method: 'no_write_to_revert', label: '仅同步，无需回滚', windowDays: 0, needsManualReview: false },
+    CROSS_MODULE_TASK: { method: 'revert_linked_module_version', label: '回滚关联模块版本', windowDays: 7, needsManualReview: true },
+    GUARDRAIL_ONLY: { method: 'release_guardrail_clamp', label: '解除护栏限制', windowDays: 3, needsManualReview: true },
+  };
+  const picked = map[primitive] || map.ADJUST_BID;
+  return {
+    reversible: primitive !== 'SYNC_CONTEXT',
+    windowDays: picked.windowDays,
+    method: picked.method,
+    methodLabel: picked.label,
+    needsManualReview: picked.needsManualReview,
+    auditTrail: 'audit_logs + ad_suggestions state machine',
+  };
+}
+
+function buildImpactEstimate(s) {
+  const impact = s.impact || {};
+  const saveMonthly = Number(impact.saveMonthly || 0);
+  const gainMonthly = Number(impact.gainMonthly || 0);
+  return {
+    horizonDays: 30,
+    currency: 'USD',
+    monthly: {
+      save: Number.isFinite(saveMonthly) ? saveMonthly : 0,
+      gain: Number.isFinite(gainMonthly) ? gainMonthly : 0,
+      net: (Number.isFinite(saveMonthly) ? saveMonthly : 0) + (Number.isFinite(gainMonthly) ? gainMonthly : 0),
+    },
+    label: impact.label || null,
+    model: 'mock_rule_estimate_v1',
+    confidence: s.confidence ?? null,
+  };
+}
+
+function buildSourceMeta(s, evidenceRefs, goalProfile = defaultGoalProfile()) {
+  return {
+    source: 'mock',
+    adapter: 'lingxing_equivalent_seed',
+    freshness: 'mock_seed_2026-05-14',
+    sourceConfidence: 'partial',
+    dataLagHours: null,
+    evidenceCount: evidenceRefs.length,
+    generatedBy: 'm3_strategy_os_enrichment_v1',
+    realWriteEnabled: false,
+    goalProfile: {
+      primaryGoal: goalProfile.primaryGoal,
+      riskPreference: goalProfile.riskPreference,
+      automationLevel: goalProfile.automationLevel,
+    },
+  };
+}
+
+function buildConfidenceBreakdown(s, evidenceRefs, guardrail, rollback, impactEstimate) {
+  const dataScore = clampNumber(0.45 + evidenceRefs.length * 0.08, 0.45, 0.86);
+  const ruleScore = clampNumber(s.historicalSuccessRate ?? 0.65, 0.35, 0.95);
+  const impactScore = impactEstimate.monthly.net > 0 ? 0.74 : 0.55;
+  const reversibilityScore = rollback.reversible ? (rollback.needsManualReview ? 0.78 : 0.92) : 0.55;
+  const guardrailScore = guardrail.status === 'passed' ? 0.88 : guardrail.status === 'blocked' ? 0.3 : 0.66;
+  return {
+    data: dataScore,
+    rule: ruleScore,
+    impact: impactScore,
+    reversibility: reversibilityScore,
+    guardrail: guardrailScore,
+    final: s.confidence ?? Number(((dataScore + ruleScore + impactScore + reversibilityScore + guardrailScore) / 5).toFixed(2)),
+  };
+}
+
 // ============================================================
 // Row → object conversion helpers
 // ============================================================
@@ -782,10 +1377,10 @@ function rowToStrategy(r) {
   };
 }
 
-function rowToSuggestion(r) {
+function rowToSuggestion(r, goalProfile = defaultGoalProfile()) {
   if (!r) return null;
   const j = (v) => { try { return JSON.parse(v); } catch { return null; } };
-  return {
+  const base = {
     id: r.id, timeBucket: r.time_bucket,
     severity: j(r.severity), actionType: j(r.action_type),
     crossModule: r.cross_module,
@@ -801,8 +1396,109 @@ function rowToSuggestion(r) {
     cooldownHours: r.cooldown_hours, observationWindowHours: r.observation_window_hours,
     acceptedAt: r.accepted_at, rejectedAt: r.rejected_at, rejectReason: r.reject_reason,
     revertedAt: r.reverted_at, revertReason: r.revert_reason,
+    nextEligibleAt: r.next_eligible_at || null,
+    settledAt: r.settled_at || null,
+    settlementOutcome: r.settlement_outcome || null,
+    settlementMeta: (() => { try { return r.settlement_meta ? JSON.parse(r.settlement_meta) : null; } catch { return null; } })(),
     createdAt: r.created_at,
   };
+  // M3-P2-23: an accepted suggestion in its observation window is not
+  // re-triggerable until next_eligible_at passes.
+  base.eligible = !(base.nextEligibleAt && Date.parse(base.nextEligibleAt) > Date.now());
+  const typedAction = buildTypedAction(base);
+  const evidenceRefs = buildEvidenceRefs(base, typedAction);
+  const guardrail = buildGuardrailResult(base, typedAction, goalProfile);
+  const rollback = buildRollbackPlan(base, typedAction);
+  const impactEstimate = buildImpactEstimate(base);
+  const sourceMeta = buildSourceMeta(base, evidenceRefs, goalProfile);
+  const confidenceBreakdown = buildConfidenceBreakdown(base, evidenceRefs, guardrail, rollback, impactEstimate);
+  return {
+    ...base,
+    typedAction,
+    evidenceRefs,
+    guardrail,
+    rollback,
+    rollbackPlan: rollback,
+    impactEstimate,
+    sourceMeta,
+    confidenceBreakdown,
+  };
+}
+
+function rowToActionRun(r) {
+  if (!r) return null;
+  const j = (v) => { try { return JSON.parse(v || 'null'); } catch { return null; } };
+  return {
+    id: r.id,
+    queueItemId: r.queue_item_id,
+    batchId: r.batch_id,
+    actionType: r.action_type,
+    status: r.status,
+    dryRun: !!r.dry_run,
+    requestPayload: j(r.request_payload),
+    responsePayload: j(r.response_payload),
+    errorMessage: r.error_message,
+    createdAt: r.created_at,
+    completedAt: r.completed_at,
+  };
+}
+
+function rowToActionQueueItem(r) {
+  if (!r) return null;
+  const j = (v) => { try { return JSON.parse(v || 'null'); } catch { return null; } };
+  return {
+    id: r.id,
+    suggestionId: r.suggestion_id,
+    sourceStrategyId: r.source_strategy_id,
+    sourceStrategyName: r.source_strategy_name,
+    state: r.state,
+    priorityScore: r.priority_score,
+    severity: j(r.severity),
+    entity: j(r.entity) || {},
+    typedAction: j(r.typed_action),
+    evidenceRefs: j(r.evidence_refs) || [],
+    guardrail: j(r.guardrail),
+    rollback: j(r.rollback_plan),
+    rollbackPlan: j(r.rollback_plan),
+    impactEstimate: j(r.impact_estimate),
+    sourceMeta: j(r.source_meta),
+    confidenceBreakdown: j(r.confidence_breakdown),
+    dryRun: !!r.dry_run,
+    auditRequired: !!r.audit_required,
+    approvedAt: r.approved_at,
+    executedAt: r.executed_at,
+    removedAt: r.removed_at,
+    revertedAt: r.reverted_at,
+    note: r.note,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+function rowToGoalProfile(r) {
+  if (!r) return null;
+  const j = (v, fallback) => { try { return JSON.parse(v || 'null') ?? fallback; } catch { return fallback; } };
+  return {
+    id: r.id,
+    primaryGoal: r.primary_goal,
+    riskPreference: r.risk_preference,
+    automationLevel: r.automation_level,
+    protectedEntities: j(r.protected_entities, cloneJson(DEFAULT_GOAL_PROFILE.protectedEntities)),
+    budgetBoundary: j(r.budget_boundary, cloneJson(DEFAULT_GOAL_PROFILE.budgetBoundary)),
+    guardrailPolicy: j(r.guardrail_policy, cloneJson(DEFAULT_GOAL_PROFILE.guardrailPolicy)),
+    evidencePolicy: j(r.evidence_policy, cloneJson(DEFAULT_GOAL_PROFILE.evidencePolicy)),
+    sourceMeta: j(r.source_meta, cloneJson(DEFAULT_GOAL_PROFILE.sourceMeta)),
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+function buildActionPriority(s) {
+  const severity = ({ P0: 1000, P1: 600, P2: 250 })[s?.severity?.label] ?? 100;
+  const impact = s?.impactEstimate?.monthly?.net ?? ((s?.impact?.saveMonthly || 0) + (s?.impact?.gainMonthly || 0));
+  const confidence = Math.round((s?.confidenceBreakdown?.final ?? s?.confidence ?? 0.5) * 100);
+  const guardrailPenalty = s?.guardrail?.status === 'blocked' ? -500 : s?.guardrail?.status === 'needs_review' ? -50 : 50;
+  return Number((severity + Math.min(impact || 0, 1000) + confidence + guardrailPenalty).toFixed(2));
 }
 
 function rowToManualChange(r) {
@@ -955,7 +1651,8 @@ function rowToStr(r) {
   return {
     id: r.id, campaignId: r.campaign_id, adGroupId: r.ad_group_id,
     term: r.search_term, matchedKw: r.matched_kw, matchType: r.match_type,
-    signal: r.signal, sku: r.sku, asin: r.asin, period: r.reporting_period,
+    signal: r.signal, sku: r.sku, asin: r.asin,
+    reportingDate: r.reporting_date, period: r.reporting_period,
     ...(j(r.metrics) || {}),
   };
 }
@@ -1151,6 +1848,59 @@ export function bindStrategy(db, userId, storeId, id, campaignIds) {
 }
 
 // ============================================================
+// Goal Profile — store-level AI objective + guardrail contract
+// ============================================================
+export function getGoalProfile(db, userId, storeId) {
+  const row = db.prepare('SELECT * FROM ad_goal_profiles WHERE user_id = ? AND store_id = ?').get(userId, storeId);
+  return rowToGoalProfile(row) || defaultGoalProfile();
+}
+
+export function updateGoalProfile(db, userId, storeId, patch = {}) {
+  const existingRow = db.prepare('SELECT * FROM ad_goal_profiles WHERE user_id = ? AND store_id = ?').get(userId, storeId);
+  const existing = rowToGoalProfile(existingRow) || defaultGoalProfile();
+  const next = normalizeGoalProfilePatch(patch, existing);
+  const now = nowIso();
+  const id = existing.id || patch.id || newId('gp');
+  if (existingRow) {
+    db.prepare(`UPDATE ad_goal_profiles SET
+      primary_goal=?, risk_preference=?, automation_level=?, protected_entities=?,
+      budget_boundary=?, guardrail_policy=?, evidence_policy=?, source_meta=?, updated_at=?
+      WHERE id=? AND user_id=? AND store_id=?`).run(
+        next.primaryGoal, next.riskPreference, next.automationLevel,
+        JSON.stringify(next.protectedEntities || {}),
+        JSON.stringify(next.budgetBoundary || {}),
+        JSON.stringify(next.guardrailPolicy || {}),
+        JSON.stringify(next.evidencePolicy || {}),
+        JSON.stringify(next.sourceMeta || {}),
+        now, existing.id, userId, storeId
+      );
+  } else {
+    db.prepare(`INSERT INTO ad_goal_profiles(
+      id, user_id, store_id, primary_goal, risk_preference, automation_level,
+      protected_entities, budget_boundary, guardrail_policy, evidence_policy, source_meta,
+      created_at, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+        id, userId, storeId, next.primaryGoal, next.riskPreference, next.automationLevel,
+        JSON.stringify(next.protectedEntities || {}),
+        JSON.stringify(next.budgetBoundary || {}),
+        JSON.stringify(next.guardrailPolicy || {}),
+        JSON.stringify(next.evidencePolicy || {}),
+        JSON.stringify(next.sourceMeta || {}),
+        now, now
+      );
+  }
+  appendAuditLog(userId, storeId, {
+    sourceModule: 'M3',
+    actionType: 'GOAL_PROFILE_UPDATE',
+    resourceType: 'ad_goal_profile',
+    resourceId: id,
+    previousValues: existingRow ? existing : null,
+    payload: patch,
+  });
+  return getGoalProfile(db, userId, storeId);
+}
+
+// ============================================================
 // Suggestions CRUD
 // ============================================================
 export function listSuggestions(db, userId, storeId, filters = {}) {
@@ -1160,12 +1910,19 @@ export function listSuggestions(db, userId, storeId, filters = {}) {
   if (filters.strategy) { sql += ' AND source_strategy_id = ?'; params.push(filters.strategy); }
   if (filters.sku) { sql += ` AND entity LIKE ?`; params.push('%"sku":"' + filters.sku + '"%'); }
   sql += ' ORDER BY time_bucket DESC';
-  return db.prepare(sql).all(...params).map(rowToSuggestion);
+  const profile = getGoalProfile(db, userId, storeId);
+  let rows = db.prepare(sql).all(...params).map((r) => rowToSuggestion(r, profile));
+  // M3-P2-23: triggerable/eligibleOnly callers must not see suggestions still
+  // inside their observation window (next_eligible_at in the future).
+  if (filters.eligibleOnly || filters.triggerable) {
+    rows = rows.filter((s) => s.eligible !== false);
+  }
+  return rows;
 }
 
 export function getSuggestion(db, userId, storeId, id) {
   const r = db.prepare('SELECT * FROM ad_suggestions WHERE id = ? AND user_id = ? AND store_id = ?').get(id, userId, storeId);
-  return rowToSuggestion(r);
+  return rowToSuggestion(r, getGoalProfile(db, userId, storeId));
 }
 
 export function acceptSuggestion(db, userId, storeId, id, body = {}) {
@@ -1176,7 +1933,12 @@ export function acceptSuggestion(db, userId, storeId, id, body = {}) {
     return cur;
   }
   const now = nowIso();
-  db.prepare(`UPDATE ad_suggestions SET state='observing', accepted_at=?, rejected_at=NULL, reject_reason=NULL, reverted_at=NULL, revert_reason=NULL WHERE id=? AND user_id=? AND store_id=?`).run(now, id, userId, storeId);
+  // M3-P2-23: land the observation window so the same suggestion cannot
+  // re-trigger before it expires. listSuggestions filters/marks not-yet-eligible
+  // items, making the "观察窗内不重复触发" promise real instead of cosmetic.
+  const windowHours = Number(cur.observationWindowHours ?? cur.cooldownHours ?? 72) || 72;
+  const nextEligibleAt = new Date(Date.now() + windowHours * 3600_000).toISOString();
+  db.prepare(`UPDATE ad_suggestions SET state='observing', accepted_at=?, rejected_at=NULL, reject_reason=NULL, reverted_at=NULL, revert_reason=NULL, next_eligible_at=? WHERE id=? AND user_id=? AND store_id=?`).run(now, nextEligibleAt, id, userId, storeId);
   appendAuditLog(userId, storeId, {
     sourceModule: 'M3', actionType: 'TIMELINE_ACCEPT', resourceType: 'ad_suggestion', resourceId: id,
     chosenAlternativeIndex: body.chosenAlternativeIndex ?? 0,
@@ -1210,6 +1972,512 @@ export function revertSuggestion(db, userId, storeId, id, body = {}) {
     previousValues: { state: cur.state, acceptedAt: cur.acceptedAt, rejectedAt: cur.rejectedAt, rejectReason: cur.rejectReason },
   });
   return getSuggestion(db, userId, storeId, id);
+}
+
+// ============================================================
+// N5-m3-observation-settle — explicit observation settlement
+// ============================================================
+// Deterministic, simulation-only outcome for an observing suggestion whose
+// observation window has elapsed. There is NO real回流/effect data without real
+// Amazon credentials, so we never fabricate "real" performance. We derive a
+// pass/fail verdict from data the system already holds (confidence,
+// historicalSuccessRate, guardrail.status) using a stable rule, and we mark the
+// verdict simulated:true so it can never be mistaken for a real副作用.
+function simulateObservationOutcome(sug) {
+  const confidence = Number(sug.confidence ?? 0.5);
+  const histSuccess = Number(sug.historicalSuccessRate ?? 0.5);
+  const guardrailStatus = sug.guardrail?.status || 'needs_review';
+  // Blocked guardrail can never count as a real success.
+  if (guardrailStatus === 'blocked') {
+    return {
+      outcome: 'failed',
+      score: 0,
+      reason: 'guardrail_blocked',
+    };
+  }
+  // Deterministic score in [0,1]; threshold 0.6 ⇒ succeeded.
+  const score = Number((0.5 * confidence + 0.5 * histSuccess).toFixed(4));
+  return {
+    outcome: score >= 0.6 ? 'succeeded' : 'failed',
+    score,
+    reason: score >= 0.6 ? 'simulated_threshold_met' : 'simulated_threshold_not_met',
+  };
+}
+
+// settleObservations(db, userId, storeId) — on-demand (NON-cron) settlement.
+// For every observing suggestion whose next_eligible_at (observation window) has
+// passed, compute a deterministic simulated verdict, flip state to
+// succeeded/failed, persist settlement_meta with simulated=true, write an audit
+// log, and DO NOT touch real Amazon. Suggestions still inside their window are
+// left untouched. Returns a summary { settled, succeeded, failed, items }.
+export function settleObservations(db, userId, storeId, opts = {}) {
+  const nowMs = opts.nowMs != null ? Number(opts.nowMs) : Date.now();
+  const nowIsoStr = new Date(nowMs).toISOString();
+  const rows = db.prepare(
+    `SELECT * FROM ad_suggestions WHERE user_id=? AND store_id=? AND state='observing'`
+  ).all(userId, storeId);
+  const profile = getGoalProfile(db, userId, storeId);
+  const settledItems = [];
+  let succeeded = 0;
+  let failed = 0;
+  const update = db.prepare(
+    `UPDATE ad_suggestions SET state=?, settled_at=?, settlement_outcome=?, settlement_meta=? WHERE id=? AND user_id=? AND store_id=? AND state='observing'`
+  );
+  for (const r of rows) {
+    // Window not elapsed yet (or never set) → not eligible to settle.
+    const eligibleAt = r.next_eligible_at ? Date.parse(r.next_eligible_at) : NaN;
+    if (!Number.isFinite(eligibleAt) || eligibleAt > nowMs) continue;
+    const sug = rowToSuggestion(r, profile);
+    const verdict = simulateObservationOutcome(sug);
+    const settlementMeta = {
+      // Honest labelling: this is a deterministic simulation, NOT a measured real
+      // Amazon effect. Never present as real performance回流.
+      simulated: true,
+      source: 'mock',
+      adapter: 'm3_observation_settlement_v1',
+      realEffectMeasured: false,
+      settledAt: nowIsoStr,
+      observationWindowHours: sug.observationWindowHours ?? null,
+      nextEligibleAt: r.next_eligible_at,
+      acceptedAt: r.accepted_at,
+      score: verdict.score,
+      reason: verdict.reason,
+      guardrailStatus: sug.guardrail?.status || null,
+    };
+    const info = update.run(
+      verdict.outcome, nowIsoStr, verdict.outcome, JSON.stringify(settlementMeta),
+      r.id, userId, storeId
+    );
+    if (!info.changes) continue;
+    if (verdict.outcome === 'succeeded') succeeded += 1; else failed += 1;
+    // Audit trail — no token/secret, no real store side-effect.
+    appendAuditLog(userId, storeId, {
+      sourceModule: 'M3', actionType: 'TIMELINE_SETTLE', resourceType: 'ad_suggestion', resourceId: r.id,
+      status: 'completed',
+      outcome: verdict.outcome,
+      previousValues: { state: 'observing' },
+      sourceMeta: { simulated: true, source: 'mock', realEffectMeasured: false, adapter: 'm3_observation_settlement_v1' },
+    });
+    settledItems.push(getSuggestion(db, userId, storeId, r.id));
+  }
+  return {
+    settled: settledItems.length,
+    succeeded,
+    failed,
+    simulated: true,
+    realEffectMeasured: false,
+    items: settledItems,
+  };
+}
+
+// ============================================================
+// Action Queue CRUD — execution basket for Strategy OS
+// ============================================================
+export function listActionQueue(db, userId, storeId, filters = {}) {
+  let sql = 'SELECT * FROM ad_action_queue WHERE user_id = ? AND store_id = ? AND removed_at IS NULL';
+  const params = [userId, storeId];
+  if (filters.state) { sql += ' AND state = ?'; params.push(filters.state); }
+  if (filters.suggestionId) { sql += ' AND suggestion_id = ?'; params.push(filters.suggestionId); }
+  sql += ' ORDER BY priority_score DESC, created_at ASC';
+  return db.prepare(sql).all(...params).map(rowToActionQueueItem);
+}
+
+export function getActionQueueItem(db, userId, storeId, id) {
+  const r = db.prepare('SELECT * FROM ad_action_queue WHERE id=? AND user_id=? AND store_id=?').get(id, userId, storeId);
+  return rowToActionQueueItem(r);
+}
+
+export function listActionRuns(db, userId, storeId, filters = {}) {
+  let sql = 'SELECT * FROM ad_action_runs WHERE user_id = ? AND store_id = ?';
+  const params = [userId, storeId];
+  if (filters.queueItemId) { sql += ' AND queue_item_id = ?'; params.push(filters.queueItemId); }
+  if (filters.batchId) { sql += ' AND batch_id = ?'; params.push(filters.batchId); }
+  sql += ' ORDER BY created_at DESC';
+  return db.prepare(sql).all(...params).map(rowToActionRun);
+}
+
+export function enqueueSuggestionAction(db, userId, storeId, suggestionId, body = {}) {
+  const s = getSuggestion(db, userId, storeId, suggestionId);
+  if (!s) return null;
+  const active = db.prepare(`SELECT * FROM ad_action_queue
+    WHERE user_id=? AND store_id=? AND suggestion_id=? AND removed_at IS NULL
+      AND state IN ('queued','approved','executing')`).get(userId, storeId, suggestionId);
+  if (active) return { ...rowToActionQueueItem(active), duplicate: true };
+  const id = body.id || newId('aq');
+  const now = nowIso();
+  const priority = body.priorityScore ?? buildActionPriority(s);
+  db.prepare(`INSERT INTO ad_action_queue(
+    id, user_id, store_id, suggestion_id, source_strategy_id, source_strategy_name,
+    state, priority_score, severity, entity, typed_action, evidence_refs, guardrail,
+    rollback_plan, impact_estimate, source_meta, confidence_breakdown,
+    dry_run, audit_required, note, created_at, updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      id, userId, storeId, s.id, s.sourceStrategyId || null, s.sourceStrategyName || null,
+      body.state || 'queued', priority,
+      JSON.stringify(s.severity || null), JSON.stringify(s.entity || {}),
+      JSON.stringify(s.typedAction || null), JSON.stringify(s.evidenceRefs || []),
+      JSON.stringify(s.guardrail || null), JSON.stringify(s.rollback || s.rollbackPlan || null),
+      JSON.stringify(s.impactEstimate || null), JSON.stringify(s.sourceMeta || null),
+      JSON.stringify(s.confidenceBreakdown || null),
+      s.typedAction?.dryRun === false ? 0 : 1,
+      s.typedAction?.auditRequired === false ? 0 : 1,
+      body.note || null, now, now
+    );
+  appendAuditLog(userId, storeId, {
+    sourceModule: 'M3', actionType: 'ACTION_QUEUE_ADD',
+    resourceType: 'ad_action_queue', resourceId: id,
+    suggestionId: s.id,
+    payload: { typedAction: s.typedAction, guardrail: s.guardrail, rollback: s.rollback || s.rollbackPlan },
+  });
+  return getActionQueueItem(db, userId, storeId, id);
+}
+
+export function enqueueManualAction(db, userId, storeId, body = {}) {
+  const typedAction = body.typedAction || null;
+  if (!typedAction || typeof typedAction !== 'object') throw new TypeError('typedAction required');
+  const entity = body.entity && typeof body.entity === 'object' ? body.entity : {};
+
+  // M3-P1-10: dedupe active manual actions on
+  // (storeId, entityKind, resourceId, actionPrimitive). Key granularity for
+  // this phase: one active action per (entity, primitive).
+  const entityKind = entity.kind || typedAction.entityKind || null;
+  const resourceId = entity.id || typedAction.resourceId || null;
+  const actionPrimitive = typedAction.actionPrimitive || null;
+  if (entityKind && resourceId && actionPrimitive) {
+    const existing = listActionQueue(db, userId, storeId).find((item) => (
+      ['queued', 'approved', 'executing'].includes(item.state)
+      && (item.entity?.kind || item.typedAction?.entityKind || null) === entityKind
+      && (item.entity?.id || item.typedAction?.resourceId || null) === resourceId
+      && (item.typedAction?.actionPrimitive || null) === actionPrimitive
+    ));
+    if (existing) return { ...existing, duplicate: true, existing };
+  }
+
+  const id = body.id || newId('aq');
+  const now = nowIso();
+  // M3-P0-04: server-side authoritative guardrail. body.guardrail / body.state
+  // are NOT trusted — a raw POST can forge status='passed'. lx / non-system
+  // sources are always state='queued'; the guardrail is recomputed server-side
+  // (buildGuardrailResult). Since manual/LX writes have no decided auto-execute
+  // threshold this phase, they hard-land needs_review. body.guardrail may only
+  // be echoed for display, never persisted as authoritative.
+  let guardrail;
+  try {
+    const computed = buildGuardrailResult(
+      { confidence: 0.5, severity: body.severity, entity, evidenceRefs: body.evidenceRefs },
+      typedAction,
+      getGoalProfile(db, userId, storeId),
+    );
+    guardrail = computed && computed.status === 'passed'
+      ? { ...computed, status: 'needs_review', reasons: Array.from(new Set([...(computed.reasons || []), 'manual_lx_write_requires_action_queue'])) }
+      : computed;
+  } catch {
+    guardrail = null;
+  }
+  if (!guardrail || guardrail.status === 'passed') {
+    guardrail = { status: 'needs_review', reasons: ['manual_lx_write_requires_action_queue'] };
+  }
+  const rollbackPlan = body.rollbackPlan || body.rollback || {
+    method: 'manual_revert_required',
+    needsManualReview: true,
+  };
+  db.prepare(`INSERT INTO ad_action_queue(
+    id, user_id, store_id, suggestion_id, source_strategy_id, source_strategy_name,
+    state, priority_score, severity, entity, typed_action, evidence_refs, guardrail,
+    rollback_plan, impact_estimate, source_meta, confidence_breakdown,
+    dry_run, audit_required, note, created_at, updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      id, userId, storeId, null, body.sourceStrategyId || null, body.sourceStrategyName || 'LX manual operation',
+      'queued', body.priorityScore ?? 50,
+      JSON.stringify(body.severity || { level: 'medium', reason: 'manual_lx_write' }),
+      JSON.stringify(entity),
+      JSON.stringify({
+        dryRun: true,
+        auditRequired: true,
+        ...typedAction,
+      }),
+      JSON.stringify(Array.isArray(body.evidenceRefs) ? body.evidenceRefs : []),
+      JSON.stringify(guardrail),
+      JSON.stringify(rollbackPlan),
+      JSON.stringify(body.impactEstimate || { type: 'manual_review_required' }),
+      JSON.stringify(body.sourceMeta || { source: 'lx-ui', mode: 'queued-not-written' }),
+      JSON.stringify(body.confidenceBreakdown || { evidence: 'operator_input', confidence: 0.7 }),
+      1,
+      1,
+      body.note || null, now, now
+    );
+  appendAuditLog(userId, storeId, {
+    sourceModule: 'M3',
+    actionType: 'ACTION_QUEUE_ADD_MANUAL',
+    resourceType: 'ad_action_queue',
+    resourceId: id,
+    payload: { typedAction, entity, guardrail, rollbackPlan },
+  });
+  return getActionQueueItem(db, userId, storeId, id);
+}
+
+export function approveActionQueueItem(db, userId, storeId, id, body = {}) {
+  const cur = getActionQueueItem(db, userId, storeId, id);
+  if (!cur || cur.removedAt) return null;
+  if (cur.state === 'approved') return cur;
+  if (!['queued', 'reverted'].includes(cur.state)) throw new TypeError('action_queue_state_not_approvable');
+  // M3-P0-03: approval is gated on a passing guardrail. needs_review/blocked
+  // items can never be approved here — this is the second auto-approve entry
+  // point that previously bypassed the guardrail.
+  if (cur.guardrail?.status !== 'passed') throw new TypeError('approve_requires_passed_guardrail');
+  const now = nowIso();
+  db.prepare(`UPDATE ad_action_queue SET state='approved', approved_at=?, note=COALESCE(?, note), updated_at=? WHERE id=? AND user_id=? AND store_id=?`)
+    .run(now, body.note || null, now, id, userId, storeId);
+  appendAuditLog(userId, storeId, {
+    sourceModule: 'M3', actionType: 'ACTION_QUEUE_APPROVE',
+    resourceType: 'ad_action_queue', resourceId: id,
+    previousValues: { state: cur.state },
+  });
+  return getActionQueueItem(db, userId, storeId, id);
+}
+
+export function removeActionQueueItem(db, userId, storeId, id, body = {}) {
+  const cur = getActionQueueItem(db, userId, storeId, id);
+  if (!cur || cur.removedAt) return null;
+  if (cur.state === 'executed') throw new TypeError('executed_action_queue_item_cannot_be_removed');
+  const now = nowIso();
+  db.prepare(`UPDATE ad_action_queue SET state='removed', removed_at=?, note=COALESCE(?, note), updated_at=? WHERE id=? AND user_id=? AND store_id=?`)
+    .run(now, body.reason || body.note || null, now, id, userId, storeId);
+  appendAuditLog(userId, storeId, {
+    sourceModule: 'M3', actionType: 'ACTION_QUEUE_REMOVE',
+    resourceType: 'ad_action_queue', resourceId: id,
+    reason: body.reason,
+    previousValues: { state: cur.state },
+  });
+  return getActionQueueItem(db, userId, storeId, id);
+}
+
+export function executeActionQueueItem(db, userId, storeId, id, body = {}) {
+  const cur = getActionQueueItem(db, userId, storeId, id);
+  if (!cur || cur.removedAt) return null;
+  if (cur.state === 'executed') return cur;
+  if (cur.guardrail?.status === 'blocked' && !body.force) throw new TypeError('guardrail_blocked');
+  if (cur.guardrail?.status === 'needs_review' && cur.state !== 'approved' && !body.force) throw new TypeError('approval_required');
+  if (!['queued', 'approved', 'reverted'].includes(cur.state)) throw new TypeError('action_queue_state_not_executable');
+
+  const batchId = body.batchId || newId('batch');
+  const runId = newId('ar');
+  const now = nowIso();
+  // M3-P1-09: this is the dry-run-only internal executor. Real Amazon writes
+  // are exclusively handled by live-action-executor (executeRealAdsActionQueueItem)
+  // behind isRealMode(). dryRun is hard-pinned to 1 here — body.realWriteEnabled
+  // is intentionally ignored so this path can never produce a real or fake write.
+  const dryRun = 1;
+  const requestPayload = {
+    queueItemId: id,
+    suggestionId: cur.suggestionId,
+    typedAction: cur.typedAction,
+    guardrail: cur.guardrail,
+    dryRun: true,
+  };
+  const responsePayload = {
+    dryRun: true,
+    acceptedSuggestion: !!cur.suggestionId,
+    message: 'dry_run_success_no_external_write',
+  };
+
+  db.prepare(`INSERT INTO ad_action_runs(
+    id, user_id, store_id, queue_item_id, batch_id, action_type, status, dry_run,
+    request_payload, response_payload, error_message, created_at, completed_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      runId, userId, storeId, id, batchId, cur.typedAction?.actionPrimitive || null,
+      'dry_run_success',
+      dryRun,
+      JSON.stringify(requestPayload), JSON.stringify(responsePayload), null, now, now
+    );
+  db.prepare(`UPDATE ad_action_queue SET state='executed', executed_at=?, updated_at=? WHERE id=? AND user_id=? AND store_id=?`)
+    .run(now, now, id, userId, storeId);
+
+  if (cur.suggestionId) {
+    acceptSuggestion(db, userId, storeId, cur.suggestionId, {
+      chosenAlternativeIndex: body.chosenAlternativeIndex ?? 0,
+      queueItemId: id,
+      dryRun: !!dryRun,
+    });
+  }
+  appendAuditLog(userId, storeId, {
+    sourceModule: 'M3', actionType: 'ACTION_QUEUE_EXECUTE',
+    resourceType: 'ad_action_queue', resourceId: id,
+    batchId,
+    payload: requestPayload,
+    result: responsePayload,
+  });
+  return { ...getActionQueueItem(db, userId, storeId, id), latestRun: getActionRunById(db, userId, storeId, runId), batchId };
+}
+
+function getActionRunById(db, userId, storeId, id) {
+  return rowToActionRun(db.prepare('SELECT * FROM ad_action_runs WHERE id=? AND user_id=? AND store_id=?').get(id, userId, storeId));
+}
+
+// Redact LWA/refresh/access tokens from any payload before it is persisted to
+// ad_action_runs / audit_logs. Tokens must never land in DB columns (X-P2-02).
+const TOKEN_PATTERN = /(Atzr\|[A-Za-z0-9._~+/=-]+|Atza\|[A-Za-z0-9._~+/=-]+)/g;
+const SENSITIVE_KEY_PATTERN = /(refresh_?token|access_?token|authorization|client_?secret|bearer)/i;
+
+export function sanitizePersistedPayload(value, seen = new WeakSet()) {
+  if (value == null) return value;
+  if (typeof value === 'string') return value.replace(TOKEN_PATTERN, '[REDACTED]');
+  if (typeof value !== 'object') return value;
+  if (seen.has(value)) return undefined;
+  seen.add(value);
+  if (Array.isArray(value)) return value.map((v) => sanitizePersistedPayload(v, seen));
+  const out = {};
+  for (const [k, v] of Object.entries(value)) {
+    if (SENSITIVE_KEY_PATTERN.test(k)) { out[k] = '[REDACTED]'; continue; }
+    out[k] = sanitizePersistedPayload(v, seen);
+  }
+  return out;
+}
+
+export function recordActionQueueExternalResult(db, userId, storeId, id, result = {}) {
+  const cur = getActionQueueItem(db, userId, storeId, id);
+  if (!cur || cur.removedAt) return null;
+  const batchId = result.batchId || newId('batch');
+  const runId = result.runId || newId('ar');
+  const now = nowIso();
+  const status = result.status || (result.errorMessage ? 'failed' : 'real_write_success');
+  const dryRun = result.dryRun === undefined ? false : !!result.dryRun;
+  const requestPayload = result.requestPayload || {
+    queueItemId: id,
+    suggestionId: cur.suggestionId,
+    typedAction: cur.typedAction,
+    guardrail: cur.guardrail,
+    dryRun,
+  };
+  const responsePayload = result.responsePayload || null;
+  // Token-redact before any DB write (X-P2-02): refresh/access tokens must not
+  // be persisted in request_payload / response_payload columns.
+  const safeRequestPayload = sanitizePersistedPayload(requestPayload);
+  const safeResponsePayload = responsePayload ? sanitizePersistedPayload(responsePayload) : null;
+
+  db.prepare(`INSERT INTO ad_action_runs(
+    id, user_id, store_id, queue_item_id, batch_id, action_type, status, dry_run,
+    request_payload, response_payload, error_message, created_at, completed_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      runId, userId, storeId, id, batchId, cur.typedAction?.actionPrimitive || null,
+      status, dryRun ? 1 : 0,
+      JSON.stringify(safeRequestPayload), safeResponsePayload ? JSON.stringify(safeResponsePayload) : null,
+      sanitizePersistedPayload(result.errorMessage) || null, now, now
+    );
+
+  if (!result.errorMessage && result.markExecuted !== false) {
+    db.prepare(`UPDATE ad_action_queue SET state='executed', executed_at=?, updated_at=? WHERE id=? AND user_id=? AND store_id=?`)
+      .run(now, now, id, userId, storeId);
+    if (cur.suggestionId) {
+      acceptSuggestion(db, userId, storeId, cur.suggestionId, {
+        chosenAlternativeIndex: result.chosenAlternativeIndex ?? 0,
+        queueItemId: id,
+        dryRun,
+      });
+    }
+  }
+
+  appendAuditLog(userId, storeId, {
+    sourceModule: 'M3',
+    actionType: result.auditActionType || (dryRun ? 'ACTION_QUEUE_DRY_RUN' : 'ACTION_QUEUE_REAL_WRITE'),
+    resourceType: 'ad_action_queue',
+    resourceId: id,
+    batchId,
+    payload: safeRequestPayload,
+    result: safeResponsePayload,
+    status: result.errorMessage ? 'failed' : 'success',
+    errorMessage: sanitizePersistedPayload(result.errorMessage) || null,
+    origin: dryRun ? 'mock-seed' : 'ads-real-write',
+  });
+
+  return { ...getActionQueueItem(db, userId, storeId, id), latestRun: getActionRunById(db, userId, storeId, runId), batchId };
+}
+
+export function executeActionQueueBatch(db, userId, storeId, body = {}) {
+  const batchId = body.batchId || newId('batch');
+  const ids = Array.isArray(body.ids) && body.ids.length
+    ? body.ids
+    : listActionQueue(db, userId, storeId, { state: body.state || null }).filter((x) => ['queued', 'approved'].includes(x.state)).map((x) => x.id);
+  const items = [];
+  const skipped = [];
+  for (const id of ids) {
+    try {
+      if (body.approve === true) {
+        const cur = getActionQueueItem(db, userId, storeId, id);
+        // M3-P0-02: batch approve only releases queued items whose guardrail
+        // passed. needs_review / blocked items are skipped (not approved, not
+        // executed) and surfaced in skipped[] — never silently auto-approved.
+        if (cur && cur.state === 'queued' && cur.guardrail?.status !== 'passed') {
+          skipped.push({ id, reason: `guardrail_${cur.guardrail?.status || 'unknown'}` });
+          continue;
+        }
+        if (cur && cur.state === 'queued') approveActionQueueItem(db, userId, storeId, id, { note: 'batch approve' });
+      }
+      items.push({ id, ok: true, item: executeActionQueueItem(db, userId, storeId, id, { ...body, batchId }) });
+    } catch (err) {
+      const msg = String(err?.message || err);
+      const runId = newId('ar');
+      const now = nowIso();
+      db.prepare(`INSERT INTO ad_action_runs(
+        id, user_id, store_id, queue_item_id, batch_id, action_type, status, dry_run,
+        request_payload, response_payload, error_message, created_at, completed_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+          runId, userId, storeId, id, batchId, null, 'failed', 1,
+          JSON.stringify({ queueItemId: id, dryRun: true }), null, msg, now, now
+        );
+      items.push({ id, ok: false, error: msg });
+    }
+  }
+  return {
+    batchId,
+    total: items.length,
+    succeeded: items.filter((x) => x.ok).length,
+    failed: items.filter((x) => !x.ok).length,
+    skipped,
+    items,
+  };
+}
+
+export function revertActionQueueItem(db, userId, storeId, id, body = {}) {
+  const cur = getActionQueueItem(db, userId, storeId, id);
+  if (!cur || cur.removedAt) return null;
+  if (cur.state !== 'executed') throw new TypeError('only_executed_queue_item_can_revert');
+  // X-P0-01 (queue parity): a real Amazon write cannot be silently flipped to
+  // 'reverted'. There is no real inverse-write executor, so block and require
+  // manual reversal rather than fake a rollback.
+  const lastRealRun = db.prepare(
+    `SELECT status, dry_run FROM ad_action_runs WHERE user_id=? AND store_id=? AND queue_item_id=? ORDER BY created_at DESC LIMIT 1`
+  ).get(userId, storeId, id);
+  if (lastRealRun && lastRealRun.dry_run === 0 && lastRealRun.status === 'real_write_success' && body.force !== true) {
+    const err = new TypeError('real_write_revert_requires_manual_reversal');
+    err.needsManualReversal = true;
+    throw err;
+  }
+  const now = nowIso();
+  if (cur.suggestionId) {
+    const sug = getSuggestion(db, userId, storeId, cur.suggestionId);
+    if (sug && sug.state !== 'pending') revertSuggestion(db, userId, storeId, cur.suggestionId, { reason: body.reason || 'action queue revert' });
+  }
+  db.prepare(`UPDATE ad_action_queue SET state='reverted', reverted_at=?, note=COALESCE(?, note), updated_at=? WHERE id=? AND user_id=? AND store_id=?`)
+    .run(now, body.reason || null, now, id, userId, storeId);
+  const runId = newId('ar');
+  db.prepare(`INSERT INTO ad_action_runs(
+    id, user_id, store_id, queue_item_id, batch_id, action_type, status, dry_run,
+    request_payload, response_payload, error_message, created_at, completed_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      runId, userId, storeId, id, body.batchId || null, cur.typedAction?.actionPrimitive || null,
+      'reverted', 1,
+      JSON.stringify({ queueItemId: id, reason: body.reason || null }),
+      JSON.stringify({ reverted: true, method: cur.rollback?.method || cur.rollbackPlan?.method || null }),
+      null, now, now
+    );
+  appendAuditLog(userId, storeId, {
+    sourceModule: 'M3', actionType: 'ACTION_QUEUE_REVERT',
+    resourceType: 'ad_action_queue', resourceId: id,
+    reason: body.reason,
+    previousValues: { state: cur.state },
+  });
+  return { ...getActionQueueItem(db, userId, storeId, id), latestRun: getActionRunById(db, userId, storeId, runId) };
 }
 
 // ============================================================
@@ -1427,6 +2695,9 @@ export function deleteCampaign(db, userId, storeId, id) {
   tx();
   return true;
 }
+// M3-P2-18 boundary: LOCAL DB mutation of the lx_campaigns mirror ONLY.
+// This never touches Amazon. The sole path that writes to Amazon is
+// live-action-executor.mjs, gated by assertRealWriteGate + isRealMode().
 export function toggleCampaign(db, userId, storeId, id, enabled) {
   const cur = getCampaign(db, userId, storeId, id);
   if (!cur) return null;
@@ -1443,6 +2714,9 @@ export function toggleCampaign(db, userId, storeId, id, enabled) {
   tx();
   return getCampaign(db, userId, storeId, id);
 }
+// M3-P2-18 boundary: LOCAL DB mutation only (lx_campaigns mirror + manual-change
+// record). Never an Amazon write — real Amazon budget writes go through
+// live-action-executor.executeCampaignBudget behind the gate.
 export function updateCampaignBudget(db, userId, storeId, id, dailyBudget, source = 'our-tool') {
   const cur = getCampaign(db, userId, storeId, id);
   if (!cur) return null;
@@ -1689,6 +2963,8 @@ export function deleteTargeting(db, userId, storeId, id) {
   tx();
   return true;
 }
+// M3-P2-18 boundary: LOCAL DB mutation only (lx_targetings mirror). Real Amazon
+// bid writes go through live-action-executor.executeKeywordBid behind the gate.
 export function updateTargetingBid(db, userId, storeId, id, bid) {
   return updateTargeting(db, userId, storeId, id, { bid });
 }
@@ -1762,6 +3038,9 @@ export function listUserSearchTerms(db, userId, storeId, filters = {}) {
   if (filters.campaignId) { sql += ' AND campaign_id = ?'; params.push(filters.campaignId); }
   return db.prepare(sql).all(...params).map(rowToUst);
 }
+// M3-P2-18 boundary: LOCAL DB mutation only (creates a local lx_targetings row).
+// Never an Amazon write — promotion to Amazon happens via the action queue +
+// live-action-executor behind the gate.
 export function promoteUserSearchTerm(db, userId, storeId, body) {
   // Promote: create a new targeting in the chosen ad group with the search term as a keyword
   const id = newId('t');
@@ -1935,6 +3214,10 @@ export function listSearchTermReports(db, userId, storeId, filters = {}) {
   let sql = 'SELECT * FROM search_term_reports WHERE user_id = ? AND store_id = ?';
   const params = [userId, storeId];
   if (filters.campaignId) { sql += ' AND campaign_id = ?'; params.push(filters.campaignId); }
+  if (filters.asin) { sql += ' AND asin = ?'; params.push(filters.asin); }
+  if (filters.sku) { sql += ' AND sku = ?'; params.push(filters.sku); }
+  if (filters.from) { sql += ' AND reporting_date >= ?'; params.push(filters.from); }
+  if (filters.to) { sql += ' AND reporting_date <= ?'; params.push(filters.to); }
   if (filters.period) { sql += ' AND reporting_period = ?'; params.push(filters.period); }
   return db.prepare(sql).all(...params).map(rowToStr);
 }
@@ -2348,7 +3631,7 @@ export function revertM3Action(db, userId, storeId, logRow) {
 // Cleanup hook (for removeUserStore)
 // ============================================================
 export const ADS_TABLES_TO_CLEAN = [
-  'ad_strategies', 'ad_suggestions', 'ad_manual_changes',
+  'ad_strategies', 'ad_goal_profiles', 'ad_suggestions', 'ad_action_queue', 'ad_action_runs', 'ad_manual_changes',
   'lx_portfolios', 'lx_campaigns', 'lx_ad_groups', 'lx_ads',
   'lx_targetings', 'lx_negatives', 'lx_user_search_terms',
   'lx_operation_logs', 'lx_daily_data', 'lx_kw_grabbing',

@@ -4,7 +4,7 @@
 import {
   authenticate, registerUser, createPasswordResetToken, resetPassword,
   whoAmI, logout,
-  listUserStores, addUserStore, updateUserStore, removeUserStore, defaultStoreIdFor,
+  listUserStores, addUserStore, updateUserStore, removeUserStore, defaultStoreIdFor, resolveStoreScope,
   listAuditLogs, countAuditLogs, appendAuditLog, revertAuditLog,
   listKeywords, addKeyword, removeKeyword,
   listAlerts, addAlert, updateAlert, removeAlert,
@@ -40,8 +40,9 @@ function getUserFromRequest(request) {
 function requireAuth(request) {
   const u = getUserFromRequest(request);
   if (!u) return { error: json({ error: 'unauthorized' }, 401) };
-  const storeId = request.headers.get('x-store-id') || defaultStoreIdFor(u.id) || '';
-  return { user: u, storeId };
+  const scope = resolveStoreScope(u.id, request.headers.get('x-store-id'));
+  if (scope.error) return { error: json({ error: 'store_not_owned' }, 403) };
+  return { user: u, storeId: scope.storeId };
 }
 
 export async function handleStoreRequest(request) {
@@ -126,7 +127,11 @@ export async function handleStoreRequest(request) {
     }
     if (method === 'DELETE') {
       const ok = removeUserStore(a.user.id, storeMatch[1]);
-      return json({ ok }, ok ? 200 : 400);
+      // X-P1-08: blocked when un-reverted real writes exist → 409.
+      if (ok && typeof ok === 'object' && ok.blocked) {
+        return json({ error: ok.error, message: '存在未回滚的真实写入，删店已阻断', blocked: true }, 409);
+      }
+      return json({ ok: !!ok }, ok ? 200 : 400);
     }
   }
 
@@ -158,6 +163,11 @@ export async function handleStoreRequest(request) {
     const body = await readJson(request);
     const log = revertAuditLog(a.user.id, a.storeId, auditRevertMatch[1], body.reason);
     if (!log) return json({ error: 'not_found' }, 404);
+    // X-P0-01: real-write reverts that did not actually dispatch an inverse write
+    // must NOT report success — surface as 409 so the UI prompts manual reversal.
+    if (log.needsManualReversal === true) {
+      return json({ error: 'revert_failed', message: '申请人工回滚', ...log }, 409);
+    }
     return json(log);
   }
 

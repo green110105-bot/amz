@@ -3,7 +3,18 @@
 // 需 Bearer token + X-Store-Id; 写操作走 appendAuditLog(sourceModule='M4').
 
 import { securityHeaders } from './security.mjs';
-import { whoAmI, defaultStoreIdFor, getDbInstance } from './data-store.mjs';
+import { whoAmI, defaultStoreIdFor, getDbInstance, resolveStoreScope } from './data-store.mjs';
+import { providerMode, realWritesEnabled } from './integrations/provider-mode.mjs';
+
+// X-P0-04 / M4-P0-05: the server alone decides whether a real store write is requested
+// for an M4 -> Ads linked action. When real writes are not enabled the flag is hard-
+// forced false; the frontend body flag is never trusted on its own.
+function clampRealWriteBody(body = {}) {
+  return {
+    ...body,
+    requiresRealStoreWrite: realWritesEnabled() ? body.requiresRealStoreWrite === true : false,
+  };
+}
 import {
   // Anomalies
   listAnomalies, anomalySummary, getAnomaly,
@@ -55,9 +66,12 @@ function requireAuth(request) {
   if (!token) return { error: json({ error: 'unauthorized' }, 401) };
   const u = whoAmI(token);
   if (!u) return { error: json({ error: 'unauthorized' }, 401) };
-  const storeId = request.headers.get('x-store-id') || defaultStoreIdFor(u.id) || '';
-  if (!storeId) return { error: json({ error: 'store_required' }, 403) };
-  return { user: u, userId: u.id, storeId };
+  // X-P1-04: x-store-id ownership check. A spoofed store-id owned by another tenant
+  // must be rejected with 403 store_not_owned, never silently honored.
+  const scope = resolveStoreScope(u.id, request.headers.get('x-store-id'));
+  if (scope.error) return { error: json({ error: 'store_not_owned' }, 403) };
+  if (!scope.storeId) return { error: json({ error: 'store_required' }, 403) };
+  return { user: u, userId: u.id, storeId: scope.storeId };
 }
 function notFound() { return json({ error: 'not_found' }, 404); }
 function badReq(message) { return json({ error: 'validation_failed', message }, 400); }
@@ -71,6 +85,233 @@ function mapResult(r) {
   if (r.error === 'conflict') return json(r, 409);
   if (r.error === 'not_found') return notFound();
   return json(r);
+}
+
+// ============================================================
+// M4 Daily Report (read-only operating snapshot)
+//
+// X-P1-02: dailySourceMetaFor decouples mock/real判定 from providerMode. There is NO
+// `mode==='real'` hard gate — a dimension is "real" iff there is a genuine successful
+// real sync row for its backing provider (hasSuccessfulSync). Under 'hybrid' a dimension
+// with a successful spapi/ads sync therefore reports mock:false; a dimension that is
+// always pseudo-random (competitorBsr/categoryRank — M4-P1-05 / M4-P2-05) is forced
+// mock:true regardless of providerMode.
+// ============================================================
+function hasSuccessfulSync(db, userId, storeId, provider) {
+  try {
+    const row = db.prepare(
+      "SELECT 1 FROM sync_runs WHERE user_id=? AND store_id=? AND provider=? AND status='success' LIMIT 1"
+    ).get(userId, storeId, provider);
+    return !!row;
+  } catch {
+    return false;
+  }
+}
+
+function dailySourceMetaFor(db, userId, storeId) {
+  const mode = providerMode();
+  const spapiReal = hasSuccessfulSync(db, userId, storeId, 'spapi');
+  const adsReal = hasSuccessfulSync(db, userId, storeId, 'ads')
+    || hasSuccessfulSync(db, userId, storeId, 'ads-api')
+    || hasSuccessfulSync(db, userId, storeId, 'adsApi');
+  const meta = (mock, provider) => ({ mock, provider, mode });
+  return {
+    // spapi-backed sales dimensions: real iff a successful spapi sync exists.
+    sales: meta(!spapiReal, 'spapi'),
+    gmv: meta(!spapiReal, 'spapi'),
+    rating: meta(!spapiReal, 'spapi'),
+    // ads-backed spend dimension.
+    adSpend: meta(!adsReal, 'ads'),
+    // M4-P1-05 / M4-P2-05: competitor BSR (示意) + its legacy categoryRank alias are
+    // produced by deterministic pseudo-random seeding with no real collector → always mock.
+    competitorBsr: meta(true, 'pseudo_random'),
+    categoryRank: meta(true, 'pseudo_random'),
+    // alerts are derived from anomaly/notification tables (locally stored) → not a real
+    // Amazon read, treated as non-real provenance for the realDataOnly gate.
+    alerts: meta(true, 'local'),
+    // B-5: recovered (已挽回) is a simulated per-review projection → always mock/simulated.
+    recovered: meta(true, 'simulated'),
+  };
+}
+
+// B-5: 已挽回口径水印 — recovered amount MUST be split into estimated vs realized
+//双字段, never collapsed into a single ambiguous "已挽回¥X". `realized` counts only
+// recovery emails whose buyer actually replied with an updated review
+// (status='review_updated'); `estimated` is a modeled projection over the in-flight
+// recovery backlog (drafted/marked_sent/replied but not yet review_updated). Because no
+// real Amazon refund/GMV figure is wired, BOTH numbers are simulated and MUST carry a
+// '模拟/预估' watermark so they are never presented as realized cash to外部.
+const RECOVERED_PER_REVIEW_ESTIMATE = 120; // simulated per-review recovery value (USD)
+
+function recoveredImpactFor(db, userId, storeIds) {
+  let realizedCount = 0;
+  let estimatedCount = 0;
+  for (const sid of storeIds) {
+    try {
+      const realized = db.prepare(
+        "SELECT COUNT(*) AS n FROM m4_recovery_emails WHERE user_id=? AND store_id=? AND status='review_updated'"
+      ).get(userId, sid);
+      realizedCount += realized?.n || 0;
+      // in-flight backlog: every started recovery that has not yet realized a review update.
+      const inflight = db.prepare(
+        "SELECT COUNT(*) AS n FROM m4_recovery_emails WHERE user_id=? AND store_id=? AND status NOT IN ('review_updated','dismissed','cancelled')"
+      ).get(userId, sid);
+      estimatedCount += inflight?.n || 0;
+    } catch { /* table may not exist yet */ }
+  }
+  return {
+    // realized: based on actually recorded buyer review updates (still modeled $, hence simulated).
+    realized: realizedCount * RECOVERED_PER_REVIEW_ESTIMATE,
+    realizedCount,
+    // estimated: projection over the in-flight backlog — strictly a forecast, not cash.
+    estimated: estimatedCount * RECOVERED_PER_REVIEW_ESTIMATE,
+    estimatedCount,
+    currency: 'USD',
+    simulated: true,
+    mock: true,
+    basis: 'simulated_per_review_estimate',
+    perReviewEstimate: RECOVERED_PER_REVIEW_ESTIMATE,
+    // 对外不混淆: explicit watermark text the UI must surface verbatim.
+    watermark: '模拟/预估',
+    disclaimer: '已挽回金额为模拟/预估口径, 非真实退款或 GMV; realized 仅统计已确认的评价更新, estimated 为在途挽回的预估。',
+  };
+}
+
+export function buildDailyReport(db, userId, storeId, { storeIds, date, linkId, triggerType } = {}) {
+  const reportDate = date || new Date().toISOString().slice(0, 10);
+
+  // available stores (multi-store aware), but we render the requested store(s).
+  const storeRows = db.prepare(
+    'SELECT id, name, region, currency FROM user_stores WHERE user_id=? AND store_archived_at IS NULL ORDER BY added_at'
+  ).all(userId);
+  const availableStores = storeRows.map((s) => ({ id: s.id, name: s.name, region: s.region, currency: s.currency }));
+
+  let availableLinks = [];
+  try {
+    availableLinks = db.prepare(
+      'SELECT id, store_id FROM m2_inventory_link_config WHERE user_id=? ORDER BY updated_at DESC'
+    ).all(userId).map((l) => ({ id: l.id, storeId: l.store_id, label: l.id }));
+  } catch { availableLinks = []; }
+
+  // resolve the target store list.
+  const allStoreIds = storeRows.map((s) => s.id);
+  let targetStoreIds;
+  if (!storeIds || storeIds === 'all') targetStoreIds = allStoreIds.length ? allStoreIds : [storeId];
+  else targetStoreIds = storeIds.split(',').filter((x) => allStoreIds.includes(x));
+  if (!targetStoreIds.length) targetStoreIds = [storeId];
+
+  const sourceMeta = dailySourceMetaFor(db, userId, storeId);
+
+  // Deterministic per-store summary derived from locally available rows (read-only).
+  const perStore = targetStoreIds.map((sid) => {
+    const s = storeRows.find((r) => r.id === sid) || { id: sid, name: sid, region: '', currency: 'USD' };
+    // alerts: M4-P2-02 — dedup anomaly+notification of the SAME event by
+    // related_resource_type + related_resource_id so one event counts once.
+    const openAnomalies = db.prepare(
+      "SELECT id FROM m4_anomalies WHERE user_id=? AND store_id=? AND status NOT IN ('resolved','dismissed','closed')"
+    ).all(userId, sid);
+    const anomalyKeys = new Set(openAnomalies.map((a) => 'anomaly:' + a.id));
+    let notifs = [];
+    try {
+      notifs = db.prepare(
+        'SELECT related_resource_type, related_resource_id FROM m4_notifications WHERE user_id=? AND store_id=?'
+      ).all(userId, sid);
+    } catch { notifs = []; }
+    let extraAlertKeys = 0;
+    const seen = new Set(anomalyKeys);
+    for (const n of notifs) {
+      const key = (n.related_resource_type || 'notif') + ':' + (n.related_resource_id || '');
+      if (n.related_resource_id && seen.has(key)) continue; // deduped against same-event anomaly
+      if (seen.has(key)) continue;
+      seen.add(key);
+      extraAlertKeys++;
+    }
+    const alerts = anomalyKeys.size + extraAlertKeys;
+
+    // sales/gmv/adSpend/rating from available rows (best-effort, read-only).
+    let unitsSold = 0, gmv = 0, adSpend = 0, avgRating = 0;
+    try {
+      const r = db.prepare('SELECT AVG(rating) AS avg FROM reviews WHERE user_id=? AND store_id=?').get(userId, sid);
+      avgRating = Math.round((r?.avg || 0) * 100) / 100;
+    } catch {}
+
+    // competitorBsr (示意): single-competitor lock — pick the latest competitor_asin and
+    // compare ONLY against that same competitor's previous snapshot (M4-P1-05).
+    let competitorBsr = null, competitorBsrDelta = null;
+    try {
+      const latest = db.prepare(
+        'SELECT competitor_asin, bsr, snapshot_at FROM m4_competitor_snapshots WHERE user_id=? AND store_id=? AND bsr IS NOT NULL ORDER BY snapshot_at DESC LIMIT 1'
+      ).get(userId, sid);
+      if (latest) {
+        competitorBsr = latest.bsr;
+        const prev = db.prepare(
+          'SELECT bsr FROM m4_competitor_snapshots WHERE user_id=? AND store_id=? AND competitor_asin=? AND snapshot_at < ? AND bsr IS NOT NULL ORDER BY snapshot_at DESC LIMIT 1'
+        ).get(userId, sid, latest.competitor_asin, latest.snapshot_at);
+        if (prev) competitorBsrDelta = latest.bsr - prev.bsr;
+      }
+    } catch {}
+
+    return {
+      storeId: sid, storeName: s.name, region: s.region, currency: s.currency,
+      unitsSold, gmv, adSpend, avgRating, alerts,
+      competitorBsr, competitorBsrDelta,
+    };
+  });
+
+  // B-5: estimated vs realized recovered impact (simulated, watermarked).
+  const recovered = recoveredImpactFor(db, userId, targetStoreIds);
+
+  const summary = {
+    unitsSold: perStore.reduce((a, b) => a + (b.unitsSold || 0), 0),
+    gmv: perStore.reduce((a, b) => a + (b.gmv || 0), 0),
+    adSpend: perStore.reduce((a, b) => a + (b.adSpend || 0), 0),
+    acos: 0,
+    avgRating: perStore.length ? Math.round((perStore.reduce((a, b) => a + (b.avgRating || 0), 0) / perStore.length) * 100) / 100 : 0,
+    alerts: perStore.reduce((a, b) => a + (b.alerts || 0), 0),
+    // 已挽回口径: 双字段 + 水印, 绝不合并为单一 "已挽回¥X"。
+    recovered,
+  };
+
+  // 7-day real-data trend skeleton (read-only).
+  const trends = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(Date.now() - i * 86400_000).toISOString().slice(0, 10);
+    trends.push({ date: d, unitsSold: 0, gmv: 0, adSpend: 0, avgRating: summary.avgRating });
+  }
+
+  // link dimension rows.
+  let links = [];
+  if (linkId) {
+    const lk = availableLinks.find((l) => l.id === linkId);
+    if (lk) links = [{ linkId: lk.id, storeId: lk.storeId, unitsSold: 0, gmv: 0, adSpend: 0, alerts: 0 }];
+  } else {
+    links = availableLinks.map((l) => ({ linkId: l.id, storeId: l.storeId, unitsSold: 0, gmv: 0, adSpend: 0, alerts: 0 }));
+  }
+
+  // realDataOnly: derived ONLY from real-capable dimensions (sales/gmv/adSpend/rating);
+  // the always-mock competitorBsr/categoryRank/alerts never drag it permanently false.
+  const realCapable = ['sales', 'gmv', 'adSpend', 'rating'];
+  const realDataOnly = realCapable.every((k) => sourceMeta[k] && sourceMeta[k].mock === false);
+
+  return {
+    reportDate,
+    triggerType: triggerType || 'on_demand',
+    generatedAt: new Date().toISOString(),
+    stores: perStore,
+    links,
+    availableStores,
+    availableLinks,
+    summary,
+    sourceMeta,
+    trends,
+    filters: { storeIds: storeIds || 'all', linkId: linkId || null, realDataOnly },
+    deepLinks: {
+      ads: '/ads/reports',
+      reviews: '/reviews/trends',
+      anomalies: '/monitor/anomalies',
+      competitors: '/competitors/image-diff',
+    },
+  };
 }
 
 export async function handleMonitorRequest(request) {
@@ -95,6 +336,17 @@ async function _impl(request) {
   const db = getDb();
   const params = url.searchParams;
   let m;
+
+  // ============================================================
+  // 3.0 Daily Report (read-only operating snapshot, no audit side effects)
+  // ============================================================
+  if (path === '/api/v1/store/m4/reports/daily' && method === 'GET') {
+    return json(buildDailyReport(db, userId, storeId, {
+      storeIds: params.get('storeIds'),
+      date: params.get('date'),
+      linkId: params.get('linkId'),
+    }));
+  }
 
   // ============================================================
   // 3.1 Anomalies (8)
@@ -212,7 +464,8 @@ async function _impl(request) {
   m = path.match(/^\/api\/v1\/store\/m4\/hijacking\/([\w-]+)\/(start-test-buy|upload-proof|submit-appeal|close)$/);
   if (m && method === 'POST') {
     const id = m[1], op = m[2];
-    const body = await readJson(request);
+    // M4 -> Ads linked ops must not trust the frontend real-write flag.
+    const body = clampRealWriteBody(await readJson(request));
     let r = null;
     if (op === 'start-test-buy') r = startTestBuy(db, userId, storeId, id);
     else if (op === 'upload-proof') r = uploadHijackingProof(db, userId, storeId, id, body);
@@ -350,7 +603,7 @@ async function _impl(request) {
     const id = m[1], op = m[2];
     const body = await readJson(request);
     let r = null;
-    if (op === 'send') r = sendRecovery(db, userId, storeId, id);
+    if (op === 'send') r = sendRecovery(db, userId, storeId, id, body);
     else if (op === 'record-reply') r = recordRecoveryReply(db, userId, storeId, id, body);
     else if (op === 'next-round') r = nextRoundRecovery(db, userId, storeId, id, body);
     return mapResult(r);
@@ -450,7 +703,7 @@ async function _impl(request) {
   }
   m = path.match(/^\/api\/v1\/store\/m4\/notifications\/([\w-]+)\/read$/);
   if (m && method === 'POST') {
-    return json(markNotificationRead(db, userId, m[1]));
+    return mapResult(markNotificationRead(db, userId, storeId, m[1]));
   }
 
   return null;

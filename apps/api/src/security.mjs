@@ -1,4 +1,6 @@
 import { evaluateProviderRateLimit, evaluateTenantAccess } from '../../../packages/domain/src/governance-engine.mjs';
+import { whoAmI } from './data-store.mjs';
+import { realWritesEnabled } from './integrations/provider-mode.mjs';
 
 const rateBuckets = new Map();
 const CORS_HEADERS = {
@@ -23,18 +25,26 @@ export function applyApiSecurity(request) {
     return securityJson({ error: 'tenant_header_required', message: 'x-tenant-id is required when tenant enforcement is enabled.' }, 401);
   }
 
-  const actorTenantId = tenantId || 'tenant-demo';
+  // X-P1-05: derive the actor's role/tenant from the authenticated token, never
+  // from client-supplied x-role / x-tenant-id headers (those were self-asserted
+  // and made RBAC a no-op). When no token is present the actor is anonymous with
+  // the least-privileged role.
+  const authedUser = resolveAuthedUser(request);
+  const actorRole = authedUser?.role || 'anonymous';
+  const actorTenantId = authedUser?.tenantId || authedUser?.id || tenantId || 'tenant-demo';
   const action = request.headers.get('x-action') || inferAction(method);
   const explicitPermissions = request.headers.get('x-permissions');
   const permissions = explicitPermissions ? explicitPermissions.split(',').map((item) => item.trim()).filter(Boolean) : [action];
   const access = evaluateTenantAccess({
     actor: {
       tenantId: actorTenantId,
-      role: request.headers.get('x-role') || 'admin',
+      role: actorRole,
       permissions,
     },
     resource: {
-      tenantId: request.headers.get('x-resource-tenant-id') || actorTenantId,
+      // resource tenant defaults to the actor's own tenant; cross-tenant access
+      // is governed by ownership checks at the route layer (resolveStoreScope).
+      tenantId: actorTenantId,
     },
     action,
   });
@@ -57,9 +67,20 @@ export function securityHeaders(extra = {}) {
     'x-content-type-options': 'nosniff',
     'x-frame-options': 'DENY',
     'referrer-policy': 'no-referrer',
-    'x-real-write-policy': process.env.REAL_WRITES_ENABLED === 'true' ? 'requires-explicit-audit-approval' : 'blocked',
+    'x-real-write-policy': realWritesEnabled() ? 'requires-explicit-audit-approval' : 'blocked',
     ...extra,
   };
+}
+
+function resolveAuthedUser(request) {
+  try {
+    const auth = request.headers.get('authorization') || '';
+    const token = auth.replace(/^Bearer\s+/i, '').trim();
+    if (!token) return null;
+    return whoAmI(token) || null;
+  } catch {
+    return null;
+  }
 }
 
 function evaluateRequestRateLimit(request, url, tenantId) {
@@ -78,7 +99,9 @@ function evaluateRequestRateLimit(request, url, tenantId) {
 }
 
 function securityJson(body, status, headers = {}) {
-  return new Response(JSON.stringify({ sourceMode: 'mock', module: 'SECURITY', ...body }, null, 2), {
+  // X-P1-05: do NOT inject sourceMode:'mock' — a security error must not pollute
+  // the frontend's real/mock data state machine. Use a dedicated securityMode field.
+  return new Response(JSON.stringify({ securityMode: 'enforced', module: 'SECURITY', ...body }, null, 2), {
     status,
     headers: {
       'content-type': 'application/json; charset=utf-8',
