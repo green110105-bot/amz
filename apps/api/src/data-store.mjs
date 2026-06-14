@@ -323,11 +323,18 @@ function maybeSeedSampleStoreData(db, userId, storeId) {
 }
 
 function ensureDemoUser(db) {
+  // Production hardening: skip the public demo account entirely when explicitly
+  // disabled. The weak demo/demo login must never be reachable once real store
+  // credentials live on the host. Set DISABLE_DEMO_USER=true in production .env.
+  if (String(process.env.DISABLE_DEMO_USER || '').toLowerCase() === 'true') return;
   const exists = db.prepare('SELECT id FROM users WHERE email = ?').get('demo@amz.local');
   if (exists) return;
   const id = 'u-demo';
+  // The demo password is env-overridable so an operator can lock it down without a
+  // code change; it falls back to 'demo' only for local/dev convenience.
+  const demoPassword = process.env.DEMO_PASSWORD || 'demo';
   db.prepare(`INSERT INTO users(id, name, email, role, password_hash, created_at) VALUES (?,?,?,?,?,?)`).run(
-    id, '演示用户', 'demo@amz.local', 'admin', hashPassword('demo'), nowIso()
+    id, '演示用户', 'demo@amz.local', 'admin', hashPassword(demoPassword), nowIso()
   );
   const storeId = 's-mock-us';
   // AUTH-08 invariant: *_api_authorized=1 iff an active store_credentials row exists
