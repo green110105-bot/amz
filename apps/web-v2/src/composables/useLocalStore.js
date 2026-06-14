@@ -166,14 +166,31 @@ export function useLocalStore() {
 
     async revertAuditLog(id, reason = 'user_revert') {
       const log = _state.value.auditLogs.find((l) => l.id === id);
-      if (log) {
-        log.reverted = true;
-        log.status = 'reverted';
-        log.revertedAt = new Date().toISOString().slice(0, 19).replace('T', ' ');
-        log.revertReason = reason;
+      // X-P0-01 / X-P1-07: do NOT optimistically mark reverted. Only flip local
+      // state after the backend confirms a genuine inverse dispatch. A 409 means
+      // the real write needs manual reversal — surface it, never fake success.
+      try {
+        const res = await storeApi.revertAuditLog(id, reason);
+        // X-P0-02: only flip local state to reverted when the backend confirms a
+        // genuine inverse dispatch. dispatchedInverse===false OR needsManualReversal
+        // means Amazon端未自动回滚 -> never mark reverted, surface the blocked state.
+        if (res && (res.needsManualReversal === true || res.dispatchedInverse === false)) {
+          return { needsManualReversal: true, dispatchedInverse: false };
+        }
+        if (log) {
+          log.reverted = true;
+          log.status = 'reverted';
+          log.revertedAt = new Date().toISOString().slice(0, 19).replace('T', ' ');
+          log.revertReason = reason;
+        }
+        return res || { dispatchedInverse: true };
+      } catch (e) {
+        if (e?.status === 409) {
+          return { needsManualReversal: true, dispatchedInverse: false, error: e?.message };
+        }
+        console.warn('[revert persist failed]', e?.message);
+        throw e;
       }
-      try { await storeApi.revertAuditLog(id, reason); }
-      catch (e) { console.warn('[revert persist failed]', e?.message); }
     },
 
     // ===== Keywords =====

@@ -34,14 +34,40 @@ const dialog = ref(false);
 const editing = ref(null);
 
 const draftKey = 'm2:draft:alert_rule';
-const draft = ref({
-  name: '',
-  conditions: '',
-  severity: 'P1',
-  notifyChannels: ['in_app'],
-  cooldownHours: 6,
-  enabled: true,
-});
+// M2-P0-07: 结构化条件构造器（指标 + 运算符 + 阈值 + duration）替代自由文本
+const METRIC_OPTIONS = [
+  { value: 'sku.margin', label: 'SKU 利润率' },
+  { value: 'sku.days_cover', label: 'SKU 可售天数' },
+  { value: 'campaign.acos', label: '广告 ACOS' },
+  { value: 'cashflow.balance', label: '现金流余额' },
+];
+const OP_OPTIONS = [
+  { value: '<', label: '小于 <' },
+  { value: '<=', label: '小于等于 ≤' },
+  { value: '>', label: '大于 >' },
+  { value: '>=', label: '大于等于 ≥' },
+  { value: '==', label: '等于 =' },
+];
+function defaultCondition() {
+  return { field: 'sku.margin', op: '<', value: 0.15, duration_days: 0 };
+}
+function defaultDraft() {
+  return {
+    name: '',
+    conditions: [defaultCondition()],
+    severity: 'P1',
+    notifyChannels: ['in_app'],
+    cooldownHours: 6,
+    enabled: true,
+  };
+}
+const draft = ref(defaultDraft());
+
+function addCondition() { draft.value.conditions.push(defaultCondition()); }
+function removeCondition(i) {
+  draft.value.conditions.splice(i, 1);
+  if (!draft.value.conditions.length) draft.value.conditions.push(defaultCondition());
+}
 
 function loadDraft() {
   try {
@@ -87,13 +113,25 @@ function severityType(s) {
 
 function openCreate() {
   editing.value = null;
+  // M2-P0-07/P2 卫生：openCreate 先重置 draft 为默认，不残留上次编辑字段
+  draft.value = defaultDraft();
   dialog.value = true;
+}
+function normalizeConditions(c) {
+  let arr = c;
+  if (typeof c === 'string') { try { arr = JSON.parse(c); } catch { arr = []; } }
+  if (!Array.isArray(arr) || !arr.length) return [defaultCondition()];
+  return arr.map((x) => ({
+    field: x.field || 'sku.margin', op: x.op || '<',
+    value: Number(x.value) || 0, duration_days: Number(x.duration_days || x.durationDays || 0),
+  }));
 }
 function openEdit(rule) {
   editing.value = rule;
+  // 仅挑白名单字段，禁止写 id / 计算列
   draft.value = {
     name: rule.name,
-    conditions: typeof rule.conditions === 'string' ? rule.conditions : JSON.stringify(rule.conditions || []),
+    conditions: normalizeConditions(rule.conditions),
     severity: rule.severity,
     notifyChannels: Array.isArray(rule.notifyChannels || rule.notify_channels) ? (rule.notifyChannels || rule.notify_channels) : [],
     cooldownHours: rule.cooldownHours || rule.cooldown_hours || 6,
@@ -104,9 +142,18 @@ function openEdit(rule) {
 
 async function submit() {
   if (!draft.value.name) { ElMessage.warning('请填写规则名称'); return; }
-  const body = { ...draft.value };
-  // 尝试将 conditions 解析为 JSON；解析失败按字符串保留
-  try { body.conditions = JSON.parse(body.conditions); } catch {}
+  // 结构化条件直接发送（无 JSON.parse 静默吞）
+  const body = {
+    name: draft.value.name,
+    conditions: draft.value.conditions.map((c) => ({
+      field: c.field, op: c.op, value: Number(c.value),
+      duration_days: Number(c.duration_days) || 0,
+    })),
+    severity: draft.value.severity,
+    notifyChannels: draft.value.notifyChannels,
+    cooldownHours: draft.value.cooldownHours,
+    enabled: draft.value.enabled,
+  };
   try {
     if (editing.value) {
       await alerts.updateRule(editing.value.id, body);
@@ -115,11 +162,20 @@ async function submit() {
     }
     dialog.value = false;
     clearDraft();
-    draft.value = {
-      name: '', conditions: '', severity: 'P1', notifyChannels: ['in_app'],
-      cooldownHours: 6, enabled: true,
-    };
+    draft.value = defaultDraft();
   } catch {}
+}
+
+// M2-P0-07: 立即测试规则 — 调 scan 后刷新 events
+async function testScan(ruleId) {
+  try {
+    const r = await alerts.scan(ruleId ? { ruleId } : {});
+    ElMessage.success(`扫描完成：新增 ${r?.created ?? 0} 条事件`);
+    tab.value = 'events';
+    await alerts.fetchEvents(ruleId ? { ruleId } : {});
+  } catch (e) {
+    ElMessage.error(`扫描失败：${e.message || e}`);
+  }
 }
 
 async function toggle(rule) {
@@ -141,6 +197,19 @@ async function ackEvent(ev) {
   } catch {}
 }
 
+// M2-P3-01: 批量确认
+const selectedEventIds = ref([]);
+function onEventSelectionChange(rows) {
+  selectedEventIds.value = (rows || []).map((r) => r.id);
+}
+async function ackSelected() {
+  if (!selectedEventIds.value.length) { ElMessage.warning('请先勾选事件'); return; }
+  try {
+    await alerts.ackBatch(selectedEventIds.value);
+    selectedEventIds.value = [];
+  } catch {}
+}
+
 const rules = computed(() => alerts.rules.value || []);
 const events = computed(() => alerts.events.value || []);
 </script>
@@ -149,6 +218,7 @@ const events = computed(() => alerts.events.value || []);
   <div>
     <PageHeader title="自定义报警规则" subtitle="按你的业务定义触发条件 + 通知通道">
       <template #extra>
+        <el-button v-if="tab === 'rules'" :icon="'VideoPlay'" @click="testScan()">立即测试全部规则</el-button>
         <el-button v-if="tab === 'rules'" type="primary" :icon="'Plus'" @click="openCreate">新建规则</el-button>
       </template>
     </PageHeader>
@@ -182,13 +252,15 @@ const events = computed(() => alerts.events.value || []);
                 <small class="text-muted block">{{ row.lastTriggered || row.last_triggered || '从未触发' }}</small>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="140">
+            <el-table-column label="操作" width="200">
               <template #default="{ row }">
+                <el-button size="small" link @click="testScan(row.id)">测试</el-button>
                 <el-button size="small" link @click="openEdit(row)">编辑</el-button>
                 <el-button size="small" link type="danger" @click="remove(row)">删除</el-button>
               </template>
             </el-table-column>
             <template #mobile-actions="{ row }">
+              <el-button size="small" @click.stop="testScan(row.id)">测试</el-button>
               <el-button size="small" @click.stop="openEdit(row)">编辑</el-button>
               <el-button size="small" type="danger" plain @click.stop="remove(row)">删除</el-button>
             </template>
@@ -206,10 +278,15 @@ const events = computed(() => alerts.events.value || []);
               <el-radio-button value="0">未确认</el-radio-button>
               <el-radio-button value="1">已确认</el-radio-button>
             </el-radio-group>
+            <el-button size="small" type="primary" plain :disabled="!selectedEventIds.length" @click="ackSelected">批量确认 ({{ selectedEventIds.length }})</el-button>
           </div>
-          <ResponsiveTable :data="events" :mobile-columns="mobileEventCols" v-loading="alerts.eventsLoading.value" stripe empty-text="暂无触发记录">
+          <ResponsiveTable :data="events" :mobile-columns="mobileEventCols" v-loading="alerts.eventsLoading.value" stripe empty-text="暂无触发记录" @selection-change="onEventSelectionChange">
+            <el-table-column type="selection" width="44" />
             <el-table-column label="规则" min-width="160">
-              <template #default="{ row }"><strong>{{ row.ruleName || row.rule_name || row.ruleId || row.rule_id }}</strong></template>
+              <template #default="{ row }">
+                <strong>{{ row.ruleName || row.rule_name || row.ruleId || row.rule_id }}</strong>
+                <el-tag v-if="row.isSimulated" size="small" type="info" effect="plain" style="margin-left: 6px">模拟</el-tag>
+              </template>
             </el-table-column>
             <el-table-column label="严重度" width="100">
               <template #default="{ row }"><el-tag :type="severityType(row.severity)" size="small">{{ row.severity }}</el-tag></template>
@@ -243,7 +320,21 @@ const events = computed(() => alerts.events.value || []);
           <el-input v-model="draft.name" placeholder="如：低利润率报警" />
         </el-form-item>
         <el-form-item label="触发条件">
-          <el-input v-model="draft.conditions" type="textarea" :rows="3" placeholder='如：[{"field":"sku.rolling_30d_margin","op":"<","value":0.15,"duration_days":3}]' />
+          <div style="width: 100%">
+            <div v-for="(c, i) in draft.conditions" :key="i" style="display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; align-items: center">
+              <el-select v-model="c.field" placeholder="指标" style="width: 150px">
+                <el-option v-for="m in METRIC_OPTIONS" :key="m.value" :label="m.label" :value="m.value" />
+              </el-select>
+              <el-select v-model="c.op" placeholder="运算符" style="width: 120px">
+                <el-option v-for="o in OP_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
+              </el-select>
+              <el-input-number v-model="c.value" :controls="false" placeholder="阈值" style="width: 110px" />
+              <el-input-number v-model="c.duration_days" :min="0" :max="30" placeholder="持续天" style="width: 110px" />
+              <el-button size="small" link type="danger" @click="removeCondition(i)">删除</el-button>
+            </div>
+            <el-button size="small" plain :icon="'Plus'" @click="addCondition">添加条件</el-button>
+            <div class="text-muted" style="font-size: 12px; margin-top: 4px">阈值按比例填小数（如利润率 0.15）；持续天=0 表示即时触发。多条件为 AND 关系。</div>
+          </div>
         </el-form-item>
         <el-form-item label="严重度">
           <el-radio-group v-model="draft.severity">

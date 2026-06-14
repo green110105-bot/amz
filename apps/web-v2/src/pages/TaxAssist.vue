@@ -56,22 +56,61 @@ onMounted(load);
 
 async function fileTax(row) {
   try {
-    const { value: filingRef } = await ElMessageBox.prompt('请输入申报参考号', '标记申报', {
-      confirmButtonText: '提交', cancelButtonText: '取消', inputPattern: /.+/, inputErrorMessage: '不能为空',
-    });
+    const { value: filingRef } = await ElMessageBox.prompt(
+      '本地标记为已申报（不向税局 / Avalara 提交）。请输入申报参考号以便对账：',
+      '本地标记已申报',
+      {
+        confirmButtonText: '本地标记',
+        cancelButtonText: '取消',
+        inputPattern: /.+/,
+        inputErrorMessage: '不能为空',
+      }
+    );
     await tax.file(row.id, filingRef);
+    ElMessage.success('已在本地标记为已申报（未向税局 / Avalara 提交）');
   } catch {}
 }
 
-function exportData(type) {
-  ElMessage.success(`${type} 申报数据已导出 CSV（Avalara / TaxJar 兼容格式）`);
+// 导出功能尚未实现：没有真实文件生成，按钮置灰以免伪装“已导出”。
+// 安全不变量：未真正发生的导出/申报不得用 toast 谎报成功。
+const EXPORT_DISABLED_HINT = '导出功能未上线，暂不可用（不会生成文件）';
+
+// 当前日期（每次组件实例化时求值），用于 days_left 实时计算。
+const today = ref(new Date());
+
+// 状态文案：与税局真实申报区分，'filed' 仅表示本地标记。
+function statusLabel(status) {
+  const labels = {
+    pending: '待申报',
+    filed: '本地已标记',
+    paid: '已缴',
+    overdue: '逾期',
+  };
+  return labels[status] || status;
+}
+
+function daysUntil(dateStr) {
+  if (!dateStr) return null;
+  const due = new Date(dateStr);
+  if (Number.isNaN(due.getTime())) return null;
+  const MS_PER_DAY = 24 * 60 * 60 * 1000;
+  const startOfToday = new Date(today.value.getFullYear(), today.value.getMonth(), today.value.getDate());
+  const startOfDue = new Date(due.getFullYear(), due.getMonth(), due.getDate());
+  return Math.round((startOfDue - startOfToday) / MS_PER_DAY);
 }
 
 const summary = computed(() => tax.summary.value || {});
 const records = computed(() => tax.records.value || []);
 const vatRecords = computed(() => records.value.filter((r) => r.taxType === 'vat' || r.tax_type === 'vat'));
 const salesTaxRecords = computed(() => records.value.filter((r) => r.taxType === 'sales_tax' || r.tax_type === 'sales_tax'));
-const deadlines = computed(() => summary.value.deadlines || []);
+// days_left / 剩余天数改为基于到期日与当前日期实时计算（非 seed 静态值）。
+const deadlines = computed(() =>
+  (summary.value.deadlines || []).map((d) => {
+    const dueAt = d.dueAt || d.due_at;
+    const computedDaysLeft = daysUntil(dueAt);
+    return { ...d, daysLeft: computedDaysLeft != null ? computedDaysLeft : (d.daysLeft ?? d.days_left) };
+  })
+);
 </script>
 
 <template>
@@ -90,7 +129,9 @@ const deadlines = computed(() => summary.value.deadlines || []);
           <el-option label="已缴" value="paid" />
           <el-option label="逾期" value="overdue" />
         </el-select>
-        <el-button :icon="'Download'" @click="exportData('全部')">导出</el-button>
+        <el-tooltip :content="EXPORT_DISABLED_HINT" placement="bottom">
+          <span><el-button :icon="'Download'" disabled>导出</el-button></span>
+        </el-tooltip>
       </template>
     </PageHeader>
 
@@ -119,7 +160,9 @@ const deadlines = computed(() => summary.value.deadlines || []);
       <template #header>
         <div class="card-header">
           <h2 class="section-title">VAT 记录</h2>
-          <el-button size="small" :icon="'Download'" @click="exportData('VAT')">导出 OSS / IOSS 格式</el-button>
+          <el-tooltip :content="EXPORT_DISABLED_HINT" placement="top">
+            <span><el-button size="small" :icon="'Download'" disabled>导出 OSS / IOSS 格式</el-button></span>
+          </el-tooltip>
         </div>
       </template>
       <el-table :data="vatRecords" stripe empty-text="无 VAT 记录">
@@ -130,14 +173,14 @@ const deadlines = computed(() => summary.value.deadlines || []);
         <el-table-column label="销售额" align="right" width="140"><template #default="{ row }"><span class="tnum">{{ formatCurrency(row.sales) }}</span></template></el-table-column>
         <el-table-column label="VAT 率" align="right" width="100"><template #default="{ row }"><span class="tnum">{{ formatPercent(row.taxRate || row.tax_rate) }}</span></template></el-table-column>
         <el-table-column label="应纳" align="right" width="140"><template #default="{ row }"><strong class="tnum text-warning">{{ formatCurrency(row.due) }}</strong></template></el-table-column>
-        <el-table-column label="状态" width="100">
+        <el-table-column label="状态" width="120">
           <template #default="{ row }">
-            <el-tag size="small" :type="row.status === 'filed' || row.status === 'paid' ? 'success' : row.status === 'overdue' ? 'danger' : 'warning'">{{ row.status }}</el-tag>
+            <el-tag size="small" :type="row.status === 'filed' || row.status === 'paid' ? 'info' : row.status === 'overdue' ? 'danger' : 'warning'">{{ statusLabel(row.status) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="100">
+        <el-table-column label="操作" width="110">
           <template #default="{ row }">
-            <el-button v-if="row.status === 'pending'" size="small" type="primary" link @click="fileTax(row)">标记申报</el-button>
+            <el-button v-if="row.status === 'pending'" size="small" type="primary" link @click="fileTax(row)">本地标记申报</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -147,7 +190,9 @@ const deadlines = computed(() => summary.value.deadlines || []);
       <template #header>
         <div class="card-header">
           <h2 class="section-title">美国销售税</h2>
-          <el-button size="small" :icon="'Download'" @click="exportData('Sales Tax')">导出 Avalara 格式</el-button>
+          <el-tooltip :content="EXPORT_DISABLED_HINT" placement="top">
+            <span><el-button size="small" :icon="'Download'" disabled>导出 Avalara 格式</el-button></span>
+          </el-tooltip>
         </div>
       </template>
       <el-table :data="salesTaxRecords" stripe empty-text="无销售税记录">
@@ -162,9 +207,9 @@ const deadlines = computed(() => summary.value.deadlines || []);
             <el-tag v-else type="success" size="small">未触线</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="100">
+        <el-table-column label="操作" width="110">
           <template #default="{ row }">
-            <el-button v-if="row.status === 'pending'" size="small" type="primary" link @click="fileTax(row)">标记申报</el-button>
+            <el-button v-if="row.status === 'pending'" size="small" type="primary" link @click="fileTax(row)">本地标记申报</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -179,7 +224,7 @@ const deadlines = computed(() => summary.value.deadlines || []);
         </el-table-column>
         <el-table-column label="剩余天数" align="right" width="120">
           <template #default="{ row }">
-            <span class="tnum" :class="(row.daysLeft || row.days_left) < 30 ? 'text-danger' : (row.daysLeft || row.days_left) < 90 ? 'text-warning' : ''">{{ row.daysLeft || row.days_left }} 天</span>
+            <span class="tnum" :class="row.daysLeft < 30 ? 'text-danger' : row.daysLeft < 90 ? 'text-warning' : ''">{{ row.daysLeft }} 天</span>
           </template>
         </el-table-column>
       </el-table>

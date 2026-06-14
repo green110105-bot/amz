@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useTargetings } from '../../../composables/useLxState';
 import { tabAiSignals } from '../../../utils/ads-integration';
-import { targetingsApi } from '../../../api/lx';
+import { actionQueueApi } from '../../../api/ads-timeline';
 import ResponsiveTable from '../../../components/ResponsiveTable.vue';
 import BatchActionBar from '../../../components/BatchActionBar.vue';
 import BidAdjustModal from '../../../components/BidAdjustModal.vue';
@@ -47,63 +47,113 @@ function openBidModal() {
 
 async function commitBulkBid({ items }) {
   try {
-    const res = await targetingsApi.bulkBid(items);
-    ElMessage.success(`已调价 ${res.updated ?? items.length} 条，可在 Audit 撤销`);
+    await actionQueueApi.enqueue({
+      sourceStrategyName: 'LX manual bulk operation',
+      entity: { kind: 'targeting_bulk', id: props.campaign.id, name: props.campaign.name },
+      typedAction: {
+        actionPrimitive: 'BULK_ADJUST_TARGETING_BID',
+        sourceSurface: 'lx',
+        entityKind: 'targeting',
+        currentValue: { selectedCount: items.length },
+        recommendedValue: { items },
+        dryRun: true,
+        auditRequired: true,
+      },
+      guardrail: { status: 'needs_review', reasons: ['manual_lx_write_requires_action_queue'] },
+      rollbackPlan: { method: 'restore_previous_targeting_bids', needsManualReview: true },
+      note: 'bulk targeting bid change queued from LX surface',
+    });
+    ElMessage.success(`Added ${items.length} bid changes to Action Queue`);
     clearSelection();
-    await fetch(true);
   } catch (err) {
-    ElMessage.error('调价失败：' + (err?.message || err));
+    ElMessage.error('Queue failed: ' + (err?.message || err));
   }
 }
 
 // ----- batch state toggle -----
+// M3-P0-06: pass the REAL reactive row to toggle (the composable reads the live value and
+// flips it internally). The previous `toggle({ ...row, enabled: !row.enabled })` passed a
+// detached copy (so the real table row never changed) AND pre-inverted the desired value
+// (so the enqueued value was the opposite of the user's intent). We also drop the
+// unconditional success toast — report the real per-row outcome instead.
 async function commitBulkState({ enabled }) {
-  try {
-    let n = 0;
-    for (const row of selected.value) {
-      if (Boolean(row.enabled) === enabled) continue;
-      await toggle({ ...row, enabled: !row.enabled }); // composable flips internally
-      n += 1;
-    }
-    ElMessage.success(`已${enabled ? '启用' : '暂停'} ${n} 条`);
-    clearSelection();
-    await fetch();
-  } catch (err) {
-    ElMessage.error('状态切换失败：' + (err?.message || err));
+  const targets = selected.value.filter((row) => Boolean(row.enabled) !== enabled);
+  if (!targets.length) {
+    ElMessage.info(`所选投放均已${enabled ? '启用' : '暂停'}`);
+    return;
   }
+  let ok = 0, fail = 0;
+  for (const row of targets) {
+    try {
+      await toggle(row); // real reactive row; composable flips current → desired
+      ok += 1;
+    } catch {
+      fail += 1;
+    }
+  }
+  if (fail === targets.length) {
+    ElMessage.error(`状态切换失败:${fail} 条均未成功`);
+  } else {
+    ElMessage({
+      message: `已加入执行篮 ${ok} 条(待审核+dry-run)${fail ? ` · ${fail} 条失败` : ''}`,
+      type: fail ? 'warning' : 'success',
+    });
+  }
+  clearSelection();
+  await fetch();
 }
 
 // ----- batch delete -----
 async function commitBulkDelete() {
   try {
     await ElMessageBox.confirm(
-      `确认删除选中的 ${selected.value.length} 条投放？此操作会写入审计日志，可通过 Audit 页面撤销。`,
-      '批量删除',
-      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+      `Queue ${selected.value.length} targeting removals for approval and dry-run?`,
+      'Queue removal',
+      { type: 'warning', confirmButtonText: 'Queue', cancelButtonText: 'Cancel' },
     );
   } catch { return; /* cancelled */ }
   try {
-    let n = 0;
-    for (const row of selected.value) {
-      const r = await targetingsApi.remove(row.id);
-      if (r) n += 1;
-    }
-    ElMessage.success(`已删除 ${n} 条`);
+    await actionQueueApi.enqueue({
+      sourceStrategyName: 'LX manual bulk operation',
+      entity: { kind: 'targeting_bulk', id: props.campaign.id, name: props.campaign.name },
+      typedAction: {
+        actionPrimitive: 'BULK_REMOVE_TARGETING',
+        sourceSurface: 'lx',
+        entityKind: 'targeting',
+        currentValue: { items: selected.value.map((row) => ({ id: row.id, term: row.term, asin: row.asin, category: row.category })) },
+        recommendedValue: { removed: true },
+        dryRun: true,
+        auditRequired: true,
+      },
+      guardrail: { status: 'needs_review', reasons: ['manual_lx_write_requires_action_queue'] },
+      rollbackPlan: { method: 'restore_removed_targetings', needsManualReview: true },
+      note: 'bulk targeting removal queued from LX surface',
+    });
+    ElMessage.success(`Added ${selected.value.length} removals to Action Queue`);
     clearSelection();
-    await fetch(true);
   } catch (err) {
-    ElMessage.error('删除失败：' + (err?.message || err));
+    ElMessage.error('Queue failed: ' + (err?.message || err));
   }
 }
 
 onMounted(() => { fetch(); });
 
-async function changeBid(row, val) {
-  await setBid(row, val);
+// M3-P2-21: front-end CSV export of currently-loaded targeting rows.
+function exportCsv() {
+  const cols = ['term', 'type', 'bid', 'spend', 'sales', 'acos'];
+  const csv = [cols.join(','), ...filteredRows.value.map((r) => cols.map((k) => JSON.stringify(r[k] ?? '')).join(','))].join('\n');
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url; a.download = 'targetings.csv'; a.click();
+  URL.revokeObjectURL(url);
 }
 
-async function onSwitch(row) {
-  await toggle(row);
+async function changeBid(row, val, oldVal) {
+  await setBid(row, val, oldVal);
+}
+
+async function onSwitch(row, value) {
+  await toggle(row, value);
 }
 
 // ----- AdAnalysisDrawer (点行打开详情) -----
@@ -145,18 +195,18 @@ function openAnalysisDrawer(row, tab = 'daily') {
       <el-radio-button value="category">类目定位 ({{ rows.filter(r => r.type === 'category').length }})</el-radio-button>
     </el-radio-group>
     <span class="spacer" />
-    <el-button type="primary" :icon="'Plus'">添加投放</el-button>
-    <el-button :icon="'Upload'">CSV 批量改</el-button>
+    <el-button type="primary" :icon="'Plus'" disabled title="即将上线">添加投放</el-button>
+    <el-button :icon="'Upload'" disabled title="即将上线">CSV 批量改</el-button>
     <el-checkbox v-model="showCompare" size="small">环比</el-checkbox>
-    <el-button :icon="'Operation'" size="small">列配置 ▾</el-button>
-    <el-button :icon="'Download'" size="small" link />
+    <el-button :icon="'Operation'" size="small" disabled title="即将上线">列配置 ▾</el-button>
+    <el-button :icon="'Download'" size="small" @click="exportCsv" title="导出当前表格为 CSV">导出</el-button>
   </div>
 
   <div class="lx-table">
     <ResponsiveTable ref="tableRef" :data="filteredRows" :mobile-columns="mobileCols" stripe border size="small" @selection-change="onSelectionChange">
       <el-table-column type="selection" width="40" fixed />
       <el-table-column label="启用" width="55" fixed>
-        <template #default="{ row }"><el-switch v-model="row.enabled" size="small" @change="onSwitch(row)" /></template>
+        <template #default="{ row }"><el-switch v-model="row.enabled" size="small" @change="(v) => onSwitch(row, v)" /></template>
       </el-table-column>
       <el-table-column label="类型" width="80" fixed>
         <template #default="{ row }">
@@ -175,7 +225,7 @@ function openAnalysisDrawer(row, tab = 'daily') {
       </el-table-column>
       <el-table-column label="bid" width="100">
         <template #default="{ row }">
-          <el-input-number v-model="row.bid" :precision="2" :step="0.05" :controls="false" size="small" style="width: 80px" @change="(v) => changeBid(row, v)" />
+          <el-input-number v-model="row.bid" :precision="2" :step="0.05" :controls="false" size="small" style="width: 80px" @change="(v, old) => changeBid(row, v, old)" />
         </template>
       </el-table-column>
       <el-table-column label="建议出价区间" width="130">

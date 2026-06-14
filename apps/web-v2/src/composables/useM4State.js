@@ -8,6 +8,14 @@
 
 import { ref, computed } from 'vue';
 import { ElMessage } from 'element-plus';
+// Transition helpers used in-file (useAppeals / useRecovery). Re-exported below for
+// existing external import sites; imported here so the local references resolve.
+import {
+  canAppealTransition,
+  allowedAppealActions,
+  canRecoveryTransition,
+  allowedRecoveryActions,
+} from './m4-transitions.js';
 import {
   anomaliesApi,
   slaApi,
@@ -36,89 +44,30 @@ function silent(promiseFn, fallback) {
 }
 
 // ============================================================================
-// 状态机辅助 — Appeal
+// 状态机辅助 — transition maps + helpers live in a dependency-free module so they are
+// unit-testable in plain node (node --test) without pulling in the axios/element-plus
+// chain. Re-exported here so existing import sites keep working.
 // ============================================================================
-const APPEAL_TRANSITIONS = {
-  draft: ['submitted', 'withdrawn'],
-  submitted: ['under_review', 'accepted', 'rejected', 'withdrawn'],
-  under_review: ['accepted', 'rejected', 'withdrawn'],
-  rejected: ['retry'], // retry → 新建子 appeal
-  accepted: [],
-  withdrawn: [],
+// canAppealTransition / allowedAppealActions / canRecoveryTransition /
+// allowedRecoveryActions are imported above (used in-file) and re-exported here as local
+// bindings; the rest are pure re-exports.
+export {
+  canAppealTransition,
+  allowedAppealActions,
+  canRecoveryTransition,
+  allowedRecoveryActions,
 };
-export function canAppealTransition(from, to) {
-  const arr = APPEAL_TRANSITIONS[from] || [];
-  return arr.includes(to);
-}
-export function allowedAppealActions(status) {
-  return APPEAL_TRANSITIONS[status] || [];
-}
-
-// 状态机辅助 — Recovery
-const RECOVERY_TRANSITIONS = {
-  pending: ['draft'],
-  draft: ['sent', 'closed'],
-  sent: ['replied', 'failed'],
-  replied: ['review_updated', 'next_round', 'closed'],
-  review_updated: ['closed', 'next_round'],
-  failed: ['next_round', 'closed'],
-  closed: [],
-};
-export function canRecoveryTransition(from, to) {
-  const arr = RECOVERY_TRANSITIONS[from] || [];
-  return arr.includes(to);
-}
-export function allowedRecoveryActions(status) {
-  return RECOVERY_TRANSITIONS[status] || [];
-}
-
-// 状态机辅助 — Anomaly
-const ANOMALY_TRANSITIONS = {
-  open: ['assigned', 'dismissed', 'resolved'],
-  assigned: ['investigating', 'resolved', 'dismissed', 'escalated'],
-  investigating: ['resolving', 'resolved', 'escalated'],
-  resolving: ['resolved', 'escalated'],
-  resolved: [],
-  dismissed: [],
-  escalated: ['resolved'],
-};
-export function canAnomalyTransition(from, to) {
-  const arr = ANOMALY_TRANSITIONS[from] || [];
-  return arr.includes(to);
-}
-export function allowedAnomalyActions(status) {
-  return ANOMALY_TRANSITIONS[status] || [];
-}
-
-// 状态机辅助 — Hijacking
-const HIJACKING_TRANSITIONS = {
-  pending_test_buy: ['test_buy_in_transit'],
-  test_buy_in_transit: ['test_buy_received'],
-  test_buy_received: ['appeal_drafted', 'genuine', 'closed'],
-  appeal_drafted: ['appeal_submitted', 'closed'],
-  appeal_submitted: ['appeal_accepted', 'closed'],
-  appeal_accepted: ['closed'],
-  genuine: ['closed'],
-  closed: [],
-};
-export function canHijackingTransition(from, to) {
-  return (HIJACKING_TRANSITIONS[from] || []).includes(to);
-}
-
-// 状态机辅助 — Infringement
-const INFRINGEMENT_TRANSITIONS = {
-  investigating: ['draft', 'pending_legal_review', 'dismissed'],
-  pending_legal_review: ['draft', 'dismissed'],
-  draft: ['submitted', 'dismissed'],
-  submitted: ['accepted', 'rejected'],
-  accepted: ['resolved'],
-  rejected: ['resolved'],
-  resolved: [],
-  dismissed: [],
-};
-export function canInfringementTransition(from, to) {
-  return (INFRINGEMENT_TRANSITIONS[from] || []).includes(to);
-}
+export {
+  APPEAL_TRANSITIONS,
+  RECOVERY_TRANSITIONS,
+  ANOMALY_TRANSITIONS,
+  canAnomalyTransition,
+  allowedAnomalyActions,
+  HIJACKING_TRANSITIONS,
+  canHijackingTransition,
+  INFRINGEMENT_TRANSITIONS,
+  canInfringementTransition,
+} from './m4-transitions.js';
 
 // ============================================================================
 // 1. useAnomalies — 异常事件列表 + actions
@@ -129,27 +78,48 @@ const _anomLoaded = ref(false);
 const _anomLoading = ref(false);
 const _anomError = ref(null);
 let _anomPromise = null;
+// M4-P3-01: the single-flight key carries a stable signature of the params, so a request
+// for a different filter (e.g. a new assignee) is NOT deduped onto an in-flight request
+// for the old filter. _anomSeq guards against an older response clobbering a newer one.
+let _anomPromiseKey = null;
+let _anomSeq = 0;
+
+function _paramsKey(params = {}) {
+  const keys = Object.keys(params).sort();
+  return keys.map((k) => `${k}=${params[k]}`).join('&');
+}
 
 async function _fetchAnomalies(params = {}, force = false) {
-  if (_anomPromise) return _anomPromise;
+  const key = _paramsKey(params);
+  // Only dedupe when an identical-params request is already in flight.
+  if (_anomPromise && _anomPromiseKey === key) return _anomPromise;
   if (_anomLoaded.value && !force && !Object.keys(params).length) return _anomList.value;
+  const seq = ++_anomSeq;
   _anomLoading.value = true;
   _anomError.value = null;
+  _anomPromiseKey = key;
   _anomPromise = silent(() => anomaliesApi.list(params), { items: [], summary: {} })
     .then((data) => {
+      // Drop the result if a newer request has been issued since (avoids stale overwrite).
+      if (seq !== _anomSeq) return _anomList.value;
       _anomList.value = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : []);
       if (data?.summary) _anomSummary.value = { ..._anomSummary.value, ...data.summary };
       _anomLoaded.value = true;
       return _anomList.value;
     })
     .catch((e) => {
+      if (seq !== _anomSeq) return _anomList.value;
       _anomError.value = e;
       ElMessage.error(`加载异常列表失败：${e.message || e}`);
       return [];
     })
     .finally(() => {
-      _anomLoading.value = false;
-      _anomPromise = null;
+      // Only clear the in-flight latch for the latest request.
+      if (seq === _anomSeq) {
+        _anomLoading.value = false;
+        _anomPromise = null;
+        _anomPromiseKey = null;
+      }
     });
   return _anomPromise;
 }
@@ -437,9 +407,9 @@ export function useHijacking() {
       return r;
     } catch (e) { _err(e, '扫描失败'); throw e; }
   }
-  async function startTestBuy(id) {
+  async function startTestBuy(id, body = {}) {
     try {
-      const updated = await hijackingApi.startTestBuy(id);
+      const updated = await hijackingApi.startTestBuy(id, body);
       _patch(_hjList, id, updated);
       ElMessage.success('已开始 Test Buy');
       return updated;
@@ -674,12 +644,21 @@ export function useReviewClusters() {
     } catch (e) { _err(e, '重算失败'); throw e; }
   }
   async function pushClusterM1(id, body) {
+    // M4-P3-02: snapshot for rollback, patch with the backend-returned row (not a
+    // hardcoded 'pushed' string), and roll back on failure.
+    const prev = _clList.value.find((x) => x.id === id);
+    const snapshot = prev ? { ...prev } : null;
     try {
       const r = await reviewsApi.pushClusterM1(id, body);
-      _patch(_clList, id, { ...(_clList.value.find((x) => x.id === id) || {}), status: 'pushed' });
+      const patch = (r && typeof r === 'object' && (r.id || r.status)) ? r : { status: r?.status ?? 'pushed', pushedM1TargetId: r?.m1TargetId };
+      _patch(_clList, id, patch);
       ElMessage.success('已推送 M1');
       return r;
-    } catch (e) { _err(e, '推送失败'); throw e; }
+    } catch (e) {
+      if (snapshot) _patch(_clList, id, snapshot);
+      _err(e, '推送失败');
+      throw e;
+    }
   }
   return {
     list: _clList,
@@ -786,14 +765,14 @@ export function useAppeals() {
       return created;
     } catch (e) { _err(e, '起草失败'); throw e; }
   }
-  async function submit(id) {
+  async function submit(id, body = {}) {
     const cur = _apList.value.find((a) => a.id === id);
     if (cur && !canAppealTransition(cur.status, 'submitted')) {
       ElMessage.warning(`非法状态跳转：${cur.status} → submitted`);
       return null;
     }
     try {
-      const updated = await appealsApi.submit(id);
+      const updated = await appealsApi.submit(id, body);
       _patch(_apList, id, updated);
       ElMessage.success('已提交');
       return updated;
@@ -877,18 +856,20 @@ export function useRecovery() {
       return created;
     } catch (e) { _err(e, '起草失败'); throw e; }
   }
-  async function send(id) {
+  // M4-P1-03: this records a MANUAL send (operator sent out-of-band) — it does not
+  // dispatch a real message. Requires manual-evidence (channel/sentBy/sentAt).
+  async function send(id, body = {}) {
     const cur = _reList.value.find((a) => a.id === id);
-    if (cur && !canRecoveryTransition(cur.status, 'sent')) {
-      ElMessage.warning(`非法状态跳转：${cur.status} → sent`);
+    if (cur && !canRecoveryTransition(cur.status, 'marked_sent')) {
+      ElMessage.warning(`非法状态跳转：${cur.status} → marked_sent`);
       return null;
     }
     try {
-      const updated = await recoveryApi.send(id);
+      const updated = await recoveryApi.send(id, body);
       _patch(_reList, id, updated);
-      ElMessage.success('已发送');
+      ElMessage.success('已标记为人工发送');
       return updated;
-    } catch (e) { _err(e, '发送失败'); throw e; }
+    } catch (e) { _err(e, '标记发送失败'); throw e; }
   }
   async function recordReply(id, body) {
     try {
@@ -1035,13 +1016,20 @@ export function useImageDiffs() {
     } catch (e) { _err(e, '扫描失败'); throw e; }
   }
   async function pushM1(id, body = {}) {
+    // M4-P3-02: patch with the backend-returned object; roll back on failure.
+    const idx = _idList.value.findIndex((x) => x.id === id);
+    const snapshot = idx >= 0 ? { ..._idList.value[idx] } : null;
     try {
       const r = await imageDiffsApi.pushM1(id, body);
-      const i = _idList.value.findIndex((x) => x.id === id);
-      if (i >= 0) _idList.value[i] = { ..._idList.value[i], status: 'pushed', pushedM1TargetId: r?.m1TargetId };
+      const patch = (r && typeof r === 'object' && (r.id || r.status)) ? r : { status: r?.status ?? 'pushed', pushedM1TargetId: r?.m1TargetId };
+      _patch(_idList, id, patch);
       ElMessage.success('已推送 M1');
       return r;
-    } catch (e) { _err(e, '推送失败'); throw e; }
+    } catch (e) {
+      if (snapshot) _patch(_idList, id, snapshot);
+      _err(e, '推送失败');
+      throw e;
+    }
   }
   return {
     list: _idList,
@@ -1138,9 +1126,53 @@ function _err(e, label) {
 }
 
 // ============================================================================
+// useAdsAction — M3-P1-15: M4 surfaces that enqueue an Ads/LX write (e.g. hijacking
+// close → pause competing campaign) must reflect the SERVER's queued/dryRun result and
+// never optimistically claim the write executed. The action funnels through the gated
+// ad_action_queue boundary (dryRun=1 / needs_review / auditRequired); this composable
+// only mirrors the server's honest response.
+// ============================================================================
+const _adsActionResult = ref(null);
+const _adsActionLoading = ref(false);
+
+export function useAdsAction() {
+  async function dispatch(apiCall) {
+    _adsActionLoading.value = true;
+    try {
+      const res = await apiCall();
+      // Mirror the server truthfully. Defaults are safe (not executed, dryRun on, no real
+      // write) when the server omits a field — we never fabricate executed:true.
+      _adsActionResult.value = {
+        queued: res?.queued === true,
+        dryRun: res?.dryRun !== false,
+        requiresRealStoreWrite: res?.requiresRealStoreWrite === true,
+        guardrailStatus: res?.guardrailStatus ?? res?.status ?? 'needs_review',
+        raw: res ?? null,
+      };
+      return _adsActionResult.value;
+    } catch (e) {
+      // Clear any optimistic state on failure — the write did not happen, so the
+      // reflected adsActionResult = null (no queued/dryRun claim survives a failure).
+      _adsActionResult.value = null;
+      _err(e, '入队失败');
+      throw e;
+    } finally {
+      _adsActionLoading.value = false;
+    }
+  }
+
+  return {
+    result: _adsActionResult,
+    loading: _adsActionLoading,
+    dispatch,
+  };
+}
+
+// ============================================================================
 // 重置（供切店时使用）
 // ============================================================================
 export function resetM4State() {
+  _adsActionResult.value = null;
   _anomList.value = []; _anomLoaded.value = false;
   _slaBoard.value = null;
   _caseList.value = []; _caseLoaded.value = false;

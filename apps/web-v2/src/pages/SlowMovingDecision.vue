@@ -34,9 +34,37 @@ const current = computed(() => slow.list.value.find((d) => d.id === currentId.va
 
 async function execute(opt) {
   if (!current.value) return;
+  let confirmBelowBreakeven = false;
+  // M2-P0-05: option A 降价 — 预览价与执行价同源；低于成本时 warning 展示单件亏损并要求二次确认
+  if (opt.id === 'A') {
+    let preview = null;
+    try { preview = await slow.preview(current.value.id, 'A'); } catch {}
+    if (preview) {
+      if (preview.belowBreakeven || (preview.unitLoss && preview.unitLoss > 0)) {
+        try {
+          await ElMessageBox.confirm(
+            `降价方案：原价 ${formatCurrency(preview.oldPrice, 'USD')} → 新价 ${formatCurrency(preview.newPrice, 'USD')}，` +
+            `已低于保本价 ${formatCurrency(preview.breakEven, 'USD')}，单件亏损约 ${formatCurrency(preview.unitLoss, 'USD')}。` +
+            `执行仅生成 M1 降价草稿、待 M1 上架方生效。确认亏本甩卖？`,
+            '亏本甩卖确认', { type: 'warning', confirmButtonText: '确认亏本甩卖', cancelButtonText: '取消' });
+          confirmBelowBreakeven = true;
+        } catch { return; }
+      } else {
+        try {
+          await ElMessageBox.confirm(
+            `降价方案：原价 ${formatCurrency(preview.oldPrice, 'USD')} → 新价 ${formatCurrency(preview.newPrice, 'USD')}（不低于保本价 ${formatCurrency(preview.breakEven, 'USD')}）。` +
+            `执行仅生成 M1 降价草稿、待 M1 上架方生效。`,
+            '降价确认', { type: 'info' });
+        } catch { return; }
+      }
+    }
+  } else {
+    try {
+      await ElMessageBox.confirm(`确认执行：${opt.label || opt.id}？该操作仅生成处置草稿/工单，不直接改动 Amazon。`, '滞销决策', { type: opt.id === 'D' ? 'warning' : 'info' });
+    } catch { return; }
+  }
   try {
-    await ElMessageBox.confirm(`确认执行：${opt.label || opt.id}？`, '滞销决策', { type: opt.id === 'D' ? 'warning' : 'info' });
-    await slow.execute(current.value.id, opt.id);
+    await slow.execute(current.value.id, opt.id, { confirmBelowBreakeven });
     await load();
   } catch {}
 }
@@ -97,7 +125,7 @@ function colorByLossSize(loss) {
             <p class="reason">{{ opt.reason }}</p>
 
             <el-button :type="(opt.recommended || opt.id === current.recommendedOption) ? 'primary' : opt.id === 'D' ? 'danger' : 'default'" :plain="opt.id === 'D'" size="default" style="width: 100%" :disabled="current.status === 'executed'" @click="execute(opt)">
-              {{ current.status === 'executed' ? '已执行' : (opt.recommended || opt.id === current.recommendedOption) ? '执行推荐方案' : `执行选项 ${opt.id}` }}
+              {{ current.status === 'executed' ? (opt.id === 'A' ? '已生成 M1 降价草稿' : '已生成处置草稿') : (opt.recommended || opt.id === current.recommendedOption) ? '生成推荐方案草稿' : `生成选项 ${opt.id} 草稿` }}
             </el-button>
           </el-card>
         </el-col>

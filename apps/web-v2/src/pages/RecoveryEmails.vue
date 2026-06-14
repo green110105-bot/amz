@@ -48,17 +48,18 @@ const summary = computed(() => {
   const list = re.list.value || [];
   return {
     pending: list.filter((e) => e.status === 'pending').length,
-    sent: list.filter((e) => e.status === 'sent').length,
+    sent: list.filter((e) => e.status === 'sent' || e.status === 'marked_sent').length,
     draft: list.filter((e) => e.status === 'draft').length,
     reviewUpdated: list.filter((e) => e.reviewUpdated || e.review_updated || e.status === 'review_updated').length,
   };
 });
 
 function statusType(s) {
-  return { pending: 'warning', draft: '', sent: 'success', replied: 'primary', review_updated: 'success', closed: 'info', failed: 'danger' }[s] || '';
+  return { pending: 'warning', draft: '', marked_sent: 'success', sent: 'success', replied: 'primary', review_updated: 'success', closed: 'info', failed: 'danger' }[s] || '';
 }
 function statusText(s) {
-  return { pending: '待发送', draft: '草稿', sent: '已发送', replied: '已回复', review_updated: '评分更新', closed: '关闭', failed: '失败' }[s] || s;
+  // M4-P1-03: 'marked_sent' = 已人工发送（标记）; legacy 'sent' kept for old rows.
+  return { pending: '待发送', draft: '草稿', in_progress: '处理中', marked_sent: '已人工发送', sent: '已发送', replied: '已回复', review_updated: '评分更新', closed: '关闭', failed: '失败' }[s] || s;
 }
 
 // ---- 草稿 localStorage 持久化 ----
@@ -92,13 +93,23 @@ async function onDraft() {
   }
 }
 
+// M4-P1-03: there is no live Buyer-Seller Messaging channel. The operator sends the
+// message manually (out-of-band) and records evidence here — we mark it 'marked_sent',
+// we do NOT claim a real send happened.
 async function send(e) {
-  if (!canRecoveryTransition(e.status, 'sent')) {
-    ElMessage.warning(`非法跳转：${e.status} → sent`);
+  if (!canRecoveryTransition(e.status, 'marked_sent')) {
+    ElMessage.warning(`非法跳转：${e.status} → marked_sent`);
     return;
   }
-  const updated = await re.send(e.id);
-  if (updated) bus.pushLocal({ severity: 'P2', sourceModule: 'M4B', title: '挽回邮件已发送', body: e.author || '' });
+  try {
+    const { value: channel } = await ElMessageBox.prompt('人工发送渠道（如 buyer_seller_messaging / email / 其它）', '标记已人工发送', { confirmButtonText: '下一步', inputValue: e.channel || 'buyer_seller_messaging' });
+    if (!channel) return;
+    const { value: sentBy } = await ElMessageBox.prompt('发送人（操作员标识）', '标记已人工发送', { confirmButtonText: '下一步' });
+    if (!sentBy) return;
+    const { value: sentAt } = await ElMessageBox.prompt('发送时间（ISO，可留空取当前时间）', '标记已人工发送', { confirmButtonText: '提交', inputValue: new Date().toISOString() });
+    const updated = await re.send(e.id, { channel, sentBy, sentAt: sentAt || new Date().toISOString() });
+    if (updated) bus.pushLocal({ severity: 'P2', sourceModule: 'M4B', title: '挽回邮件已标记人工发送', body: e.author || '' });
+  } catch (_) {/* cancel */}
 }
 
 async function recordReply(e) {
@@ -120,14 +131,14 @@ function allowed(e) { return allowedRecoveryActions(e.status); }
 
 <template>
   <div>
-    <PageHeader title="挽回邮件中心" subtitle="差评后挽回 · AI 起草模板 · 多轮跟进 · 状态机驱动">
+    <PageHeader title="挽回邮件中心" subtitle="差评后挽回 · AI 起草模板 · 多轮跟进 · 人工发送工单台（无自动外发通道）">
       <template #extra><el-button :icon="'Plus'" type="primary" @click="draftDialog = true">新建挽回</el-button></template>
     </PageHeader>
 
     <el-row :gutter="16" class="kpi-row">
       <el-col :xs="12" :sm="12" :md="6" :lg="6"><KpiCard label="待挽回" :value="summary.pending" hint="新差评" status="warning" icon="Message" /></el-col>
       <el-col :xs="12" :sm="12" :md="6" :lg="6"><KpiCard label="草稿" :value="summary.draft" hint="编辑中" status="default" icon="Edit" /></el-col>
-      <el-col :xs="12" :sm="12" :md="6" :lg="6"><KpiCard label="已发送" :value="summary.sent" hint="通过 Buyer-Seller Messaging" status="success" icon="Promotion" /></el-col>
+      <el-col :xs="12" :sm="12" :md="6" :lg="6"><KpiCard label="已人工发送" :value="summary.sent" hint="操作员手动发送后标记" status="success" icon="Promotion" /></el-col>
       <el-col :xs="12" :sm="12" :md="6" :lg="6"><KpiCard label="评分已更新" :value="summary.reviewUpdated" hint="挽回成功" status="success" icon="StarFilled" /></el-col>
     </el-row>
 
@@ -159,7 +170,7 @@ function allowed(e) { return allowedRecoveryActions(e.status); }
           <span class="text-muted">起草 {{ (e.draftedAt || e.drafted_at || '').slice(0, 16).replace('T', ' ') }}<span v-if="e.sentAt || e.sent_at"> · 发送 {{ (e.sentAt || e.sent_at || '').slice(0, 16).replace('T', ' ') }}</span></span>
           <div>
             <el-tag size="small" type="info" effect="plain" style="margin-right: 6px">允许动作：{{ allowed(e).join(' / ') || '终态' }}</el-tag>
-            <el-button v-if="allowed(e).includes('sent')" size="small" type="primary" @click="send(e)">发送</el-button>
+            <el-button v-if="allowed(e).includes('marked_sent') || allowed(e).includes('sent')" size="small" type="primary" @click="send(e)">标记已人工发送</el-button>
             <el-button v-if="allowed(e).includes('replied') || allowed(e).includes('review_updated')" size="small" plain @click="recordReply(e)">记录回复</el-button>
             <el-button v-if="allowed(e).includes('next_round')" size="small" plain @click="nextRound(e)">下一轮</el-button>
           </div>

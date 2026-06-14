@@ -64,7 +64,7 @@ async function pushImprovement(cluster, layer) {
 }
 
 function viewReviews(cluster) {
-  router.push({ path: '/reviews/list', query: { cluster: cluster.id } });
+  router.push({ path: '/reviews', query: { cluster: cluster.id } });
 }
 </script>
 

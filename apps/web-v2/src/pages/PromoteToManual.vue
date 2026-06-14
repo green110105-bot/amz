@@ -6,7 +6,8 @@ import ResponsiveTable from '../components/ResponsiveTable.vue';
 import { useViewport } from '../composables/useViewport';
 import { mockAdTree, mockPromotionCandidates } from '../utils/mock-data-ads';
 import { formatCurrency, formatPercent } from '../utils/format';
-import { useAudit } from '../composables/useAudit';
+import { actionQueueApi } from '../api/ads-timeline';
+import { buildAuditConfirmMessage } from '../composables/useLiveActionGate';
 
 const { isMobile } = useViewport();
 const mobileTermCols = [
@@ -19,7 +20,11 @@ const mobileTermCols = [
 const mobileSummaryCols = [
   { prop: 'term', label: '关键词' },
 ];
-const { submit } = useAudit();
+
+// M1-007: the most recent ad_action_queue draft produced by this wizard. We keep it
+// visible (id + status) instead of silently resetting the wizard, so the action stays
+// traceable as a draft and is never presented as "already executed".
+const lastDraft = ref(null);
 
 const step = ref(0);
 const sourceCampaign = ref('cmp-launch-sp');
@@ -72,16 +77,45 @@ function prev() {
   step.value--;
 }
 async function doSubmit() {
-  await submit({
-    sourceModule: 'M3',
-    actionType: 'PROMOTE_TO_MANUAL',
-    target: { type: 'campaign', id: sourceCampaign.value },
-    payload: { termCount: selectedTerms.value.length, matchType: matchType.value, syncNegatives: syncNegatives.value, targetMode: targetCampaignMode.value },
-    expectedImpact: { metric: 'monthly_sales_lift', change: Math.round(selectedTerms.value.reduce((s, t) => s + t.sales30d, 0) * 0.4) },
-    description: `转化 ${selectedTerms.value.length} 个搜索词到手动 Campaign + 源端否定`,
-  });
-  step.value = 0;
-  selectedTerms.value = [];
+  // M1-007: promoting search terms to a manual campaign + source-side negatives is a
+  // REAL ad write surface. It must flow through ad_action_queue as a dryRun + needs_review
+  // draft (never a fire-and-forget audit write that pretends execution). We keep the
+  // resulting draft visible (id + status) instead of resetting the wizard to step 0.
+  const confirmed = window.confirm(buildAuditConfirmMessage('生成自动→手动转化草案', selectedTerms.value.length));
+  if (!confirmed) return;
+  try {
+    const item = await actionQueueApi.enqueue({
+      sourceModule: 'M3',
+      actionType: 'PROMOTE_TO_MANUAL',
+      entityType: 'campaign',
+      entityId: sourceCampaign.value,
+      payload: {
+        termCount: selectedTerms.value.length,
+        terms: selectedTerms.value.map((t) => t.term),
+        matchType: matchType.value,
+        syncNegatives: syncNegatives.value,
+        targetMode: targetCampaignMode.value,
+        targetCampaignName: targetCampaignName.value,
+        // expectedImpact is a coarse estimate (经验系数 0.4), not a prediction.
+        expectedImpactEstimate: {
+          metric: 'monthly_sales_lift',
+          change: Math.round(selectedTerms.value.reduce((s, t) => s + t.sales30d, 0) * 0.4),
+          basis: '估算假设（经验系数 0.4，非预测）',
+        },
+      },
+      dryRun: true,
+      auditRequired: true,
+      guardrail: { status: 'needs_review', reasons: ['promote_to_manual_requires_action_queue'] },
+    });
+    lastDraft.value = {
+      id: item?.id || 'queued',
+      status: item?.guardrail?.status || item?.status || 'needs_review',
+      termCount: selectedTerms.value.length,
+    };
+    ElMessage.success(`已生成手动转化草案（dryRun，未写回 Amazon）：${lastDraft.value.id}`);
+  } catch (e) {
+    ElMessage.error(`提交失败：${e.message || e}`);
+  }
 }
 </script>
 
@@ -258,15 +292,31 @@ async function doSubmit() {
 
         <h4 class="detail-title">预期影响</h4>
         <el-row :gutter="12">
-          <el-col :xs="24" :sm="8"><div class="impact-cell">+ <strong class="tnum text-success">{{ Math.round(selectedTerms.reduce((s, t) => s + t.sales30d, 0) * 0.4) }}</strong> /月 销售提升<small>手动精准比自动效率高 30-50%</small></div></el-col>
+          <el-col :xs="24" :sm="8"><div class="impact-cell">+ <strong class="tnum text-success">{{ Math.round(selectedTerms.reduce((s, t) => s + t.sales30d, 0) * 0.4) }}</strong> /月 销售提升<small>估算假设（经验系数 0.4，非预测）</small></div></el-col>
           <el-col :xs="24" :sm="8"><div class="impact-cell">- <strong class="tnum text-success">${{ Math.round(selectedTerms.reduce((s, t) => s + t.clicks30d * 0.5, 0)) }}</strong> /月 浪费节省<small>源端否词后避免重复</small></div></el-col>
           <el-col :xs="24" :sm="8"><div class="impact-cell"><strong class="tnum">{{ selectedTerms.length }}</strong> 个新关键词<small>手动可控、可优化、可分时段</small></div></el-col>
         </el-row>
 
         <div class="step-foot">
           <el-button @click="prev">上一步</el-button>
-          <el-button type="primary" :icon="'CircleCheckFilled'" @click="doSubmit">确认提交（进入审计中心）</el-button>
+          <el-button type="primary" :icon="'CircleCheckFilled'" @click="doSubmit">生成手动转化草案（未写回 Amazon）</el-button>
         </div>
+
+        <el-alert
+          v-if="lastDraft"
+          type="success"
+          :closable="false"
+          show-icon
+          style="margin-top: 16px"
+          title="已生成 ad_action_queue 草案（dryRun · 待人工复核）"
+        >
+          <template #default>
+            草案 ID：<strong class="tnum">{{ lastDraft.id }}</strong> ·
+            状态：<strong>{{ lastDraft.status }}</strong> ·
+            搜索词：{{ lastDraft.termCount }} 个。
+            该草案尚未写回 Amazon，需在审计中心 / 操作工单中人工复核后执行。
+          </template>
+        </el-alert>
       </div>
     </el-card>
   </div>

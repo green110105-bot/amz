@@ -9,16 +9,14 @@ import ResponsiveTable from '../components/ResponsiveTable.vue';
 import ResponsiveDrawer from '../components/ResponsiveDrawer.vue';
 import { useViewport } from '../composables/useViewport';
 import { useTargets, useAbTests, useVersions } from '../composables/useM1State';
-import { useAudit } from '../composables/useAudit';
 
 const { isMobile } = useViewport();
 
 const route = useRoute();
 const router = useRouter();
-const { submit } = useAudit();
 
 const { list: targets, fetch: fetchTargets } = useTargets();
-const { list: abTests, kpi, fetch: fetchAb, create, start, abort, metrics, adoptWinner } = useAbTests();
+const { list: abTests, kpi, fetch: fetchAb, create, start, abort, metrics, finalize, adoptWinner } = useAbTests();
 
 const statusFilter = ref(route.query.status || 'all');
 
@@ -32,6 +30,12 @@ const filtered = computed(() => {
   if (statusFilter.value === 'all') return abTests.value;
   return abTests.value.filter((t) => t.status === statusFilter.value);
 });
+
+// Any test without an amazon_experiment_id is synthetic demo data (not a real Amazon experiment).
+// amazon_experiment_id is always null today, so the banner is effectively always shown.
+const hasSyntheticTests = computed(() =>
+  (abTests.value || []).some((t) => !(t.amazon_experiment_id || t.amazonExperimentId)),
+);
 
 onMounted(async () => {
   await Promise.all([fetchTargets(), fetchAb()]);
@@ -109,6 +113,7 @@ function statusType(s) {
     completed: 'success',
     aborted: 'danger',
     manual_required: 'warning',
+    ready_for_manual_publish: 'warning',
   })[s] || 'info';
 }
 
@@ -119,6 +124,7 @@ function statusLabel(s) {
     completed: '已完成',
     aborted: '已中止',
     manual_required: '需手动',
+    ready_for_manual_publish: '待手动发布',
   })[s] || s;
 }
 
@@ -137,16 +143,18 @@ async function onAbort(row) {
   } catch {}
 }
 
-async function onAdoptWinner(row) {
+async function onFinalize(row) {
   try {
-    await submit({
-      sourceModule: 'M1',
-      actionType: 'ADOPT_AB_WINNER',
-      target: { type: 'ab_test', id: row.id },
-      payload: { winner: row.winner, lift: row.lift },
-      expectedImpact: { metric: 'cvr_lift', change: `+${((row.lift || 0) * 100).toFixed(1)}%` },
-      description: `采用 A/B Winner（${row.id?.slice(0, 8)} · lift ${((row.lift || 0) * 100).toFixed(1)}%）`,
-    });
+    await finalize(row.id);
+  } catch {}
+}
+
+async function onAdoptWinner(row) {
+  // M1-011/M1-006: a single logical action must map to a SINGLE actionType. The
+  // frontend audit pre-write is removed — the backend adopt-winner endpoint writes
+  // exactly one M1_AB_ADOPT_WINNER audit row after the real data change. This prevents
+  // the duplicate 3-actionType / 2-write-path问题.
+  try {
     await adoptWinner(row.id);
   } catch {}
 }
@@ -177,17 +185,28 @@ const mobileMetricCols = [
 
 <template>
   <div>
-    <PageHeader title="A/B 测试中心" subtitle="亚马逊原生主图 / 标题 / A+ A/B · 14 天 · 显著性 z-test">
+    <PageHeader title="A/B 测试中心" subtitle="主图 / 标题 / A+ A/B · 14 天 · 合成显著性测算">
       <template #extra>
         <el-button type="primary" :icon="'Plus'" @click="openCreate">新建 A/B 测试</el-button>
       </template>
     </PageHeader>
 
+    <el-alert
+      v-if="hasSyntheticTests"
+      type="warning"
+      :closable="false"
+      show-icon
+      class="synthetic-banner"
+      title="合成演示数据 · 未接入亚马逊原生实验"
+      description="当前 A/B 指标为确定性合成数据（control / treatment 同一基线，无内置偏置），尚未对接 Amazon Manage Your Experiments / SP-API 真实实验。"
+    />
+
     <el-row :gutter="16" class="kpi-row">
-      <el-col :xs="12" :sm="12" :md="6" :lg="6"><KpiCard label="进行中" :value="kpi.running" status="warning" icon="Stopwatch" /></el-col>
-      <el-col :xs="12" :sm="12" :md="6" :lg="6"><KpiCard label="已完成" :value="kpi.completed" status="success" icon="CircleCheck" /></el-col>
-      <el-col :xs="12" :sm="12" :md="6" :lg="6"><KpiCard label="需手动" :value="kpi.manualRequired" status="info" icon="WarningFilled" /></el-col>
-      <el-col :xs="12" :sm="12" :md="6" :lg="6"><KpiCard label="总数" :value="kpi.total" status="default" icon="DataAnalysis" /></el-col>
+      <el-col :xs="12" :sm="12" :md="4" :lg="4"><KpiCard label="进行中" :value="kpi.running" status="warning" icon="Stopwatch" /></el-col>
+      <el-col :xs="12" :sm="12" :md="5" :lg="5"><KpiCard label="已完成" :value="kpi.completed" status="success" icon="CircleCheck" /></el-col>
+      <el-col :xs="12" :sm="12" :md="5" :lg="5"><KpiCard label="待手动发布" :value="kpi.readyForManualPublish" status="warning" icon="Upload" /></el-col>
+      <el-col :xs="12" :sm="12" :md="5" :lg="5"><KpiCard label="需手动" :value="kpi.manualRequired" status="info" icon="WarningFilled" /></el-col>
+      <el-col :xs="12" :sm="12" :md="5" :lg="5"><KpiCard label="总数" :value="kpi.total" status="default" icon="DataAnalysis" /></el-col>
     </el-row>
 
     <el-card shadow="never" class="mt-16">
@@ -200,6 +219,7 @@ const mobileMetricCols = [
             <el-option label="进行中" value="running" />
             <el-option label="已完成" value="completed" />
             <el-option label="草稿" value="draft" />
+            <el-option label="待手动发布" value="ready_for_manual_publish" />
             <el-option label="需手动" value="manual_required" />
             <el-option label="已中止" value="aborted" />
           </el-select>
@@ -248,8 +268,9 @@ const mobileMetricCols = [
           <template #default="{ row }">
             <el-button size="small" link type="primary" @click="viewDetail(row)">详情</el-button>
             <el-button v-if="row.status === 'draft'" size="small" type="primary" plain @click="onStart(row)">启动</el-button>
+            <el-button v-if="row.status === 'running'" size="small" type="success" plain @click="onFinalize(row)">固化结果</el-button>
             <el-button v-if="row.status === 'running'" size="small" type="danger" plain @click="onAbort(row)">中止</el-button>
-            <el-button v-if="row.status === 'completed' && row.winner === 'treatment'" size="small" type="primary" @click="onAdoptWinner(row)">
+            <el-button v-if="row.status === 'completed' && row.winner !== null" size="small" type="primary" @click="onAdoptWinner(row)">
               采用 Winner
             </el-button>
           </template>
@@ -261,7 +282,7 @@ const mobileMetricCols = [
           <el-button size="small" type="primary" plain @click.stop="viewDetail(row)">详情</el-button>
           <el-button v-if="row.status === 'draft'" size="small" type="primary" @click.stop="onStart(row)">启动</el-button>
           <el-button v-if="row.status === 'running'" size="small" type="danger" @click.stop="onAbort(row)">中止</el-button>
-          <el-button v-if="row.status === 'completed' && row.winner === 'treatment'" size="small" type="primary" @click.stop="onAdoptWinner(row)">采用</el-button>
+          <el-button v-if="row.status === 'completed' && row.winner !== null" size="small" type="primary" @click.stop="onAdoptWinner(row)">采用</el-button>
         </template>
       </ResponsiveTable>
     </el-card>
@@ -293,7 +314,7 @@ const mobileMetricCols = [
             <el-option
               v-for="v in versionsForTarget"
               :key="v.id"
-              :label="`R${v.round_no ?? v.roundNo} · ${v.source} · ${(v.title || '').slice(0, 30)}`"
+              :label="`R${v.round_no ?? v.roundNo} · ${v.source}${(v.is_archived ?? v.isArchived) ? ' · (已归档)' : ''} · ${(v.title || '').slice(0, 30)}`"
               :value="v.id"
             />
           </el-select>
@@ -303,7 +324,7 @@ const mobileMetricCols = [
             <el-option
               v-for="v in versionsForTarget"
               :key="v.id"
-              :label="`R${v.round_no ?? v.roundNo} · ${v.source} · ${(v.title || '').slice(0, 30)}`"
+              :label="`R${v.round_no ?? v.roundNo} · ${v.source}${(v.is_archived ?? v.isArchived) ? ' · (已归档)' : ''} · ${(v.title || '').slice(0, 30)}`"
               :value="v.id"
             />
           </el-select>
@@ -321,6 +342,14 @@ const mobileMetricCols = [
     <!-- 详情抽屉 -->
     <ResponsiveDrawer v-model="detailOpen" title="A/B 详情" size="640px">
       <div v-if="detail" v-loading="detailLoading">
+        <el-alert
+          v-if="!(detail.amazon_experiment_id || detail.amazonExperimentId)"
+          type="warning"
+          :closable="false"
+          show-icon
+          style="margin-bottom: 12px"
+          title="合成演示数据 · 未接入亚马逊原生实验"
+        />
         <el-descriptions :column="isMobile ? 1 : 2" border>
           <el-descriptions-item label="ID" :span="2"><span class="tnum">{{ detail.id }}</span></el-descriptions-item>
           <el-descriptions-item label="ASIN">{{ detail.asin }}</el-descriptions-item>
@@ -374,6 +403,7 @@ const mobileMetricCols = [
 </template>
 
 <style scoped>
+.synthetic-banner { margin-bottom: 12px; }
 .kpi-row { margin-bottom: 0; }
 .kpi-row > .el-col { margin-bottom: 12px; }
 .section-title { font-size: 16px; font-weight: 600; margin: 0; }

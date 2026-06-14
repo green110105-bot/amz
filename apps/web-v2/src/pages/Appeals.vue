@@ -5,7 +5,7 @@
 // T3 桌面优先：列表移动可用（ResponsiveTable），新建/编辑表单移动用 MobileFallback
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus'; // ElMessageBox: M4-P0-03 manual-evidence prompt
 import PageHeader from '../components/PageHeader.vue';
 import KpiCard from '../components/KpiCard.vue';
 import EmptyState from '../components/EmptyState.vue';
@@ -95,13 +95,77 @@ async function onDraft() {
   }
 }
 
+// M4-P0-03: per-field validation errors collected from a validation_failed response,
+// keyed by appeal id. Rendered as red per-field text under the row's 提交 button.
+const submitErrors = ref({});
+
+// Collect the four manual-evidence fields (shared semantics with the hijacking appeal
+// flow): amazonCaseId / submittedBy / manualSubmittedAt / evidenceAttachment.
+async function collectManualEvidence() {
+  const { value } = await ElMessageBox.prompt(
+    '提交申诉需登记人工证据，请逐行填写四项（系统不调用外部 Amazon API）。',
+    '提交申诉 · 人工证据',
+    {
+      type: 'info',
+      inputType: 'textarea',
+      inputValue: 'Amazon Case ID: \nSubmitted By: \nSubmitted At: \nEvidence Attachment: ',
+      inputPlaceholder: 'Amazon Case ID / 提交人 / 提交时间 / 证据附件 四项均必填',
+      confirmButtonText: '提交',
+      cancelButtonText: '取消',
+    },
+  );
+  const raw = String(value || '');
+  const pick = (patterns) => {
+    for (const pattern of patterns) {
+      const m = raw.match(new RegExp(`${pattern.source}\\s*:\\s*([^\\n]+)`, 'i'));
+      if (m?.[1]) return m[1].trim();
+    }
+    return '';
+  };
+  return {
+    amazonCaseId: pick([/Amazon\s*Case\s*ID/i, /Case\s*ID/i, /amazonCaseId/i]),
+    submittedBy: pick([/Submitted\s*By/i, /submittedBy/i]),
+    manualSubmittedAt: pick([/Submitted\s*At/i, /submittedAt/i, /manualSubmittedAt/i]),
+    evidenceAttachment: pick([/Evidence\s*Attachment/i, /evidenceAttachment/i]),
+  };
+}
+
+function missingLabel(field) {
+  return ({
+    amazonCaseId: 'Amazon Case ID',
+    submittedBy: '提交人',
+    manualSubmittedAt: '提交时间',
+    evidenceAttachment: '证据附件',
+  })[field] || field;
+}
+
 async function submit(a) {
   if (!canAppealTransition(a.status, 'submitted')) {
     ElMessage.warning(`非法状态跳转：${a.status} → submitted`);
     return;
   }
-  const updated = await ap.submit(a.id);
+  let form;
+  try {
+    form = await collectManualEvidence();
+  } catch (_) {
+    return; // cancelled
+  }
+  // clear any prior per-field errors for this row
+  submitErrors.value = { ...submitErrors.value, [a.id]: [] };
+  let updated;
+  try {
+    updated = await ap.submit(a.id, form);
+  } catch (e) {
+    // validation_failed → render error.missing[] as per-field red text, stay in draft.
+    const err = e?.data || e?.response?.data || e;
+    if (err?.error === 'validation_failed' && Array.isArray(err.missing)) {
+      submitErrors.value = { ...submitErrors.value, [a.id]: err.missing };
+      return;
+    }
+    throw e;
+  }
   if (updated) {
+    submitErrors.value = { ...submitErrors.value, [a.id]: [] };
     bus.pushLocal({ severity: 'P1', sourceModule: 'M4B', title: `申诉已提交`, body: `Case ${updated.amazonCaseId || updated.amazon_case_id}` });
   }
 }
@@ -191,6 +255,9 @@ const mobileCols = [
             <el-button v-if="allowed(row).includes('rejected')" size="small" type="danger" plain @click.stop="reviewAppeal(row, 'rejected')">驳回</el-button>
             <el-button v-if="row.status === 'rejected'" size="small" type="warning" plain @click.stop="retry(row)">重提</el-button>
             <el-button size="small" link @click.stop="viewDetail(row)">详情</el-button>
+            <div v-if="(submitErrors[row.id] || []).length" class="submit-errors">
+              <div v-for="m in submitErrors[row.id]" :key="m" class="submit-error-item">缺少必填项：{{ missingLabel(m) }}</div>
+            </div>
           </template>
         </el-table-column>
 
@@ -203,6 +270,9 @@ const mobileCols = [
           <el-button v-if="allowed(row).includes('rejected')" size="small" type="danger" plain @click.stop="reviewAppeal(row, 'rejected')">驳回</el-button>
           <el-button v-if="row.status === 'rejected'" size="small" type="warning" plain @click.stop="retry(row)">重提</el-button>
           <el-button size="small" link @click.stop="viewDetail(row)">详情</el-button>
+          <div v-if="(submitErrors[row.id] || []).length" class="submit-errors">
+            <div v-for="m in submitErrors[row.id]" :key="m" class="submit-error-item">缺少必填项：{{ missingLabel(m) }}</div>
+          </div>
         </template>
       </ResponsiveTable>
     </el-card>
@@ -294,4 +364,6 @@ const mobileCols = [
 .mt-16 { margin-top: 16px; }
 .block-label { font-size: 11px; color: var(--text-muted); letter-spacing: 0.04em; text-transform: uppercase; margin: 16px 0 6px; }
 .block-text { margin: 0; font-size: 13px; line-height: 1.7; padding: 8px 12px; background: #f9fafb; border-radius: 4px; }
+.submit-errors { margin-top: 4px; }
+.submit-error-item { color: var(--el-color-danger, #f56c6c); font-size: 11px; line-height: 1.5; }
 </style>

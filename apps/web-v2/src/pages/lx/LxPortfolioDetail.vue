@@ -3,6 +3,8 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { usePortfolios, useCampaigns } from '../../composables/useLxState';
+import { realWritesEnabled, confirmAuditAction } from '../../composables/useLiveActionGate.js';
+import { actionQueueApi } from '../../api/ads-timeline';
 import AiActivityBanner from '../../components/AiActivityBanner.vue';
 import BulkCsvDialog from '../../components/BulkCsvDialog.vue';
 import ResponsiveTable from '../../components/ResponsiveTable.vue';
@@ -73,17 +75,58 @@ async function bulkCopy() {
   selectedRows.value = [];
 }
 
+// m3-button-level / lx-portfolio-action / M3-P1-17: pause is a real Ads write — it must
+// confirm via the shared audit gate and funnel through ad_action_queue (dryRun +
+// needs_review + auditRequired). It MUST NOT call the direct toggle write path.
+const realWrites = computed(() => realWritesEnabled());
+const pauseHint = computed(() =>
+  realWrites.value
+    ? '暂停将进入 ad_action_queue 审计工单(needs_review),dryRun 默认开启'
+    : '当前为 dryRun(演示)模式,暂停仅入队审计,不会真实生效'
+);
+
+async function enqueuePause(r) {
+  return actionQueueApi.enqueue({
+    sourceStrategyName: 'LxPortfolioDetail manual pause',
+    entity: { kind: 'campaign', id: r.id, name: r.name },
+    typedAction: {
+      actionPrimitive: 'PAUSE_CAMPAIGN',
+      sourceSurface: 'lx',
+      entityKind: 'campaign',
+      currentValue: { enabled: true },
+      recommendedValue: { enabled: false },
+      dryRun: true,
+      auditRequired: true,
+      requiresRealStoreWrite: false,
+    },
+    guardrail: { status: 'needs_review', reasons: ['manual_lx_write_requires_action_queue'] },
+  });
+}
+
 async function bulkPause() {
-  if (!selectedRows.value.length) return;
-  try {
-    await ElMessageBox.confirm(`确定暂停选中的 ${selectedRows.value.length} 个 Campaign？`, '批量暂停',
-      { confirmButtonText: '暂停', cancelButtonText: '取消', type: 'warning' });
-  } catch { return; }
-  for (const r of selectedRows.value) {
-    if (r.enabled) await toggleCampaign(r);
+  const targets = selectedRows.value.filter((r) => r.enabled);
+  if (!targets.length) { ElMessage.info('请选择启用中的广告活动'); return; }
+  if (!confirmAuditAction('暂停广告活动', targets.length)) return;
+  let ok = 0, fail = 0;
+  for (const r of targets) {
+    try {
+      const res = await enqueuePause(r);
+      if (res && res.duplicate !== true && res.queued === false) fail++; else ok++;
+    } catch { fail++; }
   }
-  ElMessage.success(`已暂停 ${selectedRows.value.length} 个`);
+  ElMessage.success(`已加入执行篮待批准生效:成功 ${ok} 项,失败 ${fail} 项`);
   selectedRows.value = [];
+}
+
+async function pauseOne(r) {
+  if (!r.enabled) { ElMessage.info('该广告活动已暂停'); return; }
+  if (!confirmAuditAction('暂停广告活动', 1)) return;
+  try {
+    const res = await enqueuePause(r);
+    if (res?.queued) ElMessage.success('已加入执行篮待批准生效');
+  } catch (e) {
+    ElMessage.error('入队失败：' + (e?.message || e));
+  }
 }
 
 const bulkBudgetDialogOpen = ref(false);
@@ -129,12 +172,12 @@ function gotoCampaign(row) {
   router.push(`/ads/lx/campaigns/${row.id}?g=ad-groups`);
 }
 
-async function onCampaignSwitch(row) {
-  await toggleCampaign(row);
+async function onCampaignSwitch(row, value) {
+  await toggleCampaign(row, value);
 }
 
-async function onBudgetChange(row, value) {
-  await setBudget(row, value);
+async function onBudgetChange(row, value, oldValue) {
+  await setBudget(row, value, oldValue);
 }
 
 const totals = computed(() => {
@@ -187,6 +230,11 @@ const trendAcosPath = computed(() => {
     <div class="lx2-header">
       <span class="crumb">广告组合 -</span>
       <strong class="title">{{ portfolio.name }}</strong>
+    </div>
+
+    <!-- m3-button-level / lx-portfolio-action: dryRun banner when real writes not enabled -->
+    <div v-if="!realWrites" class="dryrun-banner">
+      <span>dryRun(演示)模式 · 暂停仅进入 ad_action_queue 审计(needs_review),不会真实生效</span>
     </div>
 
     <!-- 筛选条 -->
@@ -323,7 +371,7 @@ const trendAcosPath = computed(() => {
         <span class="spacer" />
         <el-button type="primary" size="small" :icon="'CopyDocument'" @click="bulkCopy">批量复制</el-button>
         <el-button size="small" :icon="'Money'" @click="openBulkBudget">批量改预算</el-button>
-        <el-button size="small" :icon="'VideoPause'" type="warning" @click="bulkPause">批量暂停</el-button>
+        <el-button size="small" :icon="'VideoPause'" type="warning" :title="pauseHint" @click="bulkPause">批量暂停(审计)</el-button>
         <el-button size="small" link type="info" @click="selectedRows = []">取消选择</el-button>
       </div>
     </transition>
@@ -344,7 +392,7 @@ const trendAcosPath = computed(() => {
         <el-table-column type="selection" width="40" fixed />
         <el-table-column label="有效" width="60" fixed>
           <template #default="{ row }">
-            <el-switch v-model="row.enabled" size="small" @click.stop @change="onCampaignSwitch(row)" />
+            <el-switch v-model="row.enabled" size="small" @click.stop @change="(v) => onCampaignSwitch(row, v)" />
           </template>
         </el-table-column>
         <el-table-column label="广告类型" width="80" fixed>
@@ -363,7 +411,7 @@ const trendAcosPath = computed(() => {
         </el-table-column>
         <el-table-column label="预算($)" width="100">
           <template #default="{ row }">
-            <el-input-number v-model="row.dailyBudget" :precision="2" size="small" :controls="false" style="width: 80px" @click.stop @change="(v) => onBudgetChange(row, v)" />
+            <el-input-number v-model="row.dailyBudget" :precision="2" size="small" :controls="false" style="width: 80px" @click.stop @change="(v, old) => onBudgetChange(row, v, old)" />
           </template>
         </el-table-column>
         <el-table-column label="服务状态" width="120">

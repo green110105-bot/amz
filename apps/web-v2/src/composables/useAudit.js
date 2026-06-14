@@ -4,16 +4,26 @@
 import { ElMessage, ElNotification } from 'element-plus';
 import { auditApi } from '../api/audit';
 import { useLocalStore } from './useLocalStore';
+import { useAppStore } from '../stores/app';
 
 export function useAudit() {
   const store = useLocalStore();
+  // W4: requiresRealStoreWrite is driven by the appStore single-truth-source
+  // (sourceMeta.realWritesEnabled), not hard-coded false. In the default product
+  // (B方案 / mock) realWritesEnabled is false, so this stays false and no real
+  // write is ever requested. The flag only flips true when the backend env gate
+  // is armed — which is what makes the real-write gate TESTABLE. The真值 (whether
+  // a real write actually happens) is still ENFORCED server-side by W3:
+  // REAL_WRITES_ENABLED!=='true' forces requiresRealStoreWrite=false regardless of
+  // what the client sends. We never trust this client flag for the actual write.
+  const appStore = useAppStore();
 
   async function submit({ sourceModule, actionType, target, payload, expectedImpact, description, sovereignty = 'manual' }) {
     const action = {
       sourceModule,
       actionType,
       target: target || {},
-      payload: { ...(payload || {}), requiresRealStoreWrite: false },
+      payload: { ...(payload || {}), requiresRealStoreWrite: appStore.realWritesEnabled === true },
       expectedImpact: expectedImpact || {},
       sovereignty,
       requestedBy: store.user?.id || 'demo',
@@ -24,10 +34,14 @@ export function useAudit() {
       const auditId = result?.id || `${sourceModule}:${actionType}:${Date.now()}`;
 
       // 持久化到本地审计日志 + 后端 DB
+      // X-P1-07: tag origin explicitly. This UI path is a MOCK execution that never
+      // touches an external account, so origin is 'mock-seed'. Real Amazon writes
+      // arrive via the action-queue / live-action-executor with origin 'ads-real-write'.
       await store.addAuditLog({
         id: auditId,
         sourceModule,
         actionType,
+        origin: 'mock-seed',
         resourceType: target?.type || 'unknown',
         resourceId: target?.id || target?.sku || target?.asin || 'na',
         executor: store.user?.id || 'demo',
@@ -43,8 +57,8 @@ export function useAudit() {
 
       if (result?.status === 'mock_executed') {
         ElNotification({
-          title: '已提交审计中心',
-          message: description || `${actionType} 已 mock 执行，可在审计中心回滚`,
+          title: '已提交审计中心（mock 执行）',
+          message: description || `${actionType} 已 mock 执行（未触达 Amazon），可在审计中心撤销`,
           type: 'success',
           duration: 3000,
           position: 'bottom-right',

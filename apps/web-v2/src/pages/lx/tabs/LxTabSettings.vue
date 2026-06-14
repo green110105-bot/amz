@@ -1,7 +1,8 @@
 <script setup>
 import { onMounted, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
-import { campaignsApi, portfoliosApi } from '../../../api/lx';
+import { portfoliosApi } from '../../../api/lx';
+import { actionQueueApi } from '../../../api/ads-timeline';
 import { useViewport } from '../../../composables/useViewport';
 
 const { isMobile } = useViewport();
@@ -65,19 +66,36 @@ onMounted(() => {
 });
 
 async function save() {
+  const patch = {
+    name: form.value.name,
+    state: form.value.state,
+    dailyBudget: form.value.dailyBudget,
+    bidStrategy: form.value.bidStrategy,
+    portfolioId: form.value.portfolioId,
+    startedAt: form.value.startDate,
+  };
   try {
-    await campaignsApi.update(props.campaign.id, {
-      name: form.value.name,
-      state: form.value.state,
-      dailyBudget: form.value.dailyBudget,
-      bidStrategy: form.value.bidStrategy,
-      portfolioId: form.value.portfolioId,
-      startedAt: form.value.startDate,
+    await actionQueueApi.enqueue({
+      sourceStrategyName: 'LX manual operation',
+      entity: { kind: 'campaign', id: props.campaign.id, name: props.campaign.name || props.campaign.id },
+      typedAction: {
+        actionPrimitive: 'UPDATE_CAMPAIGN_SETTINGS',
+        sourceSurface: 'lx',
+        entityKind: 'campaign',
+        resourceId: props.campaign.id,
+        currentValue: props.campaign,
+        recommendedValue: patch,
+        dryRun: true,
+        auditRequired: true,
+      },
+      guardrail: { status: 'needs_review', reasons: ['manual_lx_write_requires_action_queue'] },
+      rollbackPlan: { method: 'restore_previous_campaign_settings', needsManualReview: true },
+      note: 'campaign settings change queued from LX surface',
     });
     clearDraft();
-    ElMessage.success('已保存 Campaign 设置');
+    ElMessage.success('Added to Action Queue. Approval and dry-run are required before any write.');
   } catch (e) {
-    ElMessage.error(`保存失败：${e.message || e}`);
+    ElMessage.error(`Queue failed: ${e.message || e}`);
   }
 }
 </script>

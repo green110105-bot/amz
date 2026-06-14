@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import PageHeader from '../components/PageHeader.vue';
 import KpiCard from '../components/KpiCard.vue';
 import ResponsiveTable from '../components/ResponsiveTable.vue';
@@ -82,9 +82,10 @@ const maxBalance = computed(() => {
   const arr = points.value.map((p) => p.balance).filter((v) => Number.isFinite(v));
   return arr.length ? Math.max(...arr) : 0;
 });
+// M2-P0-03: 信任后端 summary（按真实日历日偏移取点），不再用数组下标兜底
 const today = computed(() => summary.value?.today ?? points.value[0]?.balance ?? 0);
-const future30 = computed(() => summary.value?.future30 ?? points.value[Math.min(29, points.value.length - 1)]?.balance ?? 0);
-const future90 = computed(() => summary.value?.future90 ?? points.value[points.value.length - 1]?.balance ?? 0);
+const future30 = computed(() => summary.value?.future30 ?? 0);
+const future90 = computed(() => summary.value?.future90 ?? 0);
 const lowestPoint = computed(() =>
   points.value.find((p) => p.balance === (summary.value?.minBalance ?? minBalance.value)),
 );
@@ -124,6 +125,10 @@ async function submitEvent() {
     ElMessage.warning('请填写日期与标签');
     return;
   }
+  // M2-P0-03: 提示该事件将重算后续余额；提交成功才 clearDraft
+  try {
+    await ElMessageBox.confirm('新增事件将重算其后所有日期的现金流余额，确认提交？', '提示', { type: 'info' });
+  } catch { return; }
   try {
     await profit.createCashflowEvent(draft.value);
     dialog.value = false;

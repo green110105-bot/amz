@@ -1,4 +1,4 @@
-<script setup>
+﻿<script setup>
 import { computed, ref, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import ListingDiff from './ListingDiff.vue';
@@ -8,34 +8,33 @@ const props = defineProps({
   targetId: { type: String, required: true },
 });
 
-const v = computed(() => useVersions(props.targetId));
-const versions = computed(() => v.value.list.value);
+const versionState = computed(() => useVersions(props.targetId));
+const versions = computed(() => versionState.value.list.value);
 
-const selected = ref([]); // 选中 2 版 → diff
+const selected = ref([]);
 const diffOpen = ref(false);
 const fieldPickerOpen = ref(false);
-const fieldPicks = ref({}); // {title: versionId, bullet_1: versionId, ...}
+const fieldPicks = ref({});
 
 const fieldsForPick = [
   { key: 'title', label: '标题' },
-  { key: 'bullet_1', label: '5 点 #1' },
-  { key: 'bullet_2', label: '5 点 #2' },
-  { key: 'bullet_3', label: '5 点 #3' },
-  { key: 'bullet_4', label: '5 点 #4' },
-  { key: 'bullet_5', label: '5 点 #5' },
+  { key: 'bullet_1', label: '五点 #1' },
+  { key: 'bullet_2', label: '五点 #2' },
+  { key: 'bullet_3', label: '五点 #3' },
+  { key: 'bullet_4', label: '五点 #4' },
+  { key: 'bullet_5', label: '五点 #5' },
   { key: 'description', label: '描述' },
 ];
 
-// 最近 5 版
 const recent = computed(() => versions.value.slice(0, 5));
 
 function sourceLabel(s) {
   return ({
-    initial_import: '初始',
+    initial_import: '初始导入',
     ai_iteration: 'AI 迭代',
-    manual_edit: '手动编辑',
+    manual_edit: '人工编辑',
     combined_pick: '组合挑选',
-  })[s] || s;
+  })[s] || s || '未知';
 }
 
 function sourceType(s) {
@@ -51,25 +50,25 @@ function toggleSelect(id) {
   const i = selected.value.indexOf(id);
   if (i >= 0) selected.value.splice(i, 1);
   else if (selected.value.length < 2) selected.value.push(id);
-  else ElMessage.info('最多选 2 个版本对比');
+  else ElMessage.info('最多选择 2 个版本进行对比');
 }
 
 function startDiff() {
   if (selected.value.length !== 2) {
-    ElMessage.warning('请选 2 个版本对比');
+    ElMessage.warning('请选择 2 个版本进行对比');
     return;
   }
   diffOpen.value = true;
 }
 
 async function togglePin(ver) {
-  await v.value.pin(ver.id, !(ver.is_pinned ?? ver.isPinned));
+  await versionState.value.pin(ver.id, !(ver.is_pinned ?? ver.isPinned));
 }
 
 async function removeVer(ver) {
   try {
     await ElMessageBox.confirm(`确认删除版本 ${ver.id.slice(0, 8)}（轮次 ${ver.round_no ?? ver.roundNo}）？`, '删除版本', { type: 'warning' });
-    await v.value.remove(ver.id);
+    await versionState.value.remove(ver.id);
   } catch {}
 }
 
@@ -81,10 +80,10 @@ function openFieldPicker() {
 async function commitCombinedPick() {
   const picks = fieldPicks.value;
   if (!Object.keys(picks).length) {
-    ElMessage.warning('请至少为一个字段选一个版本');
+    ElMessage.warning('请至少为一个字段选择版本');
     return;
   }
-  await v.value.combinedPick(picks);
+  await versionState.value.combinedPick(picks);
   fieldPickerOpen.value = false;
 }
 
@@ -97,7 +96,7 @@ function toCamel(s) {
 }
 
 onMounted(() => {
-  v.value.fetch();
+  versionState.value.fetch();
 });
 </script>
 
@@ -105,15 +104,15 @@ onMounted(() => {
   <el-card shadow="never" class="vb" id="versions">
     <template #header>
       <div class="block-head">
-        <h2 class="section-title">📚 版本管理（最近 5 版）</h2>
+        <h2 class="section-title">版本管理（最近 5 版）</h2>
         <div class="head-actions">
-          <el-button size="small" :disabled="selected.length !== 2" @click="startDiff">对比 diff</el-button>
+          <el-button size="small" :disabled="selected.length !== 2" @click="startDiff">对比 Diff</el-button>
           <el-button size="small" type="primary" plain @click="openFieldPicker">组合挑选最佳字段</el-button>
         </div>
       </div>
     </template>
 
-    <div v-if="!recent.length" class="empty">尚无版本</div>
+    <div v-if="!recent.length" class="empty">暂无版本。先在“文案/素材”里生成一轮。</div>
 
     <div v-else class="ver-grid">
       <div
@@ -128,7 +127,7 @@ onMounted(() => {
           <el-tag size="small" :type="sourceType(ver.source)" effect="plain">{{ sourceLabel(ver.source) }}</el-tag>
         </div>
         <div class="ver-id">{{ ver.id?.slice(0, 12) }}</div>
-        <p class="ver-title">{{ val(ver, 'title') || '—' }}</p>
+        <p class="ver-title">{{ val(ver, 'title') || '未填写标题' }}</p>
         <div class="ver-meta">
           <span>{{ (ver.created_at || ver.createdAt || '').slice(0, 16) }}</span>
         </div>
@@ -150,24 +149,22 @@ onMounted(() => {
     </div>
 
     <p v-if="recent.length" class="hint">
-      点击卡片选中（最多 2 个）→ 对比 diff · 组合挑选可从多版本拼一个最佳组合
+      点击卡片选择版本（最多 2 个）进行 Diff；组合挑选可以从多版本拼出一个新的最佳字段版本。
     </p>
 
-    <!-- Diff Dialog -->
     <el-dialog v-model="diffOpen" title="版本对比" width="90%" top="5vh">
       <ListingDiff v-if="selected.length === 2" :version-a-id="selected[0]" :version-b-id="selected[1]" />
     </el-dialog>
 
-    <!-- 组合挑选 Dialog -->
     <el-dialog v-model="fieldPickerOpen" title="组合挑选最佳字段" width="800px">
       <p class="text-muted" style="font-size: 13px; margin-bottom: 12px">
-        为每个字段选一个版本，提交后生成一个新的 source='combined_pick' 版本
+        为每个字段选择一个版本，提交后生成新的 source='combined_pick' 版本，便于运营合成最佳稿。
       </p>
       <el-table :data="fieldsForPick" stripe>
         <el-table-column prop="label" label="字段" width="120" />
-        <el-table-column label="选版本">
+        <el-table-column label="选择版本">
           <template #default="{ row }">
-            <el-select v-model="fieldPicks[row.key]" placeholder="选版本" style="width: 100%" clearable>
+            <el-select v-model="fieldPicks[row.key]" placeholder="选择版本" style="width: 100%" clearable>
               <el-option
                 v-for="ver in versions"
                 :key="ver.id"
@@ -188,40 +185,22 @@ onMounted(() => {
 
 <style scoped>
 .vb { margin-bottom: 16px; scroll-margin-top: 80px; }
-.block-head { display: flex; justify-content: space-between; align-items: center; }
-.section-title { font-size: 16px; font-weight: 600; margin: 0; }
-.head-actions { display: flex; gap: 8px; }
-
-.ver-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 12px;
-}
-.ver-card {
-  border: 2px solid var(--line);
-  border-radius: 8px;
-  padding: 12px;
-  cursor: pointer;
-  transition: all 0.15s;
-  background: #fff;
-}
-.ver-card:hover { border-color: var(--primary); }
-.ver-card.selected { border-color: var(--primary); background: var(--primary-soft); }
+.block-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.section-title { font-size: 16px; font-weight: 700; margin: 0; color: #0f172a; }
+.head-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.ver-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.ver-card { border: 2px solid #e2e8f0; border-radius: 12px; padding: 12px; cursor: pointer; transition: all 0.15s; background: #fff; }
+.ver-card:hover { border-color: #0f766e; }
+.ver-card.selected { border-color: #0f766e; background: #f0fdfa; }
 .ver-card.pinned { border-color: #f59e0b; }
 .ver-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
-.ver-id { font-family: ui-monospace, monospace; font-size: 10px; color: var(--text-muted); }
-.ver-title {
-  margin: 6px 0;
-  font-size: 12px;
-  color: var(--text);
-  line-height: 1.4;
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+.ver-id { font-family: ui-monospace, monospace; font-size: 10px; color: #64748b; }
+.ver-title { margin: 6px 0; font-size: 12px; color: #0f172a; line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.ver-meta { font-size: 10px; color: #64748b; margin-bottom: 8px; }
+.ver-actions { display: flex; justify-content: space-between; padding-top: 6px; border-top: 1px dashed #e2e8f0; }
+.hint { font-size: 11px; color: #64748b; margin: 8px 0 0; }
+.empty { padding: 32px; text-align: center; color: #64748b; }
+@media (max-width: 640px) {
+  .block-head { align-items: flex-start; flex-direction: column; }
 }
-.ver-meta { font-size: 10px; color: var(--text-muted); margin-bottom: 8px; }
-.ver-actions { display: flex; justify-content: space-between; padding-top: 6px; border-top: 1px dashed var(--line-soft); }
-.hint { font-size: 11px; color: var(--text-muted); margin: 8px 0 0; }
-.empty { padding: 32px; text-align: center; color: var(--text-muted); }
 </style>

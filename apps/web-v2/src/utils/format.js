@@ -56,3 +56,76 @@ const ACTION_TYPE_LABELS = {
 export function actionLabel(actionType) {
   return ACTION_TYPE_LABELS[actionType] || actionType || '-';
 }
+
+// M1-011: an audit entry is only "published to Amazon" if it actually carries an
+// Amazon receipt. UPLOAD/PUBLISH-class actions without amazon_receipt/amazonReceiptId
+// are drafts that never wrote back to Amazon and must NOT render as '已发布'.
+export function isUploadAction(actionType) {
+  if (!actionType) return false;
+  return /UPLOAD|PUBLISH/i.test(String(actionType));
+}
+
+export function hasAmazonReceipt(row) {
+  if (!row) return false;
+  const r = row.amazon_receipt ?? row.amazonReceiptId ?? row.amazonReceipt ?? row.payload?.amazon_receipt ?? row.payload?.amazonReceiptId;
+  return r != null && String(r).trim() !== '';
+}
+
+// Returns the publish status label for an audit row. For non-UPLOAD/PUBLISH actions
+// returns null (caller falls back to the normal status label).
+export function publishStatusLabel(row) {
+  if (!row || !isUploadAction(row.actionType)) return null;
+  return hasAmazonReceipt(row) ? '已发布' : '草稿 · 未写回 Amazon';
+}
+
+// W2: single normalized card schema consumed by DecisionCard.
+// Accepts the three real shapes that flow into the workbench inbox:
+//   (a) dashboard MOCK card  -> { type, priority, title, payload:{ id, severity, evidence, recommendation, expectedImpact, ... } }
+//   (b) dashboard DB card    -> { id, title, module, risk:{ severity }, status, href, auditRequired } (no payload)
+//   (c) ads-suggestions audit-> { id, actionType, risk:{ severity, requiresApproval }, target, payload, expectedImpact }
+// Output is ONE flat schema so DecisionCard never receives undefined and never
+// emits a Vue prop warning regardless of source codepath.
+export function normalizeCard(raw) {
+  const card = raw || {};
+  // dashboard mock cards nest the rich fields under payload; DB/audit cards are flat.
+  const p = card.payload && typeof card.payload === 'object' ? card.payload : {};
+  const risk = card.risk || p.risk || {};
+
+  const id = p.id || card.id || card.campaignId || card.title || null;
+  const severity = card.severity || p.severity || risk.severity || card.priority || p.priority || null;
+  const title =
+    card.title || p.title || actionLabel(card.actionType || p.actionType) || card.type || p.type || '决策';
+  const actionType = card.actionType || p.actionType || card.type || p.type || null;
+  const evidence = Array.isArray(p.evidence)
+    ? p.evidence
+    : Array.isArray(card.evidence)
+      ? card.evidence
+      : [];
+  const recommendation =
+    p.recommendation || card.recommendation || p.recommendedAction || card.recommendedAction || p.reason || card.reason || '';
+  const expectedImpact = p.expectedImpact || card.expectedImpact || p.estimatedMonthlyImpact || card.estimatedMonthlyImpact || null;
+  const auditRequired =
+    card.auditRequired ?? p.auditRequired ?? risk.requiresApproval ?? null;
+
+  return {
+    id,
+    type: card.type || p.type || null,
+    priority: card.priority || p.priority || null,
+    title,
+    subtitle: card.subtitle || p.subtitle || '',
+    severity,
+    actionType,
+    sku: card.sku || p.sku || card.target?.sku || null,
+    asin: card.asin || p.asin || card.target?.asin || null,
+    campaignId: card.campaignId || p.campaignId || card.target?.id || null,
+    keyword: card.keyword || p.keyword || '',
+    lifecycleStage: card.lifecycleStage || p.lifecycleStage || '',
+    evidence,
+    recommendation,
+    expectedImpact,
+    confidence: card.confidence ?? p.confidence ?? null,
+    auditRequired,
+    href: card.href || p.href || null,
+    sourceMode: card.sourceMode || p.sourceMode || 'mock',
+  };
+}

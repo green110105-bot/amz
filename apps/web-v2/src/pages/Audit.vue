@@ -7,7 +7,8 @@ import MobileFallback from '../components/MobileFallback.vue';
 import { useViewport } from '../composables/useViewport';
 import { mockAuditLogs } from '../utils/mock-data';
 import { useLocalStore } from '../composables/useLocalStore';
-import { formatCurrency, actionLabel } from '../utils/format';
+import { formatCurrency, actionLabel, publishStatusLabel } from '../utils/format';
+import { splitMonthlyImpact } from '../utils/audit-impact';
 
 const { isMobile } = useViewport();
 
@@ -30,15 +31,47 @@ const filtered = computed(() => {
   });
 });
 
+// X-P1-09: monthlyImpact 不再对正负 monthlySaving 净加(净加会把 已节省 与 已投入
+// 互相抵消, 输出语义错乱数字), 改拆为 已节省(saved)/已投入(invested) 两个分账字段。
+const impact = computed(() => splitMonthlyImpact(logs.value));
 const summary = computed(() => ({
   todayTotal: logs.value.length,
   successCount: logs.value.filter((l) => l.status === 'success').length,
   reverted: logs.value.filter((l) => l.reverted).length,
-  monthlyImpact: logs.value.reduce((s, l) => s + (l.monthlySaving || 0), 0),
+  // 分账: saved=正值汇总(已节省), invested=负值绝对值汇总(已投入)
+  monthlySaved: impact.value.saved,
+  monthlyInvested: impact.value.invested,
 }));
 
 function statusTagType(s) {
   return { success: 'success', failed: 'danger', reverted: 'warning', queued: '' }[s] || '';
+}
+
+// X-P1-07: classify each row by origin and decide the rollback affordance.
+//   mock-seed      -> mock/demo record, rollback disabled (nothing external to undo)
+//   ads-real-write -> real Amazon write, rollback blocked -> '申请人工回滚'
+//   local-real     -> real local DB change, programmatic rollback allowed
+function rowOrigin(row) {
+  if (row.origin) return row.origin;
+  if (row.actionType === 'ACTION_QUEUE_REAL_WRITE' || row.requiresRealStoreWrite === true) return 'ads-real-write';
+  if (row.actionType === 'ACTION_QUEUE_DRY_RUN') return 'mock-seed';
+  // legacy mock seed history has no origin and never touched anything external
+  return row.executor === 'auto_system' || row.id?.startsWith?.('mock') ? 'mock-seed' : 'local-real';
+}
+const ORIGIN_LABELS = {
+  'mock-seed': { text: 'Mock', type: 'info' },
+  'local-real': { text: '本地真实', type: 'success' },
+  'ads-real-write': { text: '广告真实写', type: 'danger' },
+};
+function originMeta(row) {
+  return ORIGIN_LABELS[rowOrigin(row)] || ORIGIN_LABELS['mock-seed'];
+}
+function canRollback(row) {
+  if (row.reverted || row.status !== 'success') return false;
+  return rowOrigin(row) === 'local-real';
+}
+function isRealWriteRow(row) {
+  return rowOrigin(row) === 'ads-real-write' && !row.reverted;
 }
 function moduleColor(m) {
   return { M1: '#8b5cf6', M2: '#22d3ee', M3: '#f59e0b', M4: '#10b981' }[m] || '#6b7280';
@@ -49,20 +82,52 @@ async function revert(log) {
     ElMessage.info('该操作已回滚');
     return;
   }
+  // X-P1-07 / X-P0-01: real Amazon writes cannot be auto-rolled back.
+  if (isRealWriteRow(log)) {
+    ElMessage.warning('真实写入不可自动回滚，请走「申请人工回滚」流程');
+    return;
+  }
+  if (rowOrigin(log) === 'mock-seed') {
+    ElMessage.info('Mock 记录无需回滚（未触达任何外部账户）');
+    return;
+  }
   try {
     await ElMessageBox.confirm(`确认回滚 ${log.actionType} ?`, '回滚确认', {
       confirmButtonText: '确认回滚',
       cancelButtonText: '取消',
       type: 'warning',
     });
-    // 真接 LocalStorage 持久化
-    localStore.revertAuditLog(log.id, 'user_revert');
-    // mock 历史也改（兼容）
+    // X-P0-02: pessimistic await. Decide local state ONLY from the backend response.
+    // revertAuditLog never optimistically flips reverted before the网络 result.
+    const res = await localStore.revertAuditLog(log.id, 'user_revert');
+    // X-P0-02: 真相在后端响应。dispatchedInverse===false (or needsManualReversal)
+    // means Amazon端未自动回滚 -> render the RED blocked-state, do NOT mark reverted,
+    // and never show the "已回滚（反向 API 调用...已持久化）" success line.
+    if (res && (res.dispatchedInverse === false || res.needsManualReversal === true)) {
+      log.needsManualReversal = true;
+      ElMessage.error('本地已标记, Amazon 端未自动回滚, 需人工处理');
+      return;
+    }
+    // Only a confirmed inverse dispatch (dispatchedInverse===true) is a success.
     log.reverted = true;
     log.status = 'reverted';
     log.revertedAt = new Date().toISOString().slice(0, 16).replace('T', ' ');
     ElMessage.success('已回滚（反向 API 调用 + 审计记录已持久化）');
-  } catch {}
+  } catch (e) {
+    // X-P0-02: do NOT swallow errors silently. Surface failures and never fake success.
+    if (e && e.status === 409) {
+      ElMessage.error('本地已标记, Amazon 端未自动回滚, 需人工处理');
+      return;
+    }
+    // ElMessageBox cancel rejects with 'cancel'/'close' — only those are benign.
+    if (e !== 'cancel' && e !== 'close') {
+      ElMessage.error(`回滚失败：${e?.message || e}`);
+    }
+  }
+}
+
+async function requestManualReversal(log) {
+  ElMessage.info(`已登记「申请人工回滚」：${actionLabel(log.actionType)} · ${log.resourceId}（运营将人工反向处理）`);
 }
 </script>
 
@@ -92,10 +157,20 @@ async function revert(log) {
     </PageHeader>
 
     <div class="kpi-row">
+      <!-- X-P0-07 (B方案/纯 mock 坦白): all副作用 claims carry a 模拟/预估 qualifier.
+           No copy asserts a real Amazon side-effect ("已执行/已挽回/可回滚") without it. -->
       <KpiCard label="今日操作" :value="summary.todayTotal" hint="所有模块" status="default" icon="Document" />
-      <KpiCard label="成功执行" :value="summary.successCount" hint="mock 模式" status="success" icon="CircleCheck" />
-      <KpiCard label="本月已挽回" :value="formatCurrency(summary.monthlyImpact)" hint="累计自动节省" status="info" icon="TrendCharts" />
-      <KpiCard label="已回滚" :value="summary.reverted" hint="7 天窗口可回滚" status="warning" icon="RefreshLeft" />
+      <KpiCard label="模拟执行" :value="summary.successCount" hint="mock 模式 · 未触达 Amazon" status="success" icon="CircleCheck" />
+      <!-- X-P1-09: 改 预估可挽回(模拟) + 橙色(warning)水印, 移除原"自动节省累计"真实功效暗示;
+           已节省/已投入 分账展示, 明示来源为 模拟/预估 且未真实写回 Amazon。 -->
+      <KpiCard
+        label="预估可挽回(模拟)"
+        :value="formatCurrency(summary.monthlySaved)"
+        :hint="`模拟/预估 · 已节省 ${formatCurrency(summary.monthlySaved)} / 已投入 ${formatCurrency(summary.monthlyInvested)} · 未实际写回 Amazon`"
+        status="warning"
+        icon="TrendCharts"
+      />
+      <KpiCard label="已标记回滚" :value="summary.reverted" hint="本地标记 · 真实写需人工反向" status="warning" icon="RefreshLeft" />
     </div>
 
     <el-card shadow="never" class="mt-16">
@@ -152,15 +227,35 @@ async function revert(log) {
             </span>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="100">
+        <el-table-column label="来源" width="100">
           <template #default="{ row }">
-            <el-tag :type="statusTagType(row.status)" size="small">{{ ({ success: '成功', failed: '失败', reverted: '已回滚', queued: '排队' })[row.status] }}</el-tag>
+            <el-tag :type="originMeta(row).type" size="small" effect="plain">{{ originMeta(row).text }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="120">
+        <el-table-column label="状态" width="160">
           <template #default="{ row }">
-            <el-button v-if="!row.reverted && row.status === 'success'" size="small" type="warning" plain @click="revert(row)">回滚</el-button>
-            <el-button size="small" link>详情</el-button>
+            <!-- M1-011: UPLOAD/PUBLISH-class entries render publish status from the
+                 amazon_receipt presence — never claim '已发布' for a receipt-less draft. -->
+            <el-tag
+              v-if="publishStatusLabel(row)"
+              :type="publishStatusLabel(row) === '已发布' ? 'success' : 'info'"
+              size="small"
+            >{{ publishStatusLabel(row) }}</el-tag>
+            <el-tag v-else :type="statusTagType(row.status)" size="small">{{ ({ success: '成功', failed: '失败', reverted: '已回滚', queued: '排队' })[row.status] }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="200">
+          <template #default="{ row }">
+            <!-- X-P0-02: when the backend reports no auto inverse dispatch, surface the
+                 RED blocked-state instead of a fake success. -->
+            <span v-if="row.needsManualReversal" class="text-danger manual-reversal-blocked">
+              本地已标记, Amazon 端未自动回滚, 需人工处理
+            </span>
+            <template v-else>
+              <el-button v-if="canRollback(row)" size="small" type="warning" plain @click="revert(row)">回滚</el-button>
+              <el-button v-else-if="isRealWriteRow(row)" size="small" type="danger" plain @click="requestManualReversal(row)">申请人工回滚</el-button>
+              <el-button size="small" link>详情</el-button>
+            </template>
           </template>
         </el-table-column>
       </el-table>

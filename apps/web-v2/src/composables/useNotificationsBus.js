@@ -11,6 +11,7 @@
 import { ref, computed } from 'vue';
 import { ElMessage } from 'element-plus';
 import { notificationsApi } from '../api/m4';
+import { dashboardApi } from '../api/dashboard';
 
 // ---- 单例 reactive state ----
 const _list = ref([]);             // 通知数组（最近 N 条）
@@ -19,6 +20,9 @@ const _loaded = ref(false);
 const _loading = ref(false);
 const _error = ref(null);
 const _summary = ref({ unread: 0, p0: 0, p1: 0, p2: 0 });
+// W17: 决策卡 Inbox 同源摘要（来自 GET /api/v1/dashboard/summary）。
+// Workbench cardSummary 与顶栏角标共用此引用，二者计数永远同步。
+const _cardSummary = ref({ total: 0, p0: 0, p1: 0, p2: 0 });
 let _pollTimer = null;
 let _pollIntervalMs = 10000;
 let _pollPromise = null;
@@ -43,13 +47,27 @@ async function _silentUnread() {
     throw e;
   }
 }
+// W17: 决策卡摘要静默拉取（端点缺失/未登录时返回空摘要，不弹噪音）。
+async function _silentSummary() {
+  try {
+    const data = await dashboardApi.summary();
+    return data;
+  } catch (e) {
+    if (e?.status === 404 || /Network/i.test(e?.message || '')) {
+      return { cardSummary: { total: 0, p0: 0, p1: 0, p2: 0 }, unreadCount: null };
+    }
+    throw e;
+  }
+}
 
 async function _refresh() {
   if (_pollPromise) return _pollPromise;
   _loading.value = true;
   _pollPromise = (async () => {
     try {
-      const [unreadResp, listResp] = await Promise.all([_silentUnread(), _silentList({ limit: 20 })]);
+      const [unreadResp, listResp, summaryResp] = await Promise.all([
+        _silentUnread(), _silentList({ limit: 20 }), _silentSummary(),
+      ]);
       const items = Array.isArray(listResp?.items) ? listResp.items : (Array.isArray(listResp) ? listResp : []);
       // 合并本地乐观已读
       _list.value = items.map((it) => ({
@@ -58,6 +76,8 @@ async function _refresh() {
       }));
       _unreadCount.value = unreadResp?.unreadCount ?? (listResp?.summary?.unread ?? items.filter((x) => !x.readAt).length);
       _summary.value = listResp?.summary || _summary.value;
+      // W17: 决策卡 Inbox 摘要同源刷新（与 Workbench cardSummary 共用此引用）。
+      if (summaryResp?.cardSummary) _cardSummary.value = summaryResp.cardSummary;
       _loaded.value = true;
       _error.value = null;
     } catch (e) {
@@ -84,22 +104,28 @@ function _stopPolling() {
   }
 }
 
-// ---- markRead：写后端 + 同步本地 ----
+// ---- markRead：写后端 + 同步本地（失败回滚）----
 async function _markRead(id) {
   if (!id) return;
   // 乐观：本地立即更新
   _readLocal.add(id);
   const i = _list.value.findIndex((x) => x.id === id);
+  let didOptimisticUnread = false;
   if (i >= 0 && !_list.value[i].readAt) {
     _list.value[i] = { ..._list.value[i], readAt: new Date().toISOString() };
-    if (_unreadCount.value > 0) _unreadCount.value--;
+    if (_unreadCount.value > 0) { _unreadCount.value--; didOptimisticUnread = true; }
   }
   try {
     await notificationsApi.markRead(id);
   } catch (e) {
-    if (e?.status !== 404) {
-      ElMessage.warning(`标记已读失败：${e.message || e}`);
+    // M4-P2-01: a 404 (e.g. cross-store / deleted notif) must NOT be swallowed.
+    // Roll back the optimistic read state so the UI stays truthful.
+    _readLocal.delete(id);
+    if (i >= 0) {
+      _list.value[i] = { ..._list.value[i], readAt: null };
     }
+    if (didOptimisticUnread) _unreadCount.value++;
+    ElMessage.warning(`标记已读失败：${e?.status === 404 ? '通知不存在或不属于当前店铺' : (e.message || e)}`);
   }
 }
 
@@ -150,6 +176,7 @@ function _reset() {
   _loaded.value = false;
   _readLocal.clear();
   _summary.value = { unread: 0, p0: 0, p1: 0, p2: 0 };
+  _cardSummary.value = { total: 0, p0: 0, p1: 0, p2: 0 };
 }
 
 // ============================================================================
@@ -160,6 +187,7 @@ export function useNotificationsBus() {
     list: _list,
     unreadCount: _unreadCount,
     summary: _summary,
+    cardSummary: _cardSummary,
     loaded: _loaded,
     loading: _loading,
     error: _error,

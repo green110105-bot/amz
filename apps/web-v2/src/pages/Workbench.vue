@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue';
+import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import PageHeader from '../components/PageHeader.vue';
 import KpiCard from '../components/KpiCard.vue';
@@ -7,18 +8,60 @@ import DecisionCard from '../components/DecisionCard.vue';
 import EmptyState from '../components/EmptyState.vue';
 import StageTransitionAlert from '../components/StageTransitionAlert.vue';
 import { dashboardApi } from '../api/dashboard';
-import { formatCurrency, formatPercent, formatNumber } from '../utils/format';
+import { amazonIntegrationsApi } from '../api/integrations';
+import { useNotificationsBus } from '../composables/useNotificationsBus';
+import { useAppStore } from '../stores/app';
+import { formatCurrency, formatPercent, formatNumber, normalizeCard } from '../utils/format';
 
+const bus = useNotificationsBus();
+const appStore = useAppStore();
+const route = useRoute();
 const loading = ref(true);
 const error = ref('');
 const data = ref(null);
-const filterType = ref('all'); // all | anomaly | profit_leak | ad_suggestion | inventory
+const syncing = ref(false);
+// W16: 接受 /workbench?filter=ad_suggestion 深链（AdsActions 孤儿页并入后唯一入口）。
+const VALID_FILTERS = ['all', 'anomaly', 'profit_leak', 'ad_suggestion', 'inventory'];
+const initialFilter = VALID_FILTERS.includes(route.query.filter) ? route.query.filter : 'all';
+const filterType = ref(initialFilter); // all | anomaly | profit_leak | ad_suggestion | inventory
+// B-2 / N6-w11: dismissedIds 仅用于落库成功后从当前列表移除卡片。
+// 持久化由 DecisionCard.reject -> POST /api/v1/audit/dismiss 完成（@reject 只在
+// 落库成功后才触发），下次 load() 由后端列表决定是否仍出现。
+const dismissedIds = ref(new Set());
+
+function cardKey(card) {
+  // W2: cards are normalized to a flat schema (id at top level).
+  return card?.id || card?.payload?.id || card?.title;
+}
+
+// B-2 / N6-w11: 仅在 DecisionCard 落库成功后 emit('reject') 时触发，移除卡片。
+function handleReject(card) {
+  const key = cardKey(card);
+  if (key) dismissedIds.value = new Set([...dismissedIds.value, key]);
+  // W17: reject 后两处计数同步刷新（决策卡 Inbox 摘要 + 顶栏角标同源）。
+  bus.refresh();
+}
+
+// W17: execute 后两处计数同步刷新 —— 重新拉取卡片列表并刷新同源摘要，
+// 使 NotificationBell.unreadCount 与 Workbench cardSummary.total 同步变化。
+async function handleExecute() {
+  await Promise.all([load(), bus.refresh()]);
+}
 
 async function load() {
   loading.value = true;
   error.value = '';
   try {
     data.value = await dashboardApi.fetch();
+    // W5: write the backend真值 into the appStore single-truth-source so the
+    // top-bar / status card render honestly (sourceMode + realWritesEnabled).
+    appStore.setSourceMeta({
+      source: data.value?.sourceMeta?.source ?? data.value?.source ?? 'unknown',
+      mock: data.value?.sourceMeta?.mock ?? (data.value?.sourceMode === 'db' ? false : null),
+      realWritesEnabled:
+        data.value?.realWritesEnabled === true || data.value?.sourceMeta?.realWritesEnabled === true,
+      sourceMode: data.value?.sourceMode ?? data.value?.sourceMeta?.sourceMode ?? 'mock',
+    });
   } catch (e) {
     error.value = e.message || '加载失败';
   } finally {
@@ -26,7 +69,11 @@ async function load() {
   }
 }
 
-onMounted(load);
+onMounted(() => {
+  load();
+  // W17: 确保 cardSummary 同源摘要在工作台独立进入时也已拉取（单例 bus）。
+  bus.refresh();
+});
 
 const kpis = computed(() => {
   const ov = data.value?.overview;
@@ -67,7 +114,12 @@ const kpis = computed(() => {
   ];
 });
 
+// W17: 待办权威源统一 —— cardSummary 与顶栏 NotificationBell 同源（bus 轮询
+// GET /api/v1/dashboard/summary）。bus 未就绪时回退到本地已载入卡片，保证
+// 首屏不空白；一旦轮询/手动刷新到达，二者计数永远一致。
 const cardSummary = computed(() => {
+  const bs = bus.cardSummary.value;
+  if (bs && bs.total != null && (bus.loaded.value || bs.total > 0)) return bs;
   const cards = data.value?.actionCards || [];
   return {
     total: cards.length,
@@ -84,8 +136,12 @@ const TYPE_LABELS = {
   inventory: '库存决策',
 };
 
+// W2: normalize every card into the single DecisionCard schema (works for both
+// dashboard mock cards and DB cards), then dismiss/filter on the normalized form.
 const filteredCards = computed(() => {
-  const cards = data.value?.actionCards || [];
+  const cards = (data.value?.actionCards || [])
+    .map((c) => normalizeCard(c))
+    .filter((c) => !dismissedIds.value.has(c.id || c.title));
   if (filterType.value === 'all') return cards;
   return cards.filter((c) => c.type === filterType.value);
 });
@@ -105,9 +161,45 @@ function lastUpdated() {
   return new Date(data.value.generatedAt).toLocaleString('zh-CN');
 }
 
-function refresh() {
-  load();
-  ElMessage.success('已刷新');
+// W9: 三态分流 ——
+//   error 非空        -> 'error'   「加载失败」带重试
+//   200 但无 overview/未绑店 -> 'onboarding' 「引导接店铺·同步」带 CTA
+//   确无卡            -> 'empty'   「今日无待处理」
+const viewState = computed(() => {
+  if (loading.value) return 'loading';
+  if (error.value) return 'error';
+  // 成功响应但既无经营概览又无任何卡片 -> 视为未绑店/未同步，引导接店铺。
+  const hasOverview = !!data.value?.overview;
+  const hasCards = (data.value?.actionCards || []).length > 0;
+  if (!hasOverview && !hasCards) return 'onboarding';
+  return 'ready';
+});
+
+// W9: 空态接同步 CTA —— 调 integrations.syncAll 启动接店铺/同步闭环。
+async function startSync() {
+  if (syncing.value) return;
+  syncing.value = true;
+  try {
+    await amazonIntegrationsApi.syncAll();
+    ElMessage.success('已发起同步，稍后刷新查看');
+    await load();
+    bus.refresh();
+  } catch (e) {
+    ElMessage.error(`同步失败：${e.message || e}`);
+  } finally {
+    syncing.value = false;
+  }
+}
+
+// W9: refresh 改 await load() 后按 error 分别弹 success/error，不再无条件 false-positive。
+async function refresh() {
+  await load();
+  bus.refresh();
+  if (error.value) {
+    ElMessage.error(`刷新失败：${error.value}`);
+  } else {
+    ElMessage.success('已刷新');
+  }
 }
 </script>
 
@@ -123,11 +215,23 @@ function refresh() {
     <!-- 阶段切换提醒（紧凑版） -->
     <StageTransitionAlert :compact="false" />
 
-    <!-- KPI 行 -->
+    <!-- KPI 行 — W9: 仅 error 态显示「加载失败」+ 重试；onboarding 态引导接店铺。 -->
     <div v-loading="loading" class="kpi-row">
       <KpiCard v-for="(kpi, i) in kpis" :key="i" v-bind="kpi" />
-      <div v-if="!loading && !kpis.length" class="kpi-empty">
-        <EmptyState title="数据加载失败" :description="error" />
+      <div v-if="viewState === 'error'" class="kpi-empty">
+        <EmptyState title="加载失败" :description="error" icon="WarningFilled">
+          <el-button type="primary" size="small" @click="refresh">重试</el-button>
+        </EmptyState>
+      </div>
+      <div v-else-if="viewState === 'onboarding'" class="kpi-empty">
+        <EmptyState
+          title="还没有接入店铺数据"
+          description="连接 Amazon 店铺并同步后，这里会显示经营概览与今日决策建议。"
+          icon="Connection"
+        >
+          <el-button type="primary" size="small" :loading="syncing" @click="startSync">引导接店铺 · 同步</el-button>
+          <el-button size="small" @click="$router.push('/settings/amazon-auth')">前往授权中心</el-button>
+        </EmptyState>
       </div>
     </div>
 
@@ -165,13 +269,32 @@ function refresh() {
           <div v-loading="loading" class="decision-list">
             <DecisionCard
               v-for="card in filteredCards"
-              :key="card.payload?.id || card.title"
-              :card="card.payload"
+              :key="card.id || card.title"
+              :card="card"
+              @reject="handleReject"
+              @execute="handleExecute"
             />
+            <!-- W9: onboarding 态引导接店铺；ready 态确无卡才显示「今日无待处理」。 -->
             <EmptyState
-              v-if="!loading && filteredCards.length === 0"
+              v-if="viewState === 'onboarding'"
+              title="还没有可处理的决策"
+              description="连接 Amazon 店铺并同步后，今日决策建议会出现在这里。"
+              icon="Connection"
+            >
+              <el-button type="primary" size="small" :loading="syncing" @click="startSync">引导接店铺 · 同步</el-button>
+            </EmptyState>
+            <EmptyState
+              v-else-if="viewState === 'error'"
+              title="加载失败"
+              :description="error"
+              icon="WarningFilled"
+            >
+              <el-button type="primary" size="small" @click="refresh">重试</el-button>
+            </EmptyState>
+            <EmptyState
+              v-else-if="!loading && filteredCards.length === 0"
               :title="filterType === 'all' ? '今日无待处理项' : `无 ${TYPE_LABELS[filterType]} 类决策`"
-              description="所有事项都已处理完成"
+              :description="filterType === 'all' ? '今日待办均已处理' : '切换筛选查看其它类型'"
               icon="CircleCheck"
             />
           </div>
@@ -205,10 +328,16 @@ function refresh() {
               <span class="flex-1">API 连接</span>
               <span class="text-muted">{{ error ? '异常' : '正常' }}</span>
             </li>
+            <!-- N7-w6 / W6 (终态): copy is ALWAYS driven by appStore.realWritesEnabled
+                 真值 (derived from sourceMeta). realWritesEnabled===true is a HIGH-RISK
+                 state -> red dot + danger copy that影响真实店铺; otherwise the honest
+                 演示·沙箱 copy. Switches automatically with the store truth source. -->
             <li>
-              <span class="status-dot warn" />
+              <span class="status-dot" :class="appStore.realWritesEnabled ? 'bad' : 'warn'" />
               <span class="flex-1">真实写入</span>
-              <span class="text-muted">已关闭</span>
+              <span :class="appStore.realWritesEnabled ? 'text-danger' : 'text-muted'">
+                {{ appStore.realWritesEnabled ? '已开启 · 将影响真实店铺' : '演示·沙箱 · 决策进入审计队列' }}
+              </span>
             </li>
             <li>
               <span class="status-dot ok" />
@@ -218,7 +347,7 @@ function refresh() {
             <li>
               <span class="status-dot ok" />
               <span class="flex-1">数据来源</span>
-              <span class="text-muted">{{ data?.sourceMode || 'mock' }}</span>
+              <span class="text-muted">{{ appStore.sourceMeta.sourceMode || data?.sourceMode || 'unknown' }}</span>
             </li>
           </ul>
         </el-card>

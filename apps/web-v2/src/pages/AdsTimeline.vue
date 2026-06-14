@@ -8,11 +8,23 @@ import ManualChangeCard from '../components/ManualChangeCard.vue';
 import SuggestionDrawer from '../components/SuggestionDrawer.vue';
 import EmptyState from '../components/EmptyState.vue';
 import { useSuggestions, useManualChanges, useStrategies } from '../composables/useAdsState';
+import { manualChangesApi, timelineApi } from '../api/ads-timeline';
 import { useAudit } from '../composables/useAudit';
 import { useViewport } from '../composables/useViewport';
 import { formatCurrency } from '../utils/format';
 
 const { isMobile } = useViewport();
+
+// M3-P1-13: provider-mode honesty. The timeline never fabricates mock/hybrid data as
+// 'real'. Missing sourceMeta defaults to 'mock'; a demo banner is shown unless real.
+const providerMode = ref('mock');
+const isReal = computed(() => providerMode.value === 'real');
+async function loadProviderMode() {
+  try {
+    const res = await timelineApi.list().catch(() => ({}));
+    providerMode.value = res.sourceMeta?.providerMode || res.providerMode || 'mock';
+  } catch { providerMode.value = 'mock'; }
+}
 
 const route = useRoute();
 const router = useRouter();
@@ -23,7 +35,7 @@ const { list: manualChanges, fetch: fetchManual, applyAlternative: applyAlternat
 const { list: strategies, fetch: fetchStrategies } = useStrategies();
 
 onMounted(async () => {
-  await Promise.all([fetchSuggestions(), fetchManual(), fetchStrategies()]);
+  await Promise.all([fetchSuggestions(), fetchManual(), fetchStrategies(), loadProviderMode()]);
 });
 
 // ===== 3 个 tab =====
@@ -74,7 +86,7 @@ const manualItems = computed(() =>
 );
 const processedItems = computed(() => {
   const suggested = suggestions.value
-    .filter((s) => ['observing', 'rejected', 'accepted', 'succeeded', 'failed'].includes(s.state))
+    .filter((s) => ['observing', 'rejected'].includes(s.state))
     .map((s) => ({ kind: 'suggestion', time: s.acceptedAt || s.rejectedAt || s.timeBucket, item: s }));
   const manual = manualChanges.value
     .filter((m) => m.state === 'resolved')
@@ -113,7 +125,7 @@ async function execute(s) {
   await accept(s);
   ElNotification({
     title: '已采纳',
-    message: `进入观察期，${s.observationWindowHours}h 内不重复触发`,
+    message: '已入队 · 待人工复盘',
     type: 'success',
     position: 'bottom-right',
     duration: 3000,
@@ -151,52 +163,47 @@ async function ignoreManual(c) {
   ElMessage.info(c.aiVerdict === 'reasonable' ? '已记录' : '已忽略 AI 建议');
 }
 
+// M3-P0-07: manual_change revert is gated on the backend endpoint. Until it is verified
+// wired, the revert/restore control for manual_change entries is HIDDEN (canRevert below)
+// so the frontend never (a) writes a TIMELINE_REVERT audit then (b) only flips local state
+// — which would fork the audit log from the real data. Suggestion revert is delegated to
+// the backend revert endpoint (which writes its own audit); the frontend does NOT
+// double-write an audit here.
+function canRevert(entry) {
+  // Only suggestion entries have a backend revert path today. Manual-change revert stays
+  // hidden until /manual-changes/:id/revert is confirmed live.
+  return entry.kind === 'suggestion';
+}
+
 async function revertProcessed(entry) {
+  if (!canRevert(entry)) return; // defensive: button is hidden, but never act on manual_change
   try {
     await ElMessageBox.confirm(
-      entry.kind === 'suggestion'
-        ? `确定撤销采纳的建议"${entry.item.title}"？将回滚之前的修改。`
-        : `确定撤销该外部更改的处置？`,
+      `确定撤销采纳的建议"${entry.item.title}"？将由后端执行撤销。`,
       '撤销操作',
       { confirmButtonText: '撤销', cancelButtonText: '取消', type: 'warning' },
     );
   } catch { return; }
 
-  await submit({
-    sourceModule: 'M3',
-    actionType: 'TIMELINE_REVERT',
-    target: { type: entry.kind === 'suggestion' ? 'ad_suggestion' : 'manual_change', id: entry.item.id },
-    payload: { previousState: entry.item.state },
-    description: `撤销时间线条目：${entry.item.title || entry.item.operation?.entity}`,
-  });
-
-  if (entry.kind === 'suggestion') {
-    await revert(entry.item);
-  } else {
-    // manual change revert：恢复到 pending（前端仅做状态回滚，后端 endpoint 复用 ignore/revert TBD）
-    entry.item.state = 'pending';
-    entry.item.resolvedAt = null;
-    entry.item.resolvedAction = null;
-  }
-  ElMessage.success('已撤销 · 回到待办');
+  // Backend revert writes its own audit + actually reverts. No frontend submit double-write.
+  await revert(entry.item);
+  ElMessage.success('已提交撤销 · 由后端处理');
 }
 
+// M3-P1-13: three-state machine, honestly degraded. There is no cron that advances
+// observing → succeeded/failed (no automatic settlement / backflow / auto-rollback), so
+// those states are dead branches and removed. Enum ⊆ {pending, observing, rejected}.
+// 'observing' now reads "已入队/待人工复盘" — we never promise automatic settlement.
 const stateText = (state) => ({
   pending: '待办',
-  observing: '观察中',
+  observing: '已入队 · 待人工复盘',
   rejected: '已忽略',
-  accepted: '已采纳',
-  succeeded: '已生效',
-  failed: '未达预期',
-})[state] || state;
+})[state] || '待办';
 
 const stateType = (state) => ({
   pending: 'warning',
   observing: 'primary',
   rejected: 'info',
-  accepted: 'success',
-  succeeded: 'success',
-  failed: 'danger',
 })[state] || 'info';
 </script>
 
@@ -204,13 +211,19 @@ const stateType = (state) => ({
   <div class="timeline-page">
     <PageHeader
       title="广告时间线"
-      subtitle="AI 建议 + 外部更改 + 撤销 · 统一时间流 · 按小时数据周期更新"
+      subtitle="AI 建议 + 外部更改 · 统一时间流"
     >
       <template #extra>
         <el-button :icon="'Refresh'">刷新</el-button>
         <el-button :icon="'Setting'" @click="router.push('/ads/strategies')">规则与主权</el-button>
       </template>
     </PageHeader>
+
+    <!-- M3-P1-13: demo banner shown whenever provider mode is not real (mock/hybrid) -->
+    <div v-if="!isReal" class="demo-banner">
+      <el-icon><Warning /></el-icon>
+      <span>演示数据(provider mode: {{ providerMode }}) · 非真实广告回流,不代表线上实际效果</span>
+    </div>
 
     <!-- 标准 tabs (用真 tab UI 代替 KPI-as-tab) -->
     <el-tabs :model-value="activeTab" @tab-change="setTab" class="tl-tabs">
@@ -351,7 +364,10 @@ const stateType = (state) => ({
             </div>
             <el-tag size="small" type="info" effect="light">已处置</el-tag>
             <el-button size="small" link>详情</el-button>
-            <el-button size="small" link type="warning" @click="revertProcessed(entry)">撤销</el-button>
+            <!-- M3-P0-07: manual_change revert hidden until backend /manual-changes/:id/revert
+                 is confirmed live — never fork audit from data via a local-only flip. -->
+            <el-button v-if="canRevert(entry)" size="small" link type="warning" @click="revertProcessed(entry)">撤销</el-button>
+            <span v-else class="revert-tbd" title="撤销端点即将上线">撤销(即将上线)</span>
           </template>
         </div>
       </div>

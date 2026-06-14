@@ -3,6 +3,7 @@ import { computed, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { severityColor, severityLabel, formatCurrency, actionLabel } from '../utils/format';
 import { useAudit } from '../composables/useAudit';
+import { auditApi } from '../api/audit';
 import ReasonChain from './ReasonChain.vue';
 
 const { submit } = useAudit();
@@ -16,6 +17,10 @@ const props = defineProps({
 const emit = defineEmits(['execute', 'reject']);
 
 const expanded = ref(false);
+// W7:防重入 —— execute 期间禁用按钮，避免 200ms 内双击产生两条 pending 审计行。
+const submitting = ref(false);
+// W7: emit('execute') 之后乐观置灰本卡（父组件标 verdict=pending 非 splice 移除）。
+const executed = ref(false);
 const c = computed(() => {
   const card = props.card || {};
   const severity = card.severity || card.priority;
@@ -33,9 +38,21 @@ const c = computed(() => {
     actionType: card.actionType || card.type,
     confidence: card.confidence ?? card.accuracy?.confidence ?? null,
     sourceMode: card.sourceMode || 'mock',
-    auditRequired: card.auditRequired ?? true,
+    // W12: auditRequired 取后端真值，不再兜底 true（后端 false 必须如实透传）。
+    auditRequired: card.auditRequired,
+    payload: card.payload || null,
   };
 });
+
+// W12: 缺依据时禁用「一键执行」—— payload/evidence/recommendation 全空即视为无依据，
+// 防止产生无依据的审计行。
+const hasEvidence = computed(() => {
+  const card = props.card || {};
+  const payloadEmpty =
+    card.payload == null || (typeof card.payload === 'object' && Object.keys(card.payload).length === 0);
+  return c.value.evidence.length > 0 || !!c.value.reason || !payloadEmpty;
+});
+const executeDisabled = computed(() => submitting.value || executed.value || !hasEvidence.value);
 
 const impactText = computed(() => {
   const i = c.value.impact;
@@ -55,20 +72,45 @@ const impactText = computed(() => {
 });
 
 async function execute() {
-  await submit({
-    sourceModule: props.sourceModule,
-    actionType: c.value.actionType || 'GENERIC_DECISION',
-    target: { id: props.card.id || props.card.campaignId, sku: props.card.sku, asin: props.card.asin },
-    payload: { keyword: c.value.keyword, lifecycleStage: c.value.lifecycleStage },
-    expectedImpact: typeof c.value.impact === 'object' ? c.value.impact : { change: c.value.impact },
-    description: c.value.title,
-  });
-  emit('execute', props.card);
+  // W7: 防重入 —— 已在提交中 / 已入队 / 缺依据 时直接返回。
+  if (executeDisabled.value) return;
+  submitting.value = true;
+  try {
+    // W7: 接 submit 返回值，被阻断（{ok:false}）则不 emit('execute')。
+    const r = await submit({
+      sourceModule: props.sourceModule,
+      actionType: c.value.actionType || 'GENERIC_DECISION',
+      target: { id: props.card.id || props.card.campaignId, sku: props.card.sku, asin: props.card.asin },
+      payload: { keyword: c.value.keyword, lifecycleStage: c.value.lifecycleStage },
+      expectedImpact: typeof c.value.impact === 'object' ? c.value.impact : { change: c.value.impact },
+      description: c.value.title,
+    });
+    if (!r.ok) return;
+    // W7: verdict 为 pending（非终态成功），乐观置灰本卡并交父组件标「已入队待审」。
+    executed.value = true;
+    emit('execute', props.card);
+  } finally {
+    submitting.value = false;
+  }
 }
 
-function reject() {
-  ElMessage.info(`${c.value.title} 已忽略，反馈已记录`);
-  emit('reject', props.card);
+// B-2 / N6-w11: reject 改为先落库（POST /api/v1/audit/dismiss 落一条
+// DASHBOARD_CARD_DISMISS 审计行）再 emit('reject') 移除卡片。落库失败则不移除，
+// 文案从「本次会话已隐藏」改「已忽略并记录」，诚实反映已持久化留痕。
+async function reject() {
+  if (submitting.value || executed.value) return;
+  submitting.value = true;
+  try {
+    const resourceId =
+      props.card?.id || props.card?.campaignId || props.card?.payload?.id || props.card?.title;
+    await auditApi.dismiss({ resourceId, reason: c.value.title });
+    ElMessage.success(`${c.value.title} 已忽略并记录`);
+    emit('reject', props.card);
+  } catch (e) {
+    ElMessage.error(`忽略失败：${e?.message || e}`);
+  } finally {
+    submitting.value = false;
+  }
 }
 </script>
 
@@ -110,11 +152,26 @@ function reject() {
         <span>{{ expanded ? '收起依据' : '为什么这么建议' }}</span>
       </el-button>
       <div class="decision-actions">
-        <el-button size="small" @click="reject">忽略</el-button>
-        <el-button type="primary" size="small" @click="execute">
-          <el-icon><Promotion /></el-icon>
-          一键执行
-        </el-button>
+        <el-button size="small" :disabled="submitting || executed" @click="reject">忽略</el-button>
+        <!-- W12: 缺依据时禁用并提示「缺少依据不可执行」；W7: loading/disabled 防重入。 -->
+        <el-tooltip
+          :disabled="hasEvidence"
+          content="缺少依据不可执行"
+          placement="top"
+        >
+          <span>
+            <el-button
+              type="primary"
+              size="small"
+              :loading="submitting"
+              :disabled="executeDisabled"
+              @click="execute"
+            >
+              <el-icon v-if="!submitting"><Promotion /></el-icon>
+              {{ executed ? '已入队待审' : '一键执行' }}
+            </el-button>
+          </span>
+        </el-tooltip>
       </div>
     </div>
   </el-card>

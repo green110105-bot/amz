@@ -12,14 +12,18 @@ const routes = [
   { path: '/listings/ab', name: 'ListingAbCenter', component: () => import('../pages/ListingAbCenter.vue'), meta: { title: 'A/B 测试中心', group: 'm1-main', icon: 'TrendCharts' } },
   // 老路由 → 重定向到新路由（兼容外部链接）
   { path: '/listings/experiments', redirect: '/listings/ab' },
-  // M1 - 资源库
-  { path: '/listings/keywords-library', name: 'KeywordLibrary', component: () => import('../pages/KeywordLibrary.vue'), meta: { title: '关键词库', group: 'm1-resources', icon: 'Collection' } },
-  { path: '/listings/templates', name: 'CategoryTemplates', component: () => import('../pages/CategoryTemplates.vue'), meta: { title: '类目模板', group: 'm1-resources', icon: 'Files' } },
-  { path: '/listings/category-pains', name: 'CategoryPains', component: () => import('../pages/CategoryPains.vue'), meta: { title: '类目共性痛点', group: 'm1-resources', icon: 'WarningFilled' } },
-  { path: '/listings/keyword-heatmap', name: 'KeywordHeatmap', component: () => import('../pages/KeywordHeatmap.vue'), meta: { title: '关键词热力图', group: 'm1-resources', icon: 'Histogram' } },
-  { path: '/listings/multi-locale', name: 'MultiLocale', component: () => import('../pages/MultiLocale.vue'), meta: { title: '多语言母版', group: 'm1-resources', icon: 'Connection' } },
-  { path: '/listings/calibration', name: 'ScoringCalibration', component: () => import('../pages/ScoringCalibration.vue'), meta: { title: '评分校准', group: 'm1-resources', icon: 'Operation' } },
+  // M1 - 素材规则中心：只保留一个导航入口，旧资源页作为深链工具由中心页进入
+  { path: '/listings/resources', name: 'M1ResourceHub', component: () => import('../pages/M1ResourceHub.vue'), meta: { title: '素材规则中心', group: 'm1-main', icon: 'Collection' } },
+  { path: '/listings/keywords-library', name: 'KeywordLibrary', component: () => import('../pages/KeywordLibrary.vue'), meta: { title: '关键词护栏', icon: 'Collection' } },
+  { path: '/listings/templates', name: 'CategoryTemplates', component: () => import('../pages/CategoryTemplates.vue'), meta: { title: '类目发布规则', icon: 'Files' } },
+  { path: '/listings/category-pains', name: 'CategoryPains', component: () => import('../pages/CategoryPains.vue'), meta: { title: 'VOC 痛点库', icon: 'WarningFilled' } },
+  { path: '/listings/calibration', name: 'ScoringCalibration', component: () => import('../pages/ScoringCalibration.vue'), meta: { title: '评分规则校准', icon: 'Operation' } },
+  { path: '/listings/keyword-heatmap', redirect: { path: '/listings/resources', query: { retired: 'keyword-heatmap' } } },
+  { path: '/listings/multi-locale', redirect: { path: '/listings/resources', query: { retired: 'multi-locale' } } },
 
+  // M2 收口主入口：旧 19 个页面保留深链，但不再作为主导航平铺
+  { path: '/m2', redirect: '/m2/workbench' },
+  { path: '/m2/workbench', name: 'M2ControlTower', component: () => import('../pages/M2ControlTower.vue'), meta: { title: '经营利润工作台', group: 'm2-main', icon: 'Wallet' } },
   // M2 利润
   { path: '/profit/overview', name: 'ProfitOverview', component: () => import('../pages/ProfitOverview.vue'), meta: { title: '利润总览', group: 'm2-profit', icon: 'Wallet' } },
   { path: '/profit/skus', name: 'ProfitSkus', component: () => import('../pages/ProfitSkus.vue'), meta: { title: '单 SKU 利润', group: 'm2-profit', icon: 'Coin' } },
@@ -79,7 +83,8 @@ const routes = [
 
   // ---- 不进 sidebar 但保留路由 (深度页 / 旧页归档) ----
   { path: '/ads/playbook', name: 'Playbook', component: () => import('../pages/Playbook.vue'), meta: { title: '策略库 (旧版 42 条)' } },
-  { path: '/ads/actions', name: 'AdsActions', component: () => import('../pages/AdsActions.vue'), meta: { title: '操作清单（旧）' } },
+  // W16: 孤儿页「操作清单(旧)」并入 Workbench 单一 Inbox（待 W1/W10 DB 分支补齐后删页）。
+  { path: '/ads/actions', redirect: '/workbench?filter=ad_suggestion' },
   { path: '/ads/campaigns', name: 'Campaigns', component: () => import('../pages/Campaigns.vue'), meta: { title: 'Campaign 架构（深度）' } },
   { path: '/ads/keywords', name: 'Keywords', component: () => import('../pages/Keywords.vue'), meta: { title: '关键词与搜索词（深度）' } },
   { path: '/ads/lifecycle', name: 'Lifecycle', component: () => import('../pages/Lifecycle.vue'), meta: { title: '周期管理（深度）' } },
@@ -95,6 +100,11 @@ const routes = [
   { path: '/ads/competitor-attack', name: 'CompetitorAttack', component: () => import('../pages/CompetitorAttack.vue'), meta: { title: '竞品 ASIN 攻击' } },
   { path: '/ads/creatives', name: 'Creatives', component: () => import('../pages/Creatives.vue'), meta: { title: '创意 A/B' } },
 
+  // M4 收口主入口：旧风险/Review/竞品页面保留深链，但不再作为主导航平铺
+  { path: '/m4', redirect: '/m4/workbench' },
+  { path: '/m4/daily-report', redirect: '/m4/reports/daily' },
+  { path: '/m4/reports/daily', name: 'M4DailyReport', component: () => import('../pages/M4DailyReport.vue'), meta: { title: '每日监控日报', group: 'm4-main', icon: 'DataAnalysis' } },
+  { path: '/m4/workbench', name: 'M4OpsWorkbench', component: () => import('../pages/M4OpsWorkbench.vue'), meta: { title: '运营风险工作台', group: 'm4-main', icon: 'WarningFilled' } },
   // M4 监控
   { path: '/monitor/anomalies', name: 'MonitorAnomalies', component: () => import('../pages/MonitorAnomalies.vue'), meta: { title: '异常列表', group: 'm4-monitor', icon: 'WarningFilled' } },
   { path: '/monitor/sla', name: 'SLABoard', component: () => import('../pages/SLABoard.vue'), meta: { title: 'SLA 看板', group: 'm4-monitor', icon: 'Stopwatch' } },
@@ -114,6 +124,7 @@ const routes = [
 
   // 通知
   { path: '/notifications', name: 'Notifications', component: () => import('../pages/Notifications.vue'), meta: { title: '通知中心', group: 'main', icon: 'BellFilled' } },
+  { path: '/settings/amazon-auth', name: 'AmazonAuthCenter', component: () => import('../pages/AmazonAuthCenter.vue'), meta: { title: 'Amazon 授权接入', group: 'main', icon: 'Connection' } },
 
   // 其它
   { path: '/audit', name: 'Audit', component: () => import('../pages/Audit.vue'), meta: { title: '审计中心', group: 'main', icon: 'Lock' } },

@@ -69,7 +69,8 @@ onMounted(async () => {
 });
 
 function openPoDialog(row) {
-  draftRowId.value = row.id || row.productId;
+  // M2-P0-01: 主键唯一来源是 row.reorder.id（顶层无 id 会复发 404）
+  draftRowId.value = row.reorder?.id;
   if (row.reorder?.supplierId) draft.value.supplierId = row.reorder.supplierId;
   draftDialog.value = true;
 }
@@ -96,7 +97,13 @@ async function submitPO() {
 async function dismiss(row) {
   try {
     await ElMessageBox.confirm('确认忽略此补货建议？', '提示', { type: 'warning' });
-    await reorder.dismiss(row.id || row.productId);
+  } catch {
+    return; // 用户取消，不进入 dismiss
+  }
+  // M2-P0-01: 主键用 row.reorder.id；composable 内部按服务端 status 覆盖（软删，不 splice）
+  // 失败时 composable 已回滚乐观态并弹 error，此处仅静默吞避免二次 toast
+  try {
+    await reorder.dismiss(row.reorder?.id);
     await load();
   } catch {}
 }
@@ -162,18 +169,18 @@ const urgencyTag = (u) => ({ critical: 'danger', high: 'warning', medium: 'info'
         </el-table-column>
         <el-table-column label="状态" width="100">
           <template #default="{ row }">
-            <el-tag size="small" :type="row.status === 'drafted' ? 'success' : row.status === 'ordered' ? 'primary' : 'info'">{{ row.status || 'pending' }}</el-tag>
+            <el-tag size="small" :type="row.reorder?.status === 'drafted' ? 'success' : row.reorder?.status === 'ordered' ? 'primary' : 'info'">{{ row.reorder?.status || 'pending' }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="220">
           <template #default="{ row }">
-            <el-button size="small" type="primary" plain :disabled="row.status === 'drafted' || row.status === 'ordered'" @click="openPoDialog(row)">生成 PO 草稿</el-button>
-            <el-button size="small" plain @click="dismiss(row)">忽略</el-button>
+            <el-button size="small" type="primary" plain :disabled="!row.reorder?.id || row.reorder?.status === 'drafted' || row.reorder?.status === 'ordered' || row.reorder?.status === 'dismissed'" @click="openPoDialog(row)">生成 PO 草稿</el-button>
+            <el-button size="small" plain :disabled="!row.reorder?.id || row.reorder?.status === 'dismissed'" @click="dismiss(row)">忽略</el-button>
           </template>
         </el-table-column>
         <template #mobile-actions="{ row }">
-          <el-button size="small" type="primary" :disabled="row.status === 'drafted' || row.status === 'ordered'" @click.stop="openPoDialog(row)">PO 草稿</el-button>
-          <el-button size="small" @click.stop="dismiss(row)">忽略</el-button>
+          <el-button size="small" type="primary" :disabled="!row.reorder?.id || row.reorder?.status === 'drafted' || row.reorder?.status === 'ordered' || row.reorder?.status === 'dismissed'" @click.stop="openPoDialog(row)">PO 草稿</el-button>
+          <el-button size="small" :disabled="!row.reorder?.id || row.reorder?.status === 'dismissed'" @click.stop="dismiss(row)">忽略</el-button>
         </template>
       </ResponsiveTable>
       <EmptyState v-if="!reorder.loading.value && list.length === 0" title="无补货建议" description="当前无 SKU 触发补货阈值" />

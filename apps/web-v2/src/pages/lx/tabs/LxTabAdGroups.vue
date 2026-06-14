@@ -6,6 +6,10 @@ import AdAnalysisDrawer from '../../../components/AdAnalysisDrawer.vue';
 
 const props = defineProps({ campaign: Object });
 const { list: rows, fetch, setBid, toggle } = useAdGroups(props.campaign.id);
+// M3-P2-20: alias for the empty-state guard + explicit loading flag (the keyed store does
+// not surface a per-instance loading ref, so we track it locally around fetch()).
+const adGroups = rows;
+const loading = ref(false);
 const mobileCols = [
   { prop: 'name', label: '广告组' },
   { prop: 'defaultBid', label: '默认 bid', formatter: (v) => '$' + (v ?? 0).toFixed(2) },
@@ -14,7 +18,20 @@ const mobileCols = [
   { prop: 'acos', label: 'ACoS', formatter: (v) => v ? (v * 100).toFixed(2) + '%' : '--' },
 ];
 
-onMounted(() => { fetch(); });
+onMounted(async () => {
+  loading.value = true;
+  try { await fetch(); } finally { loading.value = false; }
+});
+
+// M3-P2-21: front-end CSV export of currently-loaded ad groups.
+function exportCsv() {
+  const cols = ['name', 'defaultBid', 'spend', 'sales', 'acos'];
+  const csv = [cols.join(','), ...adGroups.value.map((r) => cols.map((k) => JSON.stringify(r[k] ?? '')).join(','))].join('\n');
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url; a.download = 'ad-groups.csv'; a.click();
+  URL.revokeObjectURL(url);
+}
 
 async function onSwitch(row) {
   await toggle(row);
@@ -42,13 +59,24 @@ function openAnalysisDrawer(row, tab = 'daily') {
 
 <template>
   <div class="sub-toolbar">
-    <el-button type="primary" :icon="'Plus'">添加广告组</el-button>
+    <el-button type="primary" :icon="'Plus'" disabled title="即将上线">添加广告组</el-button>
     <span class="spacer" />
-    <el-button :icon="'Operation'" size="small">列配置 ▾</el-button>
-    <el-button :icon="'Download'" size="small" link />
+    <el-button :icon="'Operation'" size="small" disabled title="即将上线">列配置 ▾</el-button>
+    <el-button :icon="'Download'" size="small" @click="exportCsv" title="导出当前表格为 CSV">导出</el-button>
   </div>
 
-  <div class="lx-table">
+  <!-- M3-P2-20: loading state -->
+  <div v-if="loading" class="loading-state">
+    <el-skeleton :rows="4" animated />
+  </div>
+
+  <!-- M3-P2-20: empty state -->
+  <div v-else-if="adGroups.length === 0" class="empty-state">
+    <el-empty description="暂无广告组数据" />
+  </div>
+
+  <div v-else>
+   <div class="lx-table">
     <ResponsiveTable :data="rows" :mobile-columns="mobileCols" stripe border size="small">
       <el-table-column type="selection" width="40" fixed />
       <el-table-column label="启用" width="55" fixed>
@@ -97,6 +125,7 @@ function openAnalysisDrawer(row, tab = 'daily') {
         <el-button size="small" @click="onSwitch(row)">{{ row.enabled ? '暂停' : '启用' }}</el-button>
       </template>
     </ResponsiveTable>
+   </div>
   </div>
 
   <AdAnalysisDrawer v-model="drawerVisible" :entity="drawerEntity" :initial-tab="drawerInitialTab" />

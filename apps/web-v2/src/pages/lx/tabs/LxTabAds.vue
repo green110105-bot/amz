@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { Histogram } from '@element-plus/icons-vue';
 import { adsApi, adGroupsApi } from '../../../api/lx';
+import { actionQueueApi } from '../../../api/ads-timeline';
 import { ElMessage } from 'element-plus';
 import ResponsiveTable from '../../../components/ResponsiveTable.vue';
 import AdAnalysisDrawer from '../../../components/AdAnalysisDrawer.vue';
@@ -63,13 +64,32 @@ function openAnalysisDrawer(row, tab = 'daily') {
   drawerVisible.value = true;
 }
 
-async function onSwitch(row) {
-  const prev = row.enabled;
+async function onSwitch(row, value) {
+  const desired = typeof value === 'boolean' ? value : !Boolean(row.enabled);
+  const prev = typeof value === 'boolean' ? !desired : Boolean(row.enabled);
+  row.enabled = prev;
   try {
-    await adsApi.toggle(row.id, row.enabled);
+    await actionQueueApi.enqueue({
+      sourceStrategyName: 'LX manual operation',
+      entity: { kind: 'ad', id: row.id, name: row.asin || row.sku || row.id },
+      typedAction: {
+        actionPrimitive: 'TOGGLE_AD',
+        sourceSurface: 'lx',
+        entityKind: 'ad',
+        resourceId: row.id,
+        currentValue: { enabled: prev },
+        recommendedValue: { enabled: desired },
+        dryRun: true,
+        auditRequired: true,
+      },
+      guardrail: { status: 'needs_review', reasons: ['manual_lx_write_requires_action_queue'] },
+      rollbackPlan: { method: 'restore_previous_ad_state', needsManualReview: true },
+      note: 'ad state change queued from LX surface',
+    });
+    ElMessage.success('Added to Action Queue. Approval and dry-run are required before any write.');
   } catch (e) {
-    row.enabled = !prev;
-    ElMessage.error(`切换失败：${e.message || e}`);
+    row.enabled = prev;
+    ElMessage.error(`Queue failed: ${e.message || e}`);
   }
 }
 </script>
@@ -86,7 +106,7 @@ async function onSwitch(row) {
     <ResponsiveTable :data="rows" :mobile-columns="mobileCols" stripe border size="small">
       <el-table-column type="selection" width="40" fixed />
       <el-table-column label="启用" width="55" fixed>
-        <template #default="{ row }"><el-switch v-model="row.enabled" size="small" @change="onSwitch(row)" /></template>
+        <template #default="{ row }"><el-switch v-model="row.enabled" size="small" @change="(v) => onSwitch(row, v)" /></template>
       </el-table-column>
       <el-table-column label="主图" width="80" fixed>
         <template #default>

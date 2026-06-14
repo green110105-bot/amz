@@ -26,24 +26,58 @@ const assigneeFilter = ref(route.query.assignee || '');
 const detail = ref(null);
 const drawer = ref(false);
 
-watch([sevFilter, statusFilter, assigneeFilter], ([sev, st, asg]) => {
-  const q = {};
-  if (sev !== 'all') q.sev = sev;
-  if (st !== 'all') q.status = st;
-  if (asg) q.assignee = asg;
-  router.replace({ query: q });
-}, { deep: false });
+// M4-P3-01: per-row action busy flags keyed by `${rowId}:${action}` to prevent
+// double-submit while a request is in flight.
+const rowBusy = ref({});
+function busyKey(id, action) { return `${id}:${action}`; }
+function isBusy(id, action) { return !!rowBusy.value[busyKey(id, action)]; }
+async function runRowAction(id, action, fn) {
+  const k = busyKey(id, action);
+  if (rowBusy.value[k]) return; // already in flight — ignore repeated clicks
+  rowBusy.value = { ...rowBusy.value, [k]: true };
+  try {
+    return await fn();
+  } finally {
+    const next = { ...rowBusy.value };
+    delete next[k];
+    rowBusy.value = next;
+  }
+}
 
-async function load() {
+function buildParams() {
   const params = {};
   if (sevFilter.value !== 'all') params.severity = sevFilter.value;
   if (statusFilter.value !== 'all') params.status = statusFilter.value;
   if (assigneeFilter.value) params.assignee = assigneeFilter.value;
-  await anom.fetch(params, true);
+  return params;
 }
 
+async function load() {
+  await anom.fetch(buildParams(), true);
+}
+
+// M4-P3-01: a single source of truth — sync the URL query then reload. Previously there
+// were two same-source watches (one only synced the query, the other only reloaded),
+// racing each other.
+function syncQueryAndLoad() {
+  const q = {};
+  if (sevFilter.value !== 'all') q.sev = sevFilter.value;
+  if (statusFilter.value !== 'all') q.status = statusFilter.value;
+  if (assigneeFilter.value) q.assignee = assigneeFilter.value;
+  router.replace({ query: q });
+  load();
+}
+
+// debounce the assignee text filter so each keystroke does not fire a request; the
+// single-flight key in useM4State guards against the stale-overwrite race.
+let _filterTimer = null;
+
 onMounted(load);
-watch([sevFilter, statusFilter, assigneeFilter], load);
+watch([sevFilter, statusFilter], syncQueryAndLoad, { deep: false });
+watch(assigneeFilter, () => {
+  if (_filterTimer) clearTimeout(_filterTimer);
+  _filterTimer = setTimeout(syncQueryAndLoad, 300);
+});
 
 const cards = computed(() => anom.list.value || []);
 const summary = computed(() => anom.summary.value || {});
@@ -60,34 +94,45 @@ function statusLabel(s) {
 async function onAssign(row) {
   try {
     const { value } = await ElMessageBox.prompt('分派给（输入用户名）', '分派异常', { confirmButtonText: '确认' });
-    if (!value) return;
-    await anom.assign(row.id, { assigneeUserId: value, assigneeLabel: value });
-    bus.pushLocal({ severity: row.severity || 'P1', sourceModule: 'M4A', title: `异常已分派 → ${value}`, body: row.title, link: '/monitor/anomalies' });
+    const name = String(value || '').trim();
+    if (!name) return;
+    await runRowAction(row.id, 'assigned', async () => {
+      await anom.assign(row.id, { assigneeUserId: name, assigneeLabel: name });
+      bus.pushLocal({ severity: row.severity || 'P1', sourceModule: 'M4A', title: `异常已分派 → ${name}`, body: row.title, link: '/monitor/anomalies' });
+    });
   } catch (_) {/* cancel */}
 }
 async function onAck(row) {
-  await anom.acknowledge(row.id);
+  await runRowAction(row.id, 'investigating', () => anom.acknowledge(row.id));
 }
 async function onResolve(row) {
   try {
     const { value } = await ElMessageBox.prompt('解决说明（可填入 caseId）', '标记为已解决', { confirmButtonText: '确认' });
-    await anom.resolve(row.id, { note: value });
-    bus.pushLocal({ severity: 'P2', sourceModule: 'M4A', title: `异常已解决：${row.title}`, body: value || '' });
+    // unify empty handling: trim, default to empty note rather than undefined.
+    const note = String(value || '').trim();
+    await runRowAction(row.id, 'resolved', async () => {
+      await anom.resolve(row.id, { note });
+      bus.pushLocal({ severity: 'P2', sourceModule: 'M4A', title: `异常已解决：${row.title}`, body: note });
+    });
   } catch (_) {/* cancel */}
 }
 async function onDismiss(row) {
   try {
     const { value } = await ElMessageBox.prompt('忽略原因', '忽略异常', { confirmButtonText: '确认' });
-    if (!value) return;
-    await anom.dismiss(row.id, { reason: value });
+    const reason = String(value || '').trim();
+    if (!reason) return;
+    await runRowAction(row.id, 'dismissed', () => anom.dismiss(row.id, { reason }));
   } catch (_) {}
 }
 async function onEscalate(row) {
   try {
     const { value } = await ElMessageBox.prompt('升级原因', '升级异常', { confirmButtonText: '升级' });
-    if (!value) return;
-    await anom.escalate(row.id, { reason: value });
-    bus.pushLocal({ severity: 'P0', sourceModule: 'M4A', title: `异常已升级：${row.title}`, body: value });
+    const reason = String(value || '').trim();
+    if (!reason) return;
+    await runRowAction(row.id, 'escalated', async () => {
+      await anom.escalate(row.id, { reason });
+      bus.pushLocal({ severity: 'P0', sourceModule: 'M4A', title: `异常已升级：${row.title}`, body: reason });
+    });
   } catch (_) {}
 }
 function viewDetail(row) {
@@ -187,11 +232,11 @@ const mobileCols = [
           </el-table-column>
           <el-table-column label="操作" width="280">
             <template #default="{ row }">
-              <el-button v-if="canDo(row, 'assigned')" size="small" plain @click.stop="onAssign(row)">分派</el-button>
-              <el-button v-if="canDo(row, 'investigating')" size="small" plain @click.stop="onAck(row)">确认</el-button>
-              <el-button v-if="canDo(row, 'resolved')" size="small" type="success" plain @click.stop="onResolve(row)">解决</el-button>
-              <el-button v-if="canDo(row, 'escalated')" size="small" type="warning" plain @click.stop="onEscalate(row)">升级</el-button>
-              <el-button v-if="canDo(row, 'dismissed')" size="small" link @click.stop="onDismiss(row)">忽略</el-button>
+              <el-button v-if="canDo(row, 'assigned')" size="small" plain :loading="isBusy(row.id, 'assigned')" :disabled="isBusy(row.id, 'assigned')" @click.stop="onAssign(row)">分派</el-button>
+              <el-button v-if="canDo(row, 'investigating')" size="small" plain :loading="isBusy(row.id, 'investigating')" :disabled="isBusy(row.id, 'investigating')" @click.stop="onAck(row)">确认</el-button>
+              <el-button v-if="canDo(row, 'resolved')" size="small" type="success" plain :loading="isBusy(row.id, 'resolved')" :disabled="isBusy(row.id, 'resolved')" @click.stop="onResolve(row)">解决</el-button>
+              <el-button v-if="canDo(row, 'escalated')" size="small" type="warning" plain :loading="isBusy(row.id, 'escalated')" :disabled="isBusy(row.id, 'escalated')" @click.stop="onEscalate(row)">升级</el-button>
+              <el-button v-if="canDo(row, 'dismissed')" size="small" link :loading="isBusy(row.id, 'dismissed')" :disabled="isBusy(row.id, 'dismissed')" @click.stop="onDismiss(row)">忽略</el-button>
             </template>
           </el-table-column>
 
@@ -211,11 +256,11 @@ const mobileCols = [
             <span v-if="row.slaBreached" class="text-danger" style="font-size: 11px"> · 超时</span>
           </template>
           <template #mobile-actions="{ row }">
-            <el-button v-if="canDo(row, 'assigned')" size="small" plain @click.stop="onAssign(row)">分派</el-button>
-            <el-button v-if="canDo(row, 'investigating')" size="small" plain @click.stop="onAck(row)">确认</el-button>
-            <el-button v-if="canDo(row, 'resolved')" size="small" type="success" plain @click.stop="onResolve(row)">解决</el-button>
-            <el-button v-if="canDo(row, 'escalated')" size="small" type="warning" plain @click.stop="onEscalate(row)">升级</el-button>
-            <el-button v-if="canDo(row, 'dismissed')" size="small" link @click.stop="onDismiss(row)">忽略</el-button>
+            <el-button v-if="canDo(row, 'assigned')" size="small" plain :loading="isBusy(row.id, 'assigned')" :disabled="isBusy(row.id, 'assigned')" @click.stop="onAssign(row)">分派</el-button>
+            <el-button v-if="canDo(row, 'investigating')" size="small" plain :loading="isBusy(row.id, 'investigating')" :disabled="isBusy(row.id, 'investigating')" @click.stop="onAck(row)">确认</el-button>
+            <el-button v-if="canDo(row, 'resolved')" size="small" type="success" plain :loading="isBusy(row.id, 'resolved')" :disabled="isBusy(row.id, 'resolved')" @click.stop="onResolve(row)">解决</el-button>
+            <el-button v-if="canDo(row, 'escalated')" size="small" type="warning" plain :loading="isBusy(row.id, 'escalated')" :disabled="isBusy(row.id, 'escalated')" @click.stop="onEscalate(row)">升级</el-button>
+            <el-button v-if="canDo(row, 'dismissed')" size="small" link :loading="isBusy(row.id, 'dismissed')" :disabled="isBusy(row.id, 'dismissed')" @click.stop="onDismiss(row)">忽略</el-button>
           </template>
         </ResponsiveTable>
       </div>

@@ -1,12 +1,14 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { useRouter } from 'vue-router';
 import PageHeader from '../components/PageHeader.vue';
 import MobileFallback from '../components/MobileFallback.vue';
 import { useViewport } from '../composables/useViewport';
 import { useLocalStore } from '../composables/useLocalStore';
 
 const { isMobile } = useViewport();
+const router = useRouter();
 
 const localStore = useLocalStore();
 const tab = ref('stores');
@@ -29,21 +31,30 @@ async function addStore() {
 async function removeStore(s) {
   if (stores.value.length <= 1) return ElMessage.warning('至少保留一个店铺');
   try {
-    await ElMessageBox.confirm(`确定解绑 ${s.name}? 该店铺的审计日志/关键词/告警将被清除。`, '解绑店铺', {
-      confirmButtonText: '解绑', cancelButtonText: '取消', type: 'warning',
-    });
+    // X-P1-08: be honest about retention — audit logs are ARCHIVED (not deleted),
+    // and deletion is blocked while un-reverted real writes remain.
+    await ElMessageBox.confirm(
+      `确定解绑 ${s.name}?\n关键词/告警将被清除；审计日志将归档保留（不会被删除）。\n若该店铺存在未回滚的真实写入，解绑会被阻断。`,
+      '解绑店铺',
+      { confirmButtonText: '解绑', cancelButtonText: '取消', type: 'warning' },
+    );
     await localStore.removeStore(s.id);
-    ElMessage.success('已解绑');
-  } catch {}
+    ElMessage.success('已解绑（审计日志已归档保留）');
+  } catch (e) {
+    // user cancelled → no message; real error (e.g. 409 blocked) → surface it
+    if (e && e.message && /未回滚|real_write|409/.test(String(e.message))) {
+      ElMessage.error('存在未回滚的真实写入，解绑已阻断，请先完成人工回滚');
+    }
+  }
 }
 
 async function activateStore(s) {
   await localStore.switchStore(s.id);
 }
 
-async function authorize(s, kind) {
-  await localStore.updateStore(s.id, { [kind]: true });
-  ElMessage.success(`${kind === 'spApiAuthorized' ? 'SP-API' : 'Ads API'} 已模拟授权`);
+async function openAmazonAuth(s) {
+  if (s?.id && s.id !== currentStoreId.value) await localStore.switchStore(s.id);
+  router.push('/settings/amazon-auth');
 }
 
 onMounted(async () => {
@@ -150,14 +161,16 @@ function save() {
             <el-table-column prop="currency" label="币种" width="90" />
             <el-table-column label="SP-API" width="160">
               <template #default="{ row }">
-                <el-tag v-if="row.spApiAuthorized" type="success" size="small">已授权</el-tag>
-                <el-button v-else size="small" type="primary" plain @click="authorize(row, 'spApiAuthorized')">授权 SP-API</el-button>
+                <el-button size="small" :type="row.spApiAuthorized === true ? 'success' : 'primary'" plain @click="openAmazonAuth(row)">
+                  {{ row.spApiAuthorized === true ? '查看接入' : '真实接入' }}
+                </el-button>
               </template>
             </el-table-column>
             <el-table-column label="Ads API" width="160">
               <template #default="{ row }">
-                <el-tag v-if="row.adsApiAuthorized" type="success" size="small">已授权</el-tag>
-                <el-button v-else size="small" type="primary" plain @click="authorize(row, 'adsApiAuthorized')">授权 Ads API</el-button>
+                <el-button size="small" :type="row.adsApiAuthorized === true ? 'success' : 'primary'" plain @click="openAmazonAuth(row)">
+                  {{ row.adsApiAuthorized === true ? '查看接入' : '真实接入' }}
+                </el-button>
               </template>
             </el-table-column>
             <el-table-column label="添加时间" width="140">

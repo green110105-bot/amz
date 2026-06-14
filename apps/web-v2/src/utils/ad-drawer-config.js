@@ -11,7 +11,7 @@ export const ALL_TAB_KEYS = [
   'placement',      // 广告位
   'timeSeries',     // 时间序列（campaign only）
   'keyKeywords',    // 重点关键词（campaign only）
-  'userSearchTerms',// 用户搜索词（keyword / target only）
+  'userSearchTerms',// 用户搜索词（keyword only; target uses a 4-tab Lingxing drawer）
   'history',        // 溯源（日志）
 ];
 
@@ -38,11 +38,12 @@ export const ENTITY_TYPE_LABEL = {
   portfolio: 'Portfolio',
 };
 
-// Per-entity tab matrix — direct from v3 recon
+// Per-entity tab matrix. The target drawer follows the verified all_target
+// Lingxing contract: daily / compare / hourly / placement only.
 export const TABS_BY_ENTITY = {
   campaign:  ['daily', 'compare', 'hourly', 'overBudget', 'attribution', 'placement', 'timeSeries', 'keyKeywords', 'history'],
   keyword:   ['daily', 'compare', 'hourly', 'placement', 'userSearchTerms'],
-  target:    ['daily', 'compare', 'hourly', 'placement', 'userSearchTerms'],
+  target:    ['daily', 'compare', 'hourly', 'placement'],
   adgroup:   ['daily', 'compare', 'hourly'],
   ad:        ['daily', 'compare', 'hourly'],
   placement: ['daily', 'compare', 'hourly'],

@@ -38,23 +38,47 @@ const observeProgress = computed(() => {
   const elapsed = (Date.now() - new Date(s.value.acceptedAt).getTime()) / 3600000;
   return Math.min(100, Math.round((elapsed / s.value.observationWindowHours) * 100));
 });
+
+const severityClass = computed(() => 'sev-' + (s.value.severity?.label || 'P2').toLowerCase());
+const typedActionLabel = computed(() => s.value.typedAction?.actionPrimitiveLabel || s.value.typedAction?.actionPrimitive || s.value.actionType?.label || '动作');
+const evidenceCount = computed(() => s.value.evidenceRefs?.length || s.value.evidence?.length || 0);
+// X-P1-01: default to 'unknown' (not 'mock seed') so real-but-unlabeled data is
+// never falsely branded as mock. Absent freshness means "来源未知".
+const sourceFreshness = computed(() => s.value.sourceMeta?.freshness || 'unknown');
+const impactLabel = computed(() => s.value.impactEstimate?.label || s.value.impact?.label || '待估算');
+const confidenceFinal = computed(() => s.value.confidenceBreakdown?.final ?? s.value.confidence ?? 0);
+const guardrailMeta = computed(() => {
+  const status = s.value.guardrail?.status || 'needs_review';
+  const map = {
+    passed: { label: s.value.guardrail?.statusLabel || '护栏通过', type: 'success' },
+    needs_review: { label: s.value.guardrail?.statusLabel || '需要复核', type: 'warning' },
+    blocked: { label: s.value.guardrail?.statusLabel || '已阻断', type: 'danger' },
+  };
+  return map[status] || map.needs_review;
+});
+const rollbackText = computed(() => {
+  const rb = s.value.rollback || s.value.rollbackPlan;
+  if (!rb) return '回滚待生成';
+  if (!rb.reversible) return '无需回滚';
+  return `${rb.windowDays || 0} 天可回滚`;
+});
 </script>
 
 <template>
   <el-card
     shadow="hover"
     class="sug-card"
-    :class="['state-' + s.state, 'sev-' + s.severity.label.toLowerCase()]"
+    :class="['state-' + s.state, severityClass]"
   >
     <!-- 头部：时间 + 严重度 + 动作类型 + 状态 + 跨模块标记 -->
     <div class="head">
       <span class="time">⏱ {{ timeText }}</span>
-      <el-tag size="small" effect="dark" :style="{ background: s.severity.color, borderColor: s.severity.color }">
-        {{ s.severity.label }} · {{ s.severity.text }}
+      <el-tag size="small" effect="dark" :style="{ background: s.severity?.color || '#64748b', borderColor: s.severity?.color || '#64748b' }">
+        {{ s.severity?.label || 'AI' }} · {{ s.severity?.text || '建议' }}
       </el-tag>
-      <el-tag size="small" effect="plain" :style="{ color: s.actionType.color, borderColor: s.actionType.color }">
-        <el-icon style="margin-right: 4px"><component :is="s.actionType.icon" /></el-icon>
-        {{ s.actionType.label }}
+      <el-tag size="small" effect="plain" :style="{ color: s.actionType?.color || '#3b82f6', borderColor: s.actionType?.color || '#3b82f6' }">
+        <el-icon v-if="s.actionType?.icon" style="margin-right: 4px"><component :is="s.actionType.icon" /></el-icon>
+        {{ s.actionType?.label || typedActionLabel }}
       </el-tag>
       <el-tag v-if="s.crossModule" size="small" type="warning" effect="dark">
         🔗 跨 {{ s.crossModule }}
@@ -71,13 +95,31 @@ const observeProgress = computed(() => {
       <el-icon class="source-arrow"><Right /></el-icon>
     </div>
 
+    <div class="contract-strip">
+      <span class="contract-chip primary">
+        <b>TypedAction</b>{{ typedActionLabel }}
+      </span>
+      <span class="contract-chip" :class="'guard-' + (s.guardrail?.status || 'needs_review')">
+        <b>Guardrail</b>{{ guardrailMeta.label }}
+      </span>
+      <span class="contract-chip">
+        <b>EvidenceRef</b>{{ evidenceCount }} 条
+      </span>
+      <span class="contract-chip">
+        <b>Rollback</b>{{ rollbackText }}
+      </span>
+      <span class="contract-chip muted">
+        <b>Source</b>{{ sourceFreshness }}
+      </span>
+    </div>
+
     <!-- 实体路径 -->
     <div class="entity">
-      <span v-if="s.entity.sku" class="entity-chip"><b>SKU</b>&nbsp;{{ s.entity.sku }}</span>
-      <span v-if="s.entity.keyword && s.entity.keyword !== '—'" class="entity-chip">
+      <span v-if="s.entity?.sku" class="entity-chip"><b>SKU</b>&nbsp;{{ s.entity.sku }}</span>
+      <span v-if="s.entity?.keyword && s.entity.keyword !== '—'" class="entity-chip">
         <b>kw</b>&nbsp;<i>"{{ s.entity.keyword }}"</i>
       </span>
-      <span v-if="s.entity.campaign && s.entity.campaign !== '新建' && s.entity.campaign !== 'multi-campaign'" class="entity-chip">
+      <span v-if="s.entity?.campaign && s.entity.campaign !== '新建' && s.entity.campaign !== 'multi-campaign'" class="entity-chip">
         <b>camp</b>&nbsp;{{ s.entity.campaign }}
       </span>
     </div>
@@ -90,11 +132,11 @@ const observeProgress = computed(() => {
     <div class="metrics">
       <div class="metric">
         <span class="metric-label">期望影响</span>
-        <strong class="metric-impact">{{ s.impact.label }}</strong>
+        <strong class="metric-impact">{{ impactLabel }}</strong>
       </div>
       <div class="metric">
         <span class="metric-label">AI 置信度</span>
-        <strong>{{ Math.round(s.confidence * 100) }}%</strong>
+        <strong>{{ Math.round(confidenceFinal * 100) }}%</strong>
       </div>
       <div class="metric">
         <span class="metric-label">历史采纳成功率</span>
@@ -118,17 +160,17 @@ const observeProgress = computed(() => {
     <!-- 动作按钮（仅 pending 状态显示完整按钮组） -->
     <div v-if="s.state === 'pending'" class="actions">
       <el-button type="primary" size="default" @click="emit('execute', s)">
-        <el-icon><Check /></el-icon>立即采纳
+        <el-icon><Check /></el-icon>执行此动作
       </el-button>
       <el-button size="default" @click="emit('auto-toggle', s)">
-        <el-icon><Promotion /></el-icon>自动执行 ▾
+        <el-icon><Promotion /></el-icon>加入执行篮
       </el-button>
       <el-button size="default" plain @click="emit('reject', s)">
-        <el-icon><Close /></el-icon>忽略
+        <el-icon><Close /></el-icon>暂缓/忽略
       </el-button>
       <span class="spacer" />
       <el-button link type="primary" @click="emit('view-detail', s)">
-        证据 + 替代方案 →
+        查看证据与护栏 →
       </el-button>
     </div>
 
@@ -289,5 +331,54 @@ const observeProgress = computed(() => {
 .source-arrow {
   color: var(--text-muted);
   font-size: 11px;
+}
+
+.contract-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 10px;
+  padding: 8px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+.contract-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  color: #475569;
+  font-size: 11px;
+}
+.contract-chip b {
+  color: #0f172a;
+  font-weight: 700;
+}
+.contract-chip.primary {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+.contract-chip.guard-passed {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #047857;
+}
+.contract-chip.guard-needs_review {
+  border-color: #fde68a;
+  background: #fffbeb;
+  color: #b45309;
+}
+.contract-chip.guard-blocked {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+.contract-chip.muted {
+  color: #64748b;
 }
 </style>

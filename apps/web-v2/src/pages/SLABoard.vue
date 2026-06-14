@@ -12,21 +12,24 @@ import { useSLABoard } from '../composables/useM4State';
 const route = useRoute();
 const router = useRouter();
 const sla = useSLABoard();
-const range = ref(route.query.range || 'today');
+// M4-P2-03: default range aligned to backend default '7d' (was 'today').
+const range = ref(route.query.range || '7d');
 
 watch(range, (r) => {
-  router.replace({ query: r === 'today' ? {} : { range: r } });
+  router.replace({ query: r === '7d' ? {} : { range: r } });
   sla.fetch(r, true);
 });
 
 onMounted(() => sla.fetch(range.value, true));
 
-const ts = computed(() => sla.board.value?.todayStats || {});
+// rangeStats is the canonical range-scoped block; todayStats is a back-compat alias.
+const ts = computed(() => sla.board.value?.rangeStats || sla.board.value?.todayStats || {});
 const team = computed(() => sla.board.value?.team || []);
+const rangeLabel = computed(() => ({ today: '今日', '7d': '近 7 天', '30d': '近 30 天' }[range.value] || range.value));
 
 const mobileCols = [
   { prop: 'user', label: '成员' },
-  { prop: 'anomaliesAssigned', label: '今日异常' },
+  { prop: 'anomaliesAssigned', label: '异常分配' },
   { prop: 'avgResponseMin', label: '均响应(min)' },
   { prop: 'slaRate', label: 'SLA 达成率', formatter: (v) => `${Math.round((v || 0) * 100)}%` },
 ];
@@ -48,13 +51,13 @@ const mobileCols = [
       <el-row :gutter="16" class="kpi-row">
         <el-col :xs="24" :sm="12" :md="8" :lg="6">
           <KpiCard
-            label="P0 异常" :value="ts.p0Total || 0"
+            :label="`P0 异常（${rangeLabel}）`" :value="ts.p0Total || 0"
             :hint="`平均 ${ts.p0Avg || 0} min / SLA ${ts.p0Sla || 0} min`"
             :status="(ts.p0Avg ?? 0) <= (ts.p0Sla ?? 1) ? 'success' : 'danger'" icon="WarningFilled" />
         </el-col>
         <el-col :xs="24" :sm="12" :md="8" :lg="6">
           <KpiCard
-            label="P1 异常" :value="ts.p1Total || 0"
+            :label="`P1 异常（${rangeLabel}）`" :value="ts.p1Total || 0"
             :hint="`平均 ${ts.p1Avg || 0} min / SLA ${ts.p1Sla || 0} min`"
             :status="(ts.p1Avg ?? 0) <= (ts.p1Sla ?? 1) ? 'success' : 'warning'" icon="Warning" />
         </el-col>
@@ -71,7 +74,7 @@ const mobileCols = [
         <EmptyState v-if="!sla.loading.value && team.length === 0" title="暂无数据" description="后端尚未返回 SLA 看板" icon="DataAnalysis" />
         <ResponsiveTable v-else :data="team" :mobile-columns="mobileCols" stripe>
           <el-table-column prop="user" label="成员" width="160" />
-          <el-table-column label="今日异常分配" align="right" width="140"><template #default="{ row }"><span class="tnum">{{ row.anomaliesAssigned }}</span></template></el-table-column>
+          <el-table-column label="异常分配" align="right" width="140"><template #default="{ row }"><span class="tnum">{{ row.anomaliesAssigned }}</span></template></el-table-column>
           <el-table-column label="平均响应时长" align="right" width="140"><template #default="{ row }"><span class="tnum">{{ row.avgResponseMin }} min</span></template></el-table-column>
           <el-table-column label="SLA 内" align="right" width="140"><template #default="{ row }"><span class="tnum text-success">{{ row.withinSla }} / {{ row.anomaliesAssigned }}</span></template></el-table-column>
           <el-table-column label="已升级" align="right" width="120">

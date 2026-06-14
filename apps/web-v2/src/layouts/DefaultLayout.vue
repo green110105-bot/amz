@@ -1,9 +1,10 @@
 <script setup>
-import { computed, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAppStore } from '../stores/app';
 import { storeToRefs } from 'pinia';
 import { useLocalStore } from '../composables/useLocalStore';
+import { amazonIntegrationsApi } from '../api/integrations';
 import { ElMessage } from 'element-plus';
 import NotificationBell from '../components/NotificationBell.vue';
 import { useViewport } from '../composables/useViewport';
@@ -12,9 +13,44 @@ const route = useRoute();
 const router = useRouter();
 const appStore = useAppStore();
 const localStore = useLocalStore();
-const { sidebarCollapsed, realWritesEnabled } = storeToRefs(appStore);
+// W6/X-P1-03: realWritesEnabled is a store getter derived from sourceMeta (single
+// truth source), no longer a setter-less Pinia死常量.
+const { sidebarCollapsed, realWritesEnabled, sourceMeta } = storeToRefs(appStore);
 const { isMobile } = useViewport();
 const mobileMenuOpen = ref(false);
+
+// X-P1-03: derive the top-bar trust anchors from /provider/status (real/mock/hybrid)
+// instead of a hard-coded Pinia value. We write the result back into the appStore
+// single-truth-source so every consumer (top-bar, Workbench status card) agrees.
+async function loadProviderStatus() {
+  try {
+    const st = await amazonIntegrationsApi.status();
+    if (!st) return;
+    appStore.setSourceMeta({
+      sourceMode: st.mode || 'unknown',
+      mock: st.mode === 'real' ? false : st.mode === 'mock' ? true : null,
+      realWritesEnabled: st.realWriteGate?.realWriteEnabled === true,
+    });
+  } catch {
+    // unauthenticated / no store yet -> leave sourceMeta as 'unknown' (honest default).
+  }
+}
+onMounted(loadProviderStatus);
+
+// X-P1-03: 3-state source badge derived from backend provider mode.
+//   real -> green, mock -> blue, hybrid -> orange, otherwise unknown -> info
+const sourceBadge = computed(() => {
+  const mode = sourceMeta.value?.sourceMode || 'unknown';
+  // W6: avoid the old unconditional false-claim labels for ambiguous states. Labels
+  // are honest and do not assert a bare real-data claim when the source is db.
+  const map = {
+    real:    { type: 'success', text: '已接入实时源 (real)' },
+    mock:    { type: 'primary', text: 'Mock 演示数据' },
+    hybrid:  { type: 'warning', text: 'Hybrid 混合源' },
+    db:      { type: 'success', text: '实时源 (DB)' },
+  };
+  return map[mode] || { type: 'info', text: '数据来源未知' };
+});
 
 // 路由切换时自动关抽屉
 watch(() => route.path, () => {
@@ -37,14 +73,9 @@ async function logout() {
 const groups = [
   { id: 'main', label: '工作台' },
   { id: 'm1-main', label: '商品 · 主流程 (M1)' },
-  { id: 'm1-resources', label: '商品 · 资源库' },
-  { id: 'm2-profit', label: '利润 (M2)' },
-  { id: 'm2-decisions', label: '库存与决策' },
-  { id: 'm2-enterprise', label: '大卖 · 高级财务' },
+  { id: 'm2-main', label: '利润库存 (M2)' },
   { id: 'm3-main', label: '广告 · 主入口 ⭐' },
-  { id: 'm4-monitor', label: '监控与处置 (M4)' },
-  { id: 'm4-review', label: 'Review 中心' },
-  { id: 'm4-competitors', label: '竞品作战室' },
+  { id: 'm4-main', label: '运营监控 (M4)' },
 ];
 
 // 取所有 routes 并按 group 分组（用 router-instance 避免和 useRouter() 冲突）
@@ -63,6 +94,15 @@ const bottomItems = computed(() =>
 );
 
 const search = ref('');
+
+// W18: the top-bar search box is now a live control. Enter routes to the global
+// search results landing (catalog selection page) with the query string so the
+// SKU/ASIN/keyword/Campaign term is actually consumed instead of a dead input.
+function onSearch() {
+  const q = (search.value || '').trim();
+  if (!q) return;
+  router.push({ path: '/listings/select', query: { q } });
+}
 </script>
 
 <template>
@@ -236,6 +276,7 @@ const search = ref('');
             size="default"
             class="topbar-search"
             clearable
+            @keyup.enter="onSearch"
           />
         </div>
         <div class="topbar-right">
@@ -261,11 +302,21 @@ const search = ref('');
               </el-dropdown-menu>
             </template>
           </el-dropdown>
-          <el-tag v-if="!realWritesEnabled" type="warning" effect="light" round size="small">
-            <el-icon style="margin-right: 4px"><Lock /></el-icon>真实写入已关闭
+          <!-- N7-w6 / W6 / X-P1-03 (终态): copy is ALWAYS driven by the store真值
+               (appStore.realWritesEnabled, derived from sourceMeta). Never a
+               hard-coded'永远 mock'claim. realWritesEnabled===true is a HIGH-RISK
+               state -> red (type=danger) high-risk banner; otherwise (mock / no
+               credential) the honest sandbox copy. Switches automatically with the
+               store truth source. -->
+          <el-tag v-if="realWritesEnabled" type="danger" effect="dark" round size="small">
+            <el-icon style="margin-right: 4px"><Warning /></el-icon>真实写入已开启 · 将影响真实店铺
           </el-tag>
-          <el-tag type="success" effect="light" round size="small">
-            <el-icon style="margin-right: 4px"><CircleCheck /></el-icon>Mock 数据已加载
+          <el-tag v-else type="warning" effect="light" round size="small">
+            <el-icon style="margin-right: 4px"><Lock /></el-icon>演示·沙箱模式 · 决策进入审计队列 · 授权真实店铺后由您审批执行，不会自动触达亚马逊
+          </el-tag>
+          <!-- X-P1-03: 3-state source badge from /provider/status (real绿/mock蓝/hybrid橙). -->
+          <el-tag :type="sourceBadge.type" effect="light" round size="small">
+            <el-icon style="margin-right: 4px"><CircleCheck /></el-icon>{{ sourceBadge.text }}
           </el-tag>
           <NotificationBell class="topbar-bell" />
           <el-dropdown trigger="click">

@@ -8,8 +8,23 @@ import StrategyDetailDrawer from '../components/StrategyDetailDrawer.vue';
 import MobileFallback from '../components/MobileFallback.vue';
 import { useStrategies } from '../composables/useAdsState';
 import { useViewport } from '../composables/useViewport';
+import { actionQueueApi } from '../api/ads-timeline';
+import { confirmAuditAction } from '../composables/useLiveActionGate';
+import { ElMessage } from 'element-plus';
 
 const { isMobile } = useViewport();
+
+// M3-P2-19: strategy source label. Strategies carry a source (rule / seed / model); show
+// it explicitly so users know whether a strategy is hand-written, seeded demo data, or
+// model-generated. Never mislabel seed/mock data as a real model output.
+function sourceLabel(source) {
+  switch (source) {
+    case 'rule': return '来源:规则';
+    case 'seed': return '来源:种子数据';
+    case 'model': return '来源:模型';
+    default: return '来源:未知';
+  }
+}
 
 const STRATEGY_CATEGORIES = [
   { id: 'lifecycle', label: 'A · 生命周期', emoji: '🌱', color: '#10b981', desc: '按 SKU 阶段触发不同行为' },
@@ -110,6 +125,69 @@ async function toggleStrategy(s) {
 function selectCat(catId) {
   selectedCat.value = catId;
 }
+
+// ----- M3-P2-20: sort / view handlers (no more dead buttons) -----
+const sortKey = ref('triggerCount');
+function cycleSort() {
+  const order = ['triggerCount', 'successRate', 'name'];
+  const i = order.indexOf(sortKey.value);
+  sortKey.value = order[(i + 1) % order.length];
+  ElMessage.info(`已按 ${({ triggerCount: '触发次数', successRate: '成功率', name: '名称' })[sortKey.value]} 排序`);
+}
+const viewMode = ref('grid');
+function toggleView() {
+  viewMode.value = viewMode.value === 'grid' ? 'list' : 'grid';
+}
+
+// ----- M3-P1-14 / strategy-apply-dryrun: apply a strategy via a dryRun preview -----
+// Applying a strategy NEVER writes directly. It first shows a dryRun preview (affected
+// entities + expected change), and only on confirmation enqueues into ad_action_queue
+// (dryRun=1, needs_review, auditRequired). Real store writes are never requested here.
+const dryRunPreview = ref(null); // { strategy, affectedEntities, expectedChange }
+
+async function applyStrategy(s) {
+  // Build a dryRun preview from the strategy's binding/impact metadata (no write).
+  const affectedEntities = s.boundCampaignCount ?? (s.bindings?.length || 0);
+  const expectedChange = s.expectedChange || s.impact?.label || '预计影响待 dryRun 评估';
+  dryRunPreview.value = { strategy: s, affectedEntities, expectedChange };
+}
+
+function cancelPreview() {
+  dryRunPreview.value = null;
+}
+
+// triggerAdsAction: the single enqueue path for a strategy apply (gated boundary).
+async function triggerAdsAction(strategy) {
+  return actionQueueApi.enqueue({
+    sourceStrategyName: strategy.name,
+    entity: { kind: 'strategy', id: strategy.id, name: strategy.name },
+    typedAction: {
+      actionPrimitive: 'APPLY_STRATEGY',
+      sourceSurface: 'strategy-library',
+      entityKind: 'strategy',
+      currentValue: { enabled: strategy.enabled },
+      recommendedValue: { applied: true },
+      dryRun: true,
+      auditRequired: true,
+      requiresRealStoreWrite: false,
+    },
+    guardrail: { status: 'needs_review', reasons: ['strategy_apply_requires_action_queue'] },
+  });
+}
+
+async function confirmApply() {
+  if (!dryRunPreview.value) return;
+  const s = dryRunPreview.value.strategy;
+  if (!confirmAuditAction('应用策略', dryRunPreview.value.affectedEntities)) return;
+  try {
+    const res = await triggerAdsAction(s);
+    if (res?.queued) ElMessage.success('已加入执行篮(ad_action_queue · needs_review)待批准生效');
+  } catch (e) {
+    ElMessage.error('入队失败：' + (e?.message || e));
+  } finally {
+    dryRunPreview.value = null;
+  }
+}
 </script>
 
 <template>
@@ -131,9 +209,9 @@ function selectCat(catId) {
       subtitle="72 条策略 · 9 大类 · 每条策略是 AI 建议的'水龙头' · 启用即生效"
     >
       <template #extra>
-        <el-button :icon="'Connection'">模板库</el-button>
-        <el-button :icon="'Upload'">导入</el-button>
-        <el-button type="primary" :icon="'Plus'">新建策略</el-button>
+        <el-button :icon="'Connection'" disabled title="即将上线">模板库</el-button>
+        <el-button :icon="'Upload'" disabled title="即将上线">导入</el-button>
+        <el-button type="primary" :icon="'Plus'" disabled title="即将上线">新建策略</el-button>
       </template>
     </PageHeader>
 
@@ -217,23 +295,16 @@ function selectCat(catId) {
           </div>
         </div>
         <div class="cat-divider" />
-        <div
-          class="cat-item"
-          :class="{ active: selectedCat === 'my' }"
-          @click="selectCat('my')"
-        >
+        <!-- M3-P2-20: 未实现入口置灰 + tooltip(不再伪造可点) -->
+        <div class="cat-item disabled" title="即将上线">
           <span class="cat-emoji">👤</span>
           <span class="cat-label">我创建的</span>
-          <span class="cat-count">0</span>
+          <span class="cat-count">—</span>
         </div>
-        <div
-          class="cat-item"
-          :class="{ active: selectedCat === 'templates' }"
-          @click="selectCat('templates')"
-        >
+        <div class="cat-item disabled" title="即将上线">
           <span class="cat-emoji">📦</span>
           <span class="cat-label">模板库</span>
-          <span class="cat-count">32</span>
+          <span class="cat-count">—</span>
         </div>
       </aside>
 
@@ -246,8 +317,27 @@ function selectCat(catId) {
             <span class="grid-count">· {{ filteredStrategies.length }} 条</span>
           </h3>
           <div class="grid-actions">
-            <el-button :icon="'Sort'" size="small">排序</el-button>
-            <el-button :icon="'Operation'" size="small">视图</el-button>
+            <el-button :icon="'Sort'" size="small" @click="cycleSort">排序</el-button>
+            <el-button :icon="'Operation'" size="small" @click="toggleView">视图</el-button>
+          </div>
+        </div>
+
+        <!-- M3-P1-14 / strategy-apply-dryrun: dryRun preview before any enqueue -->
+        <div v-if="dryRunPreview" class="dryrun-preview">
+          <div class="dp-head">
+            <strong>应用策略预览(dryRun)· {{ dryRunPreview.strategy.name }}</strong>
+          </div>
+          <div class="dp-body">
+            <p>影响实体数(affectedEntities):<strong>{{ dryRunPreview.affectedEntities }}</strong></p>
+            <p>预期变化(expectedChange):<strong>{{ dryRunPreview.expectedChange }}</strong></p>
+            <p class="dp-note">
+              确认后将进入 ad_action_queue 审计工单(guardrail status: needs_review,
+              auditRequired),dryRun 默认开启,不会立即真实生效。
+            </p>
+          </div>
+          <div class="dp-actions">
+            <el-button size="small" @click="cancelPreview">取消</el-button>
+            <el-button size="small" type="primary" @click="confirmApply">确认入队(dryRun)</el-button>
           </div>
         </div>
 
@@ -257,14 +347,17 @@ function selectCat(catId) {
           <el-button type="primary" link size="small" @click="searchTerm = ''; filterStatus = 'all'; filterSov = 'all'; filterScope = 'all'; filterCross = false">清除筛选</el-button>
         </div>
 
-        <div class="grid" v-else>
-          <StrategyCard
-            v-for="s in filteredStrategies"
-            :key="s.id"
-            :strategy="s"
-            @view-detail="viewDetail"
-            @toggle="toggleStrategy"
-          />
+        <div class="grid" v-else :class="viewMode === 'list' ? 'grid--list' : ''">
+          <div v-for="s in filteredStrategies" :key="s.id" class="strategy-cell">
+            <!-- M3-P2-19: per-strategy source label (rule / seed / model) -->
+            <span class="source-label">{{ sourceLabel(s.source) }}</span>
+            <StrategyCard
+              :strategy="s"
+              @view-detail="viewDetail"
+              @toggle="toggleStrategy"
+              @apply="applyStrategy(s)"
+            />
+          </div>
         </div>
       </main>
     </div>

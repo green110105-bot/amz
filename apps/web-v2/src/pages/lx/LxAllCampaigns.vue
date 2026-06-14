@@ -1,11 +1,29 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { Histogram } from '@element-plus/icons-vue';
+// M3-P1-14: Clock was used in the template (analysis column) but not imported, causing a
+// render error. Import it alongside Histogram.
+import { Histogram, Clock } from '@element-plus/icons-vue';
+import { ElMessage } from 'element-plus';
 import { useCampaigns, usePortfolios } from '../../composables/useLxState';
 import ResponsiveTable from '../../components/ResponsiveTable.vue';
 import AdAnalysisDrawer from '../../components/AdAnalysisDrawer.vue';
 import { useViewport } from '../../composables/useViewport';
+import { realWritesEnabled, confirmAuditAction } from '../../composables/useLiveActionGate';
+import { actionQueueApi } from '../../api/ads-timeline';
+
+// m3-button-level / M3-P1-17: real-write boundary state for the dryRun banner + audit gate.
+const realWrites = computed(() => realWritesEnabled());
+const pauseHint = computed(() =>
+  realWrites.value
+    ? '暂停将进入 ad_action_queue 审计工单(needs_review),dryRun 默认开启'
+    : '当前为 dryRun(演示)模式,暂停仅入队审计,不会真实生效'
+);
+
+// M3-P2-21: budget input validation — only positive finite numbers may be submitted.
+function isValidBudget(v) {
+  return typeof v === 'number' && Number.isFinite(v) && v > 0;
+}
 
 const { isMobile } = useViewport();
 const mobileCampaignCols = [
@@ -78,11 +96,120 @@ function gotoCampaign(row) {
 async function onToggle(row) {
   await toggle(row);
 }
+
+// ----- selection -----
+const selected = ref([]);
+function onSelectionChange(rows) { selected.value = rows; }
+
+// ----- M3-P2-21: budget inline edit guarded by validation -----
+async function onUpdateBudget(c) {
+  if (!isValidBudget(c.budget)) {
+    ElMessage.warning('预算必须为大于 0 的有效数字');
+    return;
+  }
+  if (!confirmAuditAction('修改广告活动预算', 1)) return;
+  try {
+    const res = await actionQueueApi.enqueue({
+      sourceStrategyName: 'LxAllCampaigns manual budget',
+      entity: { kind: 'campaign', id: c.id, name: c.name },
+      typedAction: {
+        actionPrimitive: 'SET_CAMPAIGN_BUDGET',
+        sourceSurface: 'lx',
+        entityKind: 'campaign',
+        currentValue: { dailyBudget: c.dailyBudget },
+        recommendedValue: { dailyBudget: c.budget },
+        dryRun: true,
+        auditRequired: true,
+        requiresRealStoreWrite: false,
+      },
+      guardrail: { status: 'needs_review', reasons: ['manual_lx_write_requires_action_queue'] },
+    });
+    if (res?.queued) ElMessage.success('已加入执行篮待批准生效');
+  } catch (e) {
+    ElMessage.error('入队失败：' + (e?.message || e));
+  }
+}
+
+// ----- M3-P1-11 / lx-bulk-confirm: bulk pause with confirm + progress + summary toast -----
+const bulkRunning = ref(false);
+const bulkDone = ref(0);
+const bulkTotal = ref(0);
+async function bulkPause() {
+  const ids = selected.value.filter((c) => c.enabled).map((c) => c.id);
+  if (!ids.length) { ElMessage.info('请选择启用中的广告活动'); return; }
+  if (!confirmAuditAction('批量暂停广告活动', ids.length)) return;
+  bulkRunning.value = true;
+  bulkDone.value = 0;
+  bulkTotal.value = ids.length;
+  let ok = 0, fail = 0;
+  for (const id of ids) {
+    const c = campaigns.value.find((x) => x.id === id);
+    try {
+      const res = await actionQueueApi.enqueue({
+        sourceStrategyName: 'LxAllCampaigns bulk pause',
+        entity: { kind: 'campaign', id, name: c?.name },
+        typedAction: {
+          actionPrimitive: 'PAUSE_CAMPAIGN',
+          sourceSurface: 'lx',
+          entityKind: 'campaign',
+          currentValue: { enabled: true },
+          recommendedValue: { enabled: false },
+          dryRun: true,
+          auditRequired: true,
+          requiresRealStoreWrite: false,
+        },
+        guardrail: { status: 'needs_review', reasons: ['manual_lx_write_requires_action_queue'] },
+      });
+      if (res && res.duplicate !== true && res.queued === false) fail++; else ok++;
+    } catch {
+      fail++;
+    } finally {
+      bulkDone.value++;
+    }
+  }
+  bulkRunning.value = false;
+  ElMessage({ message: `批量暂停已入队:成功 ${ok} 项,失败 ${fail} 项(待审核+dry-run)`, type: fail === ids.length ? 'error' : 'success', customClass: 'bulk-toast' });
+}
+
+// ----- M3-P1-14: filter / sync handlers (real query params + force refetch) -----
+async function applyFilters() {
+  await fetchAll(true);
+}
+async function resetFilters() {
+  filterStore.value = '亚马逊-G店铺-US';
+  filterDate.value = [new Date('2026-05-13'), new Date('2026-05-13')];
+  await fetchAll(true);
+}
+const syncing = ref(false);
+async function syncNow() {
+  syncing.value = true;
+  try { await fetchAll(true); } finally { syncing.value = false; }
+}
+watch(filterDate, () => { /* date range drives query params on next applyFilters/syncNow */ });
+
+// ----- M3-P2-21: front-end CSV export of currently-loaded rows -----
+function exportCsv() {
+  const cols = ['name', 'type', 'dailyBudget', 'spend', 'sales', 'acos'];
+  const header = cols.join(',');
+  const lines = rows.value.map((r) => cols.map((k) => JSON.stringify(r[k] ?? '')).join(','));
+  const csv = [header, ...lines].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'campaigns.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
 </script>
 
 <template>
   <div class="lxall-page">
     <h2 class="page-title">{{ title }}</h2>
+
+    <!-- m3-button-level / M3-P1-17: dryRun banner when real writes are NOT enabled -->
+    <div v-if="!realWrites" class="dryrun-banner">
+      <span>dryRun(演示)模式 · 暂停/改预算仅进入 ad_action_queue 审计(needs_review),不会真实生效</span>
+    </div>
 
     <div class="filter-bar">
       <el-select v-model="filterStore" size="default" style="width: 200px">
@@ -97,18 +224,27 @@ async function onToggle(row) {
         <el-option label="全部" value="all" />
       </el-select>
       <el-input size="default" placeholder="活动名称搜索" style="width: 200px" clearable />
-      <el-button type="primary">查询</el-button>
-      <el-button plain>重置</el-button>
+      <el-button type="primary" @click="applyFilters">查询</el-button>
+      <el-button plain @click="resetFilters">重置</el-button>
     </div>
 
     <div class="table-toolbar">
-      <el-button type="primary" :icon="'Plus'">添加广告活动 ▾</el-button>
+      <el-button type="primary" :icon="'Plus'" disabled title="即将上线">添加广告活动 ▾</el-button>
+      <el-button
+        type="warning"
+        plain
+        size="small"
+        :disabled="bulkRunning"
+        :title="pauseHint"
+        @click="bulkPause"
+      >批量暂停(审计)</el-button>
+      <span v-if="bulkRunning" class="bulk-progress">处理中 {{ bulkDone }} / {{ bulkTotal }}</span>
       <span class="spacer" />
       <el-checkbox v-model="showCompare" size="small">环比</el-checkbox>
-      <el-button :icon="'Bell'" size="small">对比预警</el-button>
-      <el-button :icon="'Operation'" size="small">列配置 ▾</el-button>
-      <el-button :icon="'Download'" size="small" link />
-      <el-button :icon="'Refresh'" size="small" type="primary">同步</el-button>
+      <el-button :icon="'Bell'" size="small" disabled title="即将上线">对比预警</el-button>
+      <el-button :icon="'Operation'" size="small" disabled title="即将上线">列配置 ▾</el-button>
+      <el-button :icon="'Download'" size="small" @click="exportCsv" title="导出当前表格为 CSV">导出</el-button>
+      <el-button :icon="'Refresh'" size="small" type="primary" :loading="syncing" @click="syncNow">同步</el-button>
     </div>
 
     <div class="lx-table">
@@ -117,6 +253,7 @@ async function onToggle(row) {
         :mobile-columns="mobileCampaignCols"
         row-clickable
         @row-click="gotoCampaign"
+        @selection-change="onSelectionChange"
         stripe
         border
         :row-class-name="() => 'clickable'"
@@ -137,8 +274,28 @@ async function onToggle(row) {
             <a class="link" @click.stop="gotoCampaign(row)">{{ row.name }}</a>
           </template>
         </el-table-column>
-        <el-table-column label="预算" prop="dailyBudget" width="80" align="right">
-          <template #default="{ row }">${{ (row.dailyBudget ?? 0).toFixed(2) }}</template>
+        <el-table-column label="预算" prop="dailyBudget" width="170" align="right">
+          <template #default="{ row: c }">
+            <div class="budget-edit" @click.stop>
+              <el-input-number
+                v-model="c.budget"
+                :min="0"
+                :precision="2"
+                :step="1"
+                :controls="false"
+                size="small"
+                style="width: 90px"
+                :placeholder="String((c.dailyBudget ?? 0).toFixed(2))"
+              />
+              <el-button
+                size="small"
+                type="primary"
+                link
+                :disabled="!isValidBudget(c.budget)"
+                @click="onUpdateBudget(c)"
+              >改</el-button>
+            </div>
+          </template>
         </el-table-column>
         <el-table-column label="服务状态" width="120">
           <template #default="{ row }">

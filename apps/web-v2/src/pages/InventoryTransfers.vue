@@ -32,9 +32,18 @@ onMounted(load);
 
 async function approve(t) {
   try {
-    await ElMessageBox.confirm(`确认批准 ${t.sku} ${t.transferQty} 件 ${t.fromWarehouse || t.from}→${t.toWarehouse || t.to}？`, '调拨', { type: 'info' });
-    await transfers.approve(t.id);
-  } catch {}
+    await ElMessageBox.confirm(
+      `确认批准 ${t.sku} ${t.transferQty} 件 ${t.fromWarehouse || t.from}→${t.toWarehouse || t.to}？批准后将真实位移库存快照（来源仓减、目标仓加），进入"在途"。`,
+      '调拨', { type: 'warning' });
+  } catch { return; }
+  try { await transfers.approve(t.id); } catch {}
+}
+
+async function receive(t) {
+  try {
+    await ElMessageBox.confirm(`确认 ${t.sku} 调拨已收货入仓？`, '收货', { type: 'info' });
+  } catch { return; }
+  try { await transfers.receive(t.id); } catch {}
 }
 
 async function cancel(t) {
@@ -102,14 +111,16 @@ const mobileCols = [
             <el-tag size="small" :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="170">
+        <el-table-column label="操作" width="230">
           <template #default="{ row }">
             <el-button size="small" type="primary" plain :disabled="row.status !== 'recommended'" @click="approve(row)">批准</el-button>
+            <el-button size="small" type="success" plain :disabled="row.status !== 'in_transit'" @click="receive(row)">收货</el-button>
             <el-button size="small" plain :disabled="row.status === 'cancelled' || row.status === 'received'" @click="cancel(row)">取消</el-button>
           </template>
         </el-table-column>
         <template #mobile-actions="{ row }">
           <el-button size="small" type="primary" :disabled="row.status !== 'recommended'" @click.stop="approve(row)">批准</el-button>
+          <el-button size="small" type="success" :disabled="row.status !== 'in_transit'" @click.stop="receive(row)">收货</el-button>
           <el-button size="small" :disabled="row.status === 'cancelled' || row.status === 'received'" @click.stop="cancel(row)">取消</el-button>
         </template>
       </ResponsiveTable>

@@ -5,13 +5,13 @@ import PageHeader from '../components/PageHeader.vue';
 import MobileFallback from '../components/MobileFallback.vue';
 import { useViewport } from '../composables/useViewport';
 import { mockAdTree, defaultDaypartingMatrix } from '../utils/mock-data-ads';
-import { useAudit } from '../composables/useAudit';
+import { actionQueueApi } from '../api/ads-timeline';
 
 const { isMobile } = useViewport();
-const { submit } = useAudit();
 
 const selectedCampaign = ref('cmp-mature-brand');
 const matrix = ref(defaultDaypartingMatrix());
+const saving = ref(false);
 
 const days = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 const hours = Array.from({ length: 24 }, (_, i) => i);
@@ -25,20 +25,47 @@ function cellColor(v) {
 }
 
 function applyAiRecommend() {
+  // M3-P0-05: removed the unsupported "30-day CVR" data claim — this 是 demo 推荐矩阵，
+  // 无真实历史数据支撑，不得宣称.
   matrix.value = defaultDaypartingMatrix();
-  ElMessage.success('✓ 已应用 AI 推荐（基于过去 30 天分时段 CVR）');
+  ElMessage.success('✓ 已应用推荐矩阵（演示数据，仅本地预览）');
 }
 function reset() {
   matrix.value = Array(7).fill(null).map(() => Array(24).fill(0));
 }
+// M3-P0-05/M3-P0-08: dayparting save must NOT use the audit-submit bypass. It goes
+// through actionQueueApi.enqueue (needs_review + dryRun=1 in ad_action_queue). Nothing
+// is "saved" locally as success unless enqueue succeeds.
 async function save() {
-  await submit({
-    sourceModule: 'M3',
-    actionType: 'ENABLE_DAYPARTING',
-    target: { type: 'campaign', id: selectedCampaign.value },
-    payload: { matrix: matrix.value },
-    description: `分时段策略保存到 ${selectedCampaign.value}`,
-  });
+  if (saving.value) return;
+  saving.value = true;
+  try {
+    const item = await actionQueueApi.enqueue({
+      sourceStrategyName: 'Dayparting (manual)',
+      entity: { kind: 'campaign', id: selectedCampaign.value, name: selectedCampaign.value },
+      typedAction: {
+        actionPrimitive: 'SET_DAYPARTING_MATRIX',
+        sourceSurface: 'dayparting',
+        entityKind: 'campaign',
+        resourceId: selectedCampaign.value,
+        recommendedValue: { matrix: matrix.value },
+        dryRun: true,
+        auditRequired: true,
+      },
+      guardrail: { status: 'needs_review', reasons: ['manual_dayparting_write_requires_action_queue'] },
+      rollbackPlan: { method: 'manual_revert_required', needsManualReview: true },
+      note: `分时段策略保存到 ${selectedCampaign.value}`,
+    });
+    if (!item) { ElMessage.warning('入队失败，分时段策略未提交'); return; }
+    // A duplicate (queued:false) is already surfaced as info by the api layer; do not
+    // claim a fresh enqueue.
+    if (item.queued === false) return;
+    ElMessage.success('已加入执行篮（待审核 + dry-run，未触达 Amazon）');
+  } catch (e) {
+    ElMessage.error(`入队失败：${e?.message || e}`);
+  } finally {
+    saving.value = false;
+  }
 }
 
 function updateCell(d, h, v) {

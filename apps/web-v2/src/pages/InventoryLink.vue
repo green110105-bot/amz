@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import PageHeader from '../components/PageHeader.vue';
 import EmptyState from '../components/EmptyState.vue';
 import ResponsiveTable from '../components/ResponsiveTable.vue';
@@ -89,7 +89,23 @@ async function save() {
   } catch {}
 }
 
+// M2-P2-03: enabled 开关立即持久化（非仅乐观）
+async function toggleEnabled(val) {
+  draft.value.enabled = val;
+  try {
+    await il.saveConfig({ enabled: val });
+  } catch {
+    draft.value.enabled = !val; // 回滚
+  }
+}
+
 async function executeEvent(ev) {
+  // M2-P0-06: 诚实文案 — 入队待 M3 审核，不直接停广告
+  try {
+    await ElMessageBox.confirm(
+      `确认对 ${ev.sku} 执行「${actionLabel(ev.action)}」？该操作会将广告动作入队（dryRun，待 M3 人工审核），不直接写入广告平台。`,
+      '库存联动', { type: 'warning' });
+  } catch { return; }
   try {
     await il.executeEvent(ev.id);
     await load();
@@ -97,7 +113,7 @@ async function executeEvent(ev) {
 }
 
 function statusType(s) {
-  return { auto_executed: 'success', monitoring: 'info', pending: 'warning', cancelled: 'info' }[s] || '';
+  return { queued_pending_review: 'warning', auto_executed: 'success', monitoring: 'info', pending: 'warning', cancelled: 'info' }[s] || '';
 }
 
 function actionLabel(a) {
@@ -111,7 +127,7 @@ const events = computed(() => il.events.value || []);
   <div>
     <PageHeader title="库存联动（断货保护）" subtitle="库存即将断货时自动降低/暂停广告，避免浪费">
       <template #extra>
-        <el-switch v-model="draft.enabled" active-text="联动启用" inactive-text="已禁用" />
+        <el-switch :model-value="draft.enabled" active-text="联动启用" inactive-text="已禁用" @change="toggleEnabled" />
       </template>
     </PageHeader>
 
@@ -143,7 +159,7 @@ const events = computed(() => il.events.value || []);
             <el-radio-group v-model="statusFilter" size="small">
               <el-radio-button value="all">全部</el-radio-button>
               <el-radio-button value="pending">待处理</el-radio-button>
-              <el-radio-button value="auto_executed">已执行</el-radio-button>
+              <el-radio-button value="queued_pending_review">待审核</el-radio-button>
               <el-radio-button value="monitoring">监控中</el-radio-button>
             </el-radio-group>
           </div>
@@ -168,16 +184,17 @@ const events = computed(() => il.events.value || []);
         </el-table-column>
         <el-table-column label="状态" width="120">
           <template #default="{ row }">
-            <el-tag :type="statusType(row.status)" size="small">{{ ({ auto_executed: '已自动执行', monitoring: '监控中', pending: '待处理', cancelled: '已取消' })[row.status] || row.status }}</el-tag>
+            <el-tag :type="statusType(row.status)" size="small">{{ ({ queued_pending_review: '已入队待审', auto_executed: '已入队待审', monitoring: '监控中', pending: '待处理', cancelled: '已取消' })[row.status] || row.status }}</el-tag>
+            <div v-if="row.status === 'queued_pending_review'" class="text-muted" style="font-size: 11px">动作已入 M3 审核队列（dryRun），尚未真实写广告平台</div>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="100">
+        <el-table-column label="操作" width="120">
           <template #default="{ row }">
-            <el-button v-if="row.status === 'pending'" size="small" type="primary" link @click="executeEvent(row)">立即执行</el-button>
+            <el-button v-if="row.status === 'pending'" size="small" type="primary" link @click="executeEvent(row)">入队待审</el-button>
           </template>
         </el-table-column>
         <template #mobile-actions="{ row }">
-          <el-button v-if="row.status === 'pending'" size="small" type="primary" @click="executeEvent(row)">立即执行</el-button>
+          <el-button v-if="row.status === 'pending'" size="small" type="primary" @click="executeEvent(row)">入队待审</el-button>
         </template>
       </ResponsiveTable>
       <EmptyState v-if="!il.loading.value && !events.length" title="无受影响 SKU" description="当前所有 SKU 库存充足" />

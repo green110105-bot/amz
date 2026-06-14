@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import PageHeader from '../components/PageHeader.vue';
 import KpiCard from '../components/KpiCard.vue';
 import MobileFallback from '../components/MobileFallback.vue';
@@ -22,6 +22,7 @@ const skus = ref([]);
 const sim = ref({ priceDelta: 0, acosDelta: 0, volumeDelta: 0, returnDelta: 0 });
 const baseline = ref({ price: 0, acos: 0.22, monthlyVolume: 0, returnRate: 0.05 });
 const simulated = ref(null);
+const previewResult = ref(null);
 const previewing = ref(false);
 const saveDialog = ref(false);
 const saveName = ref('');
@@ -49,11 +50,15 @@ async function loadSkus() {
 async function syncBaseline() {
   const found = skus.value.find((s) => s.sku === sku.value);
   if (found) {
+    // M2-P1-01: 传真实 unitCost（cogs/unitsSold），避免后端落回 price*0.45
+    const units = Number(found.unitsSold) || 0;
+    const unitCost = units > 0 && found.cogs != null ? Number(found.cogs) / units : undefined;
     baseline.value = {
-      price: Number(found.price) || 0,
+      price: Number(found.price) || (found.revenue && units ? Number(found.revenue) / units : 0) || 0,
       acos: Number(found.acos) || 0.22,
-      monthlyVolume: Number(found.monthlyVolume) || 320,
+      monthlyVolume: Number(found.monthlyVolume) || units || 320,
       returnRate: Number(found.returnRate) || 0.05,
+      unitCost,
     };
   }
 }
@@ -68,7 +73,7 @@ async function doPreview() {
       baseline: baseline.value,
       variables: sim.value,
     });
-    if (r) simulated.value = r.simulated || r;
+    if (r) { previewResult.value = r; simulated.value = r.simulated || r; }
   } finally {
     previewing.value = false;
   }
@@ -98,11 +103,16 @@ onMounted(async () => {
   scenarios.fetch({ sku: sku.value });
 });
 
+// M2-P1-01: 消费后端权威 delta，不再前端用写死 20% 毛利自算
 const delta = computed(() => {
-  const sim = simulated.value || {};
-  const baseProfit = baseline.value.monthlyVolume * baseline.value.price * 0.20; // 容错估算
-  const target = sim.monthlyProfit || (sim.unitProfit && sim.volume ? sim.unitProfit * sim.volume : 0);
-  return (target || 0) - (sim.baselineMonthlyProfit || baseProfit);
+  const r = previewResult.value;
+  return r && typeof r.delta === 'number' ? r.delta : 0;
+});
+// 净利率<0 或后端 feasible=false → 禁用"采用"
+const feasible = computed(() => {
+  const r = previewResult.value;
+  if (r && typeof r.feasible === 'boolean') return r.feasible;
+  return (simulated.value?.margin ?? 0) >= 0 && (simulated.value?.unitProfit ?? 0) >= 0;
 });
 
 function preset(name) {
@@ -113,6 +123,14 @@ function preset(name) {
 
 async function save() {
   if (!saveName.value) { ElMessage.warning('请输入快照名称'); return; }
+  // M2-P0-04/P1-01: 净利率<0 时升级危险二次确认 + 诚实文案
+  if (!feasible.value) {
+    try {
+      await ElMessageBox.confirm(
+        '当前方案净利率/单件利润为负。保存仅记录情景，不会真实改价；如需调价仅生成 M1 草稿，需到 M1 上架才真实生效。确认继续？',
+        '风险确认', { type: 'warning', confirmButtonText: '仍然保存', cancelButtonText: '取消' });
+    } catch { return; }
+  }
   try {
     await scenarios.save({
       name: saveName.value,
@@ -130,7 +148,7 @@ async function save() {
 
 <template>
   <div>
-    <PageHeader title="情景模拟器" subtitle="多变量滑块 · 后端实时计算利润影响 · 决策前先看 'if'">
+    <PageHeader title="情景模拟器" subtitle="多变量滑块 · 估算利润影响（未含 FBA/头程/资金成本，与利润页可能不符）· 决策前先看 'if'">
       <template #extra>
         <el-select v-model="sku" filterable size="default" style="width: 240px" placeholder="选择 SKU">
           <el-option v-for="s in skus" :key="s.sku" :label="`${s.sku} - ${s.title || ''}`" :value="s.sku" />
@@ -211,6 +229,10 @@ async function save() {
               <span :class="(simulated?.margin || 0) < 0 ? 'text-danger' : (simulated?.margin || 0) < 0.10 ? 'text-warning' : 'text-success'">{{ formatPercent(simulated?.margin || 0) }}</span>
             </el-descriptions-item>
           </el-descriptions>
+          <el-alert v-if="!feasible" type="error" :closable="false" show-icon class="mt-12"
+            title="方案不可行（净利率/单件利润为负）" description="此方案会亏本，不建议采用；任何调价仅生成 M1 草稿，需到 M1 上架才真实生效。" />
+          <el-alert type="info" :closable="false" class="mt-12"
+            title="估算口径" description="未含 FBA/头程/资金成本逐项，数值与利润页可能不符。" />
         </el-card>
 
         <el-card shadow="never" class="mt-16" v-if="scenarios.list.value.length">

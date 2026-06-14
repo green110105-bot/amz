@@ -1,4 +1,13 @@
 // lx.js — 领星等价 (lx) 体系 API 客户端
+//
+// M3-P2-19 — @deprecated for direct entity mutations:
+//   The direct-write methods below (toggle / setBudget / setBid / setBidStrategy /
+//   update / remove on portfolios/campaigns/adGroups/ads/targetings/...) MUST NOT be
+//   called directly from business UI to mutate Amazon/LX ad entities. All entity
+//   mutations have to go through the gated Action Queue boundary
+//   (`actionQueueApi.enqueue` in ./ads-timeline.js → ad_action_queue, dryRun=1,
+//   needs_review, auditRequired). These read APIs stay; the write APIs are retained only
+//   for admin/internal/recovery flows and are considered deprecated for UI use.
 import { http } from './client';
 
 const BASE = '/api/v1/store/ads/lx';

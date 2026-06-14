@@ -32,7 +32,29 @@ const filtered = computed(() => signalFilter.value === 'all' ? rows.value : rows
 const selected = ref([]);
 function onSelect(rows) { selected.value = rows; }
 
+// M3-P2-21: front-end CSV export of currently-loaded search terms.
+function exportCsv() {
+  const cols = ['userQuery', 'matchedKw', 'signal', 'spend', 'sales', 'acos'];
+  const csv = [cols.join(','), ...filtered.value.map((r) => cols.map((k) => JSON.stringify(r[k] ?? '')).join(','))].join('\n');
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url; a.download = 'search-terms.csv'; a.click();
+  URL.revokeObjectURL(url);
+}
+
+// M3-P3-24: promote needs a valid cpc to derive a non-zero suggested bid. A missing /
+// zero / NaN cpc would enqueue an abnormal (zero) bid, so the promote control is disabled
+// for such rows.
+function hasValidCpc(row) {
+  const v = Number(row?.cpc);
+  return Number.isFinite(v) && v > 0;
+}
+
 async function harvest(row) {
+  if (!hasValidCpc(row)) {
+    ElMessage.warning('该搜索词缺少有效 CPC,无法生成出价,暂不可升手动');
+    return;
+  }
   await submit({
     sourceModule: 'M3', actionType: 'PROMOTE_TO_MANUAL',
     target: { type: 'search_term', term: row.userQuery },
@@ -43,6 +65,15 @@ async function harvest(row) {
 }
 
 async function negateTerm(row) {
+  // M3-P3-24: a single negate (GOVERN_KEYWORD) gets a light confirmation so a mis-click
+  // does not silently bury a term.
+  try {
+    await ElMessageBox.confirm(
+      `确定将搜索词 "${row.userQuery}" 加为否定(exact)？`,
+      '加否定',
+      { confirmButtonText: '加否定', cancelButtonText: '取消', type: 'warning' },
+    );
+  } catch { return; }
   await submit({
     sourceModule: 'M3', actionType: 'ADD_NEGATIVE_KEYWORD',
     target: { type: 'search_term', term: row.userQuery },
@@ -50,6 +81,7 @@ async function negateTerm(row) {
     description: `加 negative-exact "${row.userQuery}"`,
   });
   await negate(row, { matchType: 'exact', scope: 'AdGroup' });
+  ElMessage({ message: `已加否定 "${row.userQuery}"`, type: 'success' });
 }
 
 async function bulkHarvest() {
@@ -84,7 +116,7 @@ async function bulkNegate() {
       <el-radio-button value="normal">常规</el-radio-button>
     </el-radio-group>
     <span class="spacer" />
-    <el-button :icon="'Download'" size="small" link />
+    <el-button :icon="'Download'" size="small" @click="exportCsv" title="导出当前表格为 CSV">导出</el-button>
   </div>
 
   <transition name="bulk">
@@ -148,7 +180,7 @@ async function bulkNegate() {
       </el-table-column>
       <el-table-column label="操作" width="200" fixed="right">
         <template #default="{ row }">
-          <el-button v-if="row.signal === 'harvest'" type="primary" link size="small" @click="harvest(row)">⭐ 升手动</el-button>
+          <el-button v-if="row.signal === 'harvest'" type="primary" link size="small" :disabled="!hasValidCpc(row)" :title="hasValidCpc(row) ? '' : '缺少有效 CPC,无法生成出价'" @click="harvest(row)">⭐ 升手动</el-button>
           <el-button v-if="row.signal === 'waste'" type="danger" link size="small" @click="negateTerm(row)">💸 加否定</el-button>
           <el-button link size="small">详情</el-button>
         </template>

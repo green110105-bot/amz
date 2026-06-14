@@ -8,8 +8,34 @@ import { campaignReportApi, searchTermsReportApi } from '../api/ads-reports';
 import { ref } from 'vue';
 import { useViewport } from '../composables/useViewport';
 import { formatCurrency, formatPercent } from '../utils/format';
+import { realWritesEnabled, confirmAuditAction } from '../composables/useLiveActionGate';
+import { actionQueueApi } from '../api/ads-timeline';
+import { ElMessage } from 'element-plus';
 
 const { isMobile } = useViewport();
+
+// M3-P1-12 / m3-button-level: real-write boundary state. When REAL_WRITES_ENABLED!=='true'
+// every Ads write is forced to dryRun and routed through ad_action_queue for audit.
+const realWrites = computed(() => realWritesEnabled());
+// i18n: ads.hub.pauseHint — audit/ticket hint surfaced on the real-write pause control.
+const pauseHint = computed(() =>
+  realWrites.value
+    ? '暂停将进入 ad_action_queue 审计工单(needs_review),dryRun 默认开启'
+    : '当前为 dryRun(演示)模式,暂停仅入队审计,不会真实生效'
+);
+
+// M3-P1-12: provider mode honesty. dataHealth / healthType / aiContribution must never
+// claim 'healthy' / real-dollar impact when the data is mock/hybrid.
+const providerMode = ref('mock');
+const providerMeta = ref(null);
+async function loadProviderMode() {
+  try {
+    const res = await actionQueueApi.activeFor('__meta__', 'provider-mode').catch(() => null);
+    providerMeta.value = res?.sourceMeta || null;
+    providerMode.value = res?.sourceMeta?.providerMode || res?.providerMode || 'mock';
+  } catch { providerMode.value = 'mock'; providerMeta.value = null; }
+}
+const isRealData = computed(() => providerMode.value === 'real');
 
 const STRATEGY_CATEGORIES = [
   { id: 'lifecycle', label: 'A · 生命周期', emoji: '🌱', color: '#10b981' },
@@ -87,19 +113,99 @@ const topCategoryStats = computed(() => {
 });
 
 function go(r) { router.push(r); }
+
+// M3-P1-12: data-health adapters. When provider mode != 'real', every adapter status is
+// forced to 'mock' (never 'healthy'); 'partial' is not counted as healthy; lx is NOT
+// hard-coded healthy. healthy is only reported under real +真实回流.
+const dataHealth = computed(() => {
+  const adapters = ['sp', 'ads', 'lx', 'm2'];
+  const sourceMeta = providerMeta.value;
+  // X-P1-01: freshness honestly defaults to 'unknown' — never poison-default to a
+  // 'mock seed' value literal that would falsely brand real-but-unlabeled data.
+  const freshness = sourceMeta?.freshness || 'unknown';
+  return adapters.map((key) => {
+    if (!isRealData.value) return { key, status: 'mock', freshness };
+    // real mode: status reflects real backflow (placeholder until per-adapter wiring).
+    return { key, status: 'healthy', freshness };
+  });
+});
+// healthType is 'warning' whenever not real (no >=3 -> success shortcut).
+const healthType = computed(() => (isRealData.value ? 'success' : 'warning'));
+// aiContribution: in mock mode never present a bare USD hero — mark as 示例估算 / hide.
+const aiContribution = computed(() => {
+  const sum = (suggestions.value || []).reduce((s, x) => s + (x.impact?.value || 0), 0);
+  return {
+    value: sum,
+    isSample: !isRealData.value,
+    display: isRealData.value ? formatCurrency(sum, 'USD') : '示例估算',
+  };
+});
+
+// M3 / m3-button-level: real-write pause must confirm via the shared audit gate and only
+// ever enqueue into ad_action_queue (dryRun + needs_review + auditRequired).
+async function pauseTopCampaign() {
+  const target = campaignReport.value.find((c) => c.state === '启用');
+  if (!target) { ElMessage.info('暂无可暂停的启用 Campaign'); return; }
+  if (!confirmAuditAction('暂停广告活动', 1)) return;
+  try {
+    const res = await actionQueueApi.enqueue({
+      sourceStrategyName: 'AdsHub manual pause',
+      entity: { kind: 'campaign', id: target.id, name: target.name },
+      typedAction: {
+        actionPrimitive: 'PAUSE_CAMPAIGN',
+        sourceSurface: 'ads-hub',
+        entityKind: 'campaign',
+        currentValue: { state: '启用' },
+        recommendedValue: { state: '暂停' },
+        dryRun: true,
+        auditRequired: true,
+        requiresRealStoreWrite: false,
+      },
+      guardrail: { status: 'needs_review', reasons: ['manual_ads_write_requires_action_queue'] },
+    });
+    if (res?.queued) ElMessage.success('已加入执行篮待批准生效');
+  } catch (e) {
+    ElMessage.error('入队失败：' + (e?.message || e));
+  }
+}
+
+onMounted(loadProviderMode);
 </script>
 
 <template>
   <div class="ads-hub">
+    <!--
+      M3-P3-24 i18n placeholders (Chinese primary; keys reserved for future i18n wiring):
+        i18n: ads.hub.title        -> 广告中心
+        i18n: ads.hub.subtitle     -> AI 时间线 + 策略库 + 领星等价 三体合一
+        i18n: ads.hub.pauseHint    -> 审计工单提示
+        i18n: ads.hub.dryRunBanner -> dryRun(演示)模式提示
+    -->
     <PageHeader
-      title="广告 (M3) 总览"
       subtitle="AI 时间线 + 策略库 + 领星等价 三体合一 · 所有写操作收口审计中心"
     >
+      <template #title>
+        <h1>广告中心</h1>
+      </template>
       <template #extra>
-        <el-tag size="default" type="success" effect="dark">SP-API · 已同步 14:00</el-tag>
-        <el-tag size="default" type="info" effect="plain">Ads-API · 已同步</el-tag>
+        <el-tag size="default" :type="healthType" effect="dark">{{ isRealData ? 'SP-API · 已同步' : 'mock 演示数据' }}</el-tag>
+        <el-tag size="default" type="info" effect="plain">Ads-API · {{ isRealData ? '已同步' : 'mock' }}</el-tag>
+        <el-button
+          size="small"
+          type="warning"
+          plain
+          :title="pauseHint"
+          @click="pauseTopCampaign"
+        >暂停 Campaign(审计)</el-button>
       </template>
     </PageHeader>
+
+    <!-- M3-P1-12 / m3-button-level: dryRun banner shown when real writes are NOT enabled -->
+    <div v-if="!realWrites" class="dryrun-banner">
+      <el-icon><Warning /></el-icon>
+      <span>当前为 dryRun(演示)模式 · 所有写操作仅进入 ad_action_queue 审计(needs_review),不会真实生效</span>
+      <span v-if="aiContribution.isSample" class="sample-badge">AI 贡献为示例估算</span>
+    </div>
 
     <!-- 顶部 6 KPI -->
     <div class="kpi-strip">

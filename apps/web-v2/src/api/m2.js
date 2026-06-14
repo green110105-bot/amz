@@ -69,6 +69,9 @@ export const reorderApi = {
 export const slowMovingApi = {
   list: (params = {}) =>
     http.get(`${BASE}/inventory/slow-moving`, { params }).then(raw),
+  // M2-P0-05: 预览价与执行价同源
+  preview: (id, body = {}) =>
+    http.post(`${BASE}/inventory/slow-moving/${id}/preview`, body).then(raw),
   execute: (id, body) =>
     http.post(`${BASE}/inventory/slow-moving/${id}/execute`, body).then(raw),
 };
@@ -83,6 +86,9 @@ export const transfersApi = {
     http.post(`${BASE}/inventory/transfers/${id}/approve`).then(raw),
   cancel: (id) =>
     http.post(`${BASE}/inventory/transfers/${id}/cancel`).then(raw),
+  // M2-P1-05: 在途 -> 已收货
+  receive: (id) =>
+    http.post(`${BASE}/inventory/transfers/${id}/receive`).then(raw),
 };
 
 // ============================================================================
@@ -112,13 +118,15 @@ export const suppliersApi = {
 };
 
 // ============================================================================
-// 9. repricingApi — 重定价 (3 endpoints + detail helper)
+// 9. repricingApi — 重定价 (4 endpoints)
+// 注：无 detail(GET /repricing/:id) —— 后端未注册该路由，list 已内联 scenarios。
 // ============================================================================
 export const repricingApi = {
   list: (params = {}) => http.get(`${BASE}/repricing`, { params }).then(raw),
-  detail: (id) => http.get(`${BASE}/repricing/${id}`).then(raw),
   trigger: (body) => http.post(`${BASE}/repricing/trigger`, body).then(raw),
   apply: (id, body) => http.post(`${BASE}/repricing/${id}/apply`, body).then(raw),
+  // M2-P2-06: 拒绝建议
+  reject: (id, body = {}) => http.post(`${BASE}/repricing/${id}/reject`, body).then(raw),
 };
 
 // ============================================================================
@@ -171,8 +179,13 @@ export const alertsApi = {
   },
   events: {
     list: (params = {}) => http.get(`${BASE}/alerts/events`, { params }).then(raw),
-    ack: (id) => http.post(`${BASE}/alerts/events/${id}/ack`).then(raw),
+    // M2-P3-01: 单条 ack 支持可选 ackBy
+    ack: (id, body = {}) => http.post(`${BASE}/alerts/events/${id}/ack`, body).then(raw),
+    // M2-P3-01: 批量确认
+    ackBatch: (ids, ackBy) => http.post(`${BASE}/alerts/events/ack-batch`, { ids, ackBy }).then(raw),
   },
+  // M2-P0-07: 立即测试规则 / 扫描
+  scan: (body = {}) => http.post(`${BASE}/alerts/scan`, body).then(raw),
 };
 
 // ============================================================================

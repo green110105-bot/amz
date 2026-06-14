@@ -100,9 +100,18 @@ async function onRevert(row) {
     );
   } catch { return; }
   try {
-    await storeApi.revertAuditLog(row.id, '用户从 drawer 撤销');
-    ElMessage.success(`已撤销操作 ${row.id}`);
-    row.reverted = true;
+    // M4-P0-05: the backend honestly returns dispatchedInverse — whether the inverse
+    // action was actually dispatched/applied. We MUST NOT mark the row reverted unless
+    // the inverse truly happened. dispatchedInverse===false means the revert was recorded
+    // but the real reversal did NOT take effect (e.g. real-write change-limit guard), so
+    // we keep reverted=false, warn the user, and reload to reflect the true state.
+    const res = await storeApi.revertAuditLog(row.id, '用户从 drawer 撤销');
+    if (res?.dispatchedInverse === false) {
+      ElMessage.warning('撤销未生效(动作未实际反转)');
+    } else {
+      ElMessage.success(`已撤销操作 ${row.id}`);
+      row.reverted = true;
+    }
     await load();
   } catch (e) {
     ElMessage.error(`撤销失败：${e.message || e}`);

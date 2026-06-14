@@ -1,6 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { computed, onMounted } from 'vue';
 import PageHeader from '../components/PageHeader.vue';
 import EmptyState from '../components/EmptyState.vue';
 import ResponsiveTable from '../components/ResponsiveTable.vue';
@@ -16,19 +15,12 @@ const mobileCols = [
   { prop: 'status', label: '评估', formatter: (v) => v === 'high_ltv' ? '高 LTV / 可激进' : '低 LTV / 严控' },
 ];
 
-const route = useRoute();
-const router = useRouter();
 const ltv = useLTV();
 
-const range = ref(route.query.range || '90d');
-
+// M2-P2-05: LTV 为累计指标，不接 range（移除无效 range 切换控件）
 async function load() {
-  await ltv.fetch({ range: range.value });
+  await ltv.fetch();
 }
-watch(range, () => {
-  router.replace({ query: { ...route.query, range: range.value } });
-  load();
-});
 
 onMounted(load);
 
@@ -37,15 +29,7 @@ const list = computed(() => ltv.list.value || []);
 
 <template>
   <div>
-    <PageHeader title="LTV 与复购视角" subtitle="客户生命周期价值估算 · 决定广告 CAC 容忍度">
-      <template #extra>
-        <el-radio-group v-model="range" size="small">
-          <el-radio-button value="30d">30 天</el-radio-button>
-          <el-radio-button value="90d">90 天</el-radio-button>
-          <el-radio-button value="180d">180 天</el-radio-button>
-        </el-radio-group>
-      </template>
-    </PageHeader>
+    <PageHeader title="LTV 与复购视角" subtitle="客户生命周期价值估算（累计指标，不随周期变化）· 决定广告 CAC 容忍度" />
 
     <el-alert type="info" show-icon :closable="false">
       <template #title>LTV 来源说明</template>

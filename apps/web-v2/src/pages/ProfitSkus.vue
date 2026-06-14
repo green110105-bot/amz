@@ -165,7 +165,7 @@ async function openDetail(row) {
         <h4 class="detail-title">关联决策</h4>
         <el-button type="primary" plain :icon="'TrendCharts'" @click="router.push('/profit/leaks')">查看相关漏点</el-button>
         <el-button plain :icon="'Box'" @click="router.push('/inventory/reorder')">查看补货建议</el-button>
-        <el-button plain :icon="'BellFilled'" @click="router.push('/ads/actions')">查看广告建议</el-button>
+        <el-button plain :icon="'BellFilled'" @click="router.push('/workbench?filter=ad_suggestion')">查看广告建议</el-button>
       </div>
     </ResponsiveDrawer>
   </div>

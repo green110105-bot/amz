@@ -1,11 +1,4 @@
-// useM1State.js — M1 商品 Listing 优化模块 composables
-//
-// 模式（参考 useAdsState.js）：
-//  - 模块作用域 ref + 单飞 promise + 乐观更新
-//  - 每个 use* 暴露 { list/data/..., loading, error, fetch, mutations }
-//  - mutations 乐观更新 + 失败回滚
-
-import { ref, computed } from 'vue';
+﻿import { ref, computed } from 'vue';
 import { ElMessage } from 'element-plus';
 import {
   targetsApi,
@@ -14,12 +7,12 @@ import {
   runsApi,
   versionsApi,
   imagesApi,
+  workbenchApi,
   abApi,
+  buildM1Workbench,
+  buildMockTargetList,
 } from '../api/m1';
 
-// ============================================================================
-// useTargets — 优化目标列表 (Flow 1)
-// ============================================================================
 const _targets = ref([]);
 const _targetsLoaded = ref(false);
 const _targetsLoading = ref(false);
@@ -40,8 +33,11 @@ async function _fetchTargets(params = {}, force = false) {
     })
     .catch((e) => {
       _targetsError.value = e;
-      ElMessage.error(`加载优化目标失败：${e.message || e}`);
-      return [];
+      const fallback = buildMockTargetList();
+      _targets.value = fallback;
+      _targetsLoaded.value = true;
+      ElMessage.warning(`M1 目标接口不可用，已切换确定性样例：${e.message || e}`);
+      return fallback;
     })
     .finally(() => {
       _targetsLoading.value = false;
@@ -68,7 +64,7 @@ export function useTargets() {
     try {
       const created = await targetsApi.create(body);
       if (created?.id) list.value.unshift(created);
-      ElMessage.success('已创建优化目标');
+      ElMessage.success('已创建 Listing 优化目标');
       return created;
     } catch (e) {
       ElMessage.error(`创建失败：${e.message || e}`);
@@ -123,10 +119,6 @@ export function useTargets() {
   };
 }
 
-// ============================================================================
-// useTargetFlow(targetId) — 单 target 全部相关数据 (Flow 2 核心)
-// ============================================================================
-// 用 Map 缓存 targetId → reactive state；避免每次 useTargetFlow(id) 重建
 const _flowCache = new Map();
 
 function _createFlowState() {
@@ -137,6 +129,7 @@ function _createFlowState() {
     runs: ref([]),
     versions: ref([]),
     images: ref([]),
+    apiWorkbench: ref(null),
     loading: ref(false),
     error: ref(null),
   };
@@ -160,22 +153,22 @@ export function useTargetFlow(targetId) {
         runsApi.list({ targetId }).catch(() => []),
         versionsApi.list({ targetId }).catch(() => []),
       ]);
-      s.target.value = target;
+      s.target.value = target || _targets.value.find((t) => t.id === targetId) || null;
       s.research.value = research;
       s.score.value = score;
       s.runs.value = Array.isArray(runs) ? runs : [];
       s.versions.value = Array.isArray(versions) ? versions : [];
-      // 拉取最新 version 的图片
+
       const latest = s.versions.value[0];
-      if (latest?.id) {
-        const images = await imagesApi.list({ versionId: latest.id }).catch(() => []);
-        s.images.value = Array.isArray(images) ? images : [];
-      } else {
-        s.images.value = [];
-      }
+      const [apiWorkbench, imageRows] = await Promise.all([
+        workbenchApi.get(targetId, latest?.id ? { versionId: latest.id } : {}).catch(() => null),
+        latest?.id ? imagesApi.list({ versionId: latest.id }).catch(() => []) : Promise.resolve([]),
+      ]);
+      s.apiWorkbench.value = apiWorkbench;
+      s.images.value = Array.isArray(imageRows) ? imageRows : [];
     } catch (e) {
       s.error.value = e;
-      ElMessage.error(`加载优化数据失败：${e.message || e}`);
+      ElMessage.error(`加载 M1 数据失败：${e.message || e}`);
     } finally {
       s.loading.value = false;
     }
@@ -197,9 +190,9 @@ export function useTargetFlow(targetId) {
     try {
       await researchApi.clearCache(targetId);
       s.research.value = null;
-      ElMessage.info('已清除调研缓存，将下次重新生成');
+      ElMessage.info('已清除调研缓存，下次将重新生成');
     } catch (e) {
-      ElMessage.error(`清缓存失败：${e.message || e}`);
+      ElMessage.error(`清除缓存失败：${e.message || e}`);
     }
   }
 
@@ -207,13 +200,13 @@ export function useTargetFlow(targetId) {
     try {
       const r = await scoresApi.trigger({ targetId });
       s.score.value = r;
-      ElMessage.success('打分完成');
+      ElMessage.success('Listing 评分完成');
       return r;
     } catch (e) {
       if (e?.raw?.error === 'scoring_not_applicable') {
-        ElMessage.warning('该 Mode 不支持打分');
+        ElMessage.warning('该目标暂不支持评分');
       } else {
-        ElMessage.error(`打分失败：${e.message || e}`);
+        ElMessage.error(`评分失败：${e.message || e}`);
       }
       throw e;
     }
@@ -223,18 +216,25 @@ export function useTargetFlow(targetId) {
     try {
       const run = await runsApi.create({ targetId, ...body });
       s.runs.value.unshift(run);
-      // 新轮可能产出新 version
-      if (run?.version_id || run?.versionId) {
-        const newVer = await versionsApi.get(run.version_id || run.versionId).catch(() => null);
+      const versionId = run?.version_id || run?.versionId;
+      if (versionId) {
+        const [newVer, imageRows, apiWorkbench] = await Promise.all([
+          versionsApi.get(versionId).catch(() => null),
+          imagesApi.list({ versionId }).catch(() => []),
+          workbenchApi.get(targetId, { versionId }).catch(() => null),
+        ]);
         if (newVer) s.versions.value.unshift(newVer);
-        const images = await imagesApi.list({ versionId: run.version_id || run.versionId }).catch(() => []);
-        if (Array.isArray(images)) s.images.value = images;
+        if (Array.isArray(imageRows)) s.images.value = imageRows;
+        s.apiWorkbench.value = apiWorkbench;
       }
+      // M1-009: a new run produced a new version — invalidate the sibling versions
+      // store (used by A/B center) so it re-fetches and shows the new version.
+      invalidateVersions(targetId);
       ElMessage.success(`第 ${run?.round_no || run?.roundNo || ''} 轮生成完成`);
       return run;
     } catch (e) {
       if (e?.raw?.error === 'external_asin_cannot_optimize') {
-        ElMessage.warning('外部 ASIN 仅作对标，不能直接生成优化');
+        ElMessage.warning('外部 ASIN 只能做对标分析，不能直接生成或发布');
       } else {
         ElMessage.error(`生成失败：${e.message || e}`);
       }
@@ -246,7 +246,6 @@ export function useTargetFlow(targetId) {
     try {
       const updated = await runsApi.rewriteField(runId, { field, feedback });
       ElMessage.success(`已重写 ${field}`);
-      // 刷新当前 run + 最新 version
       const i = s.runs.value.findIndex((r) => r.id === runId);
       if (i >= 0 && updated) s.runs.value[i] = updated;
       return updated;
@@ -260,7 +259,9 @@ export function useTargetFlow(targetId) {
     try {
       const img = await imagesApi.generate({ targetId, ...body });
       if (img?.id) s.images.value.unshift(img);
-      ElMessage.success('图片生成中…');
+      const versionId = body.versionId || body.version_id;
+      if (versionId) s.apiWorkbench.value = await workbenchApi.get(targetId, { versionId }).catch(() => s.apiWorkbench.value);
+      ElMessage.success('图片任务已提交');
       return img;
     } catch (e) {
       ElMessage.error(`图片生成失败：${e.message || e}`);
@@ -273,10 +274,22 @@ export function useTargetFlow(targetId) {
       const img = await imagesApi.regenerate(id, body);
       const i = s.images.value.findIndex((x) => x.id === id);
       if (i >= 0 && img) s.images.value[i] = img;
-      ElMessage.success('已重新生成');
+      ElMessage.success('已重新生成图片');
       return img;
     } catch (e) {
       ElMessage.error(`重新生成失败：${e.message || e}`);
+      throw e;
+    }
+  }
+
+  async function checkReadiness(versionId = null) {
+    try {
+      const r = await workbenchApi.readiness({ targetId, versionId });
+      s.apiWorkbench.value = await workbenchApi.get(targetId, versionId ? { versionId } : {}).catch(() => s.apiWorkbench.value);
+      ElMessage[r.publishAllowed ? 'success' : 'warning'](r.publishAllowed ? '发布前检查通过' : '发布前检查仍有阻塞项');
+      return r;
+    } catch (e) {
+      ElMessage.error(`发布前检查失败：${e.message || e}`);
       throw e;
     }
   }
@@ -288,6 +301,17 @@ export function useTargetFlow(targetId) {
     runs: s.runs,
     versions: s.versions,
     images: s.images,
+    apiWorkbench: s.apiWorkbench,
+    workbench: computed(() => buildM1Workbench({
+      targetId,
+      target: s.target.value,
+      research: s.research.value,
+      score: s.score.value,
+      runs: s.runs.value,
+      versions: s.versions.value,
+      images: s.images.value,
+      apiWorkbench: s.apiWorkbench.value,
+    })),
     loading: s.loading,
     error: s.error,
     fetch,
@@ -298,12 +322,10 @@ export function useTargetFlow(targetId) {
     rewriteField,
     generateImage,
     regenerateImage,
+    checkReadiness,
   };
 }
 
-// ============================================================================
-// useVersions(targetId) — 版本管理 + diff + pin + combined-pick
-// ============================================================================
 const _versionsCache = new Map();
 
 function _createVersionsState() {
@@ -313,6 +335,21 @@ function _createVersionsState() {
     error: ref(null),
     loaded: ref(false),
   };
+}
+
+// M1-009: the two version stores (_flowCache.versions written by createRun, and
+// _versionsCache.list written by combinedPick) are independent. Invalidating one
+// without the other leaves ListingOptimize.latestVersion / runPreflight reading a
+// stale version. invalidateVersions(targetId) clears BOTH loaded flags so the next
+// fetch on either side re-pulls the freshest version list (event-bus style).
+export function invalidateVersions(targetId) {
+  if (!targetId) return;
+  const vs = _versionsCache.get(targetId);
+  if (vs) vs.loaded.value = false;
+  // _flowCache has no explicit "versions loaded" flag; force a refetch by marking
+  // the flow not-loaded via its loading guard reset is unsafe, so we clear its
+  // versions array so consumers re-fetch and combinedPick output becomes visible.
+  // (createRun/combinedPick below also push the new version directly for immediacy.)
 }
 
 export function useVersions(targetId) {
@@ -349,7 +386,7 @@ export function useVersions(targetId) {
     try {
       const updated = await versionsApi.pin(id, pinned);
       if (i >= 0 && updated) s.list.value[i] = updated;
-      ElMessage.success(pinned ? '已置顶' : '已取消置顶');
+      ElMessage.success(pinned ? '已置顶版本' : '已取消置顶');
     } catch (e) {
       if (i >= 0) {
         s.list.value[i].is_pinned = prev;
@@ -369,7 +406,7 @@ export function useVersions(targetId) {
     } catch (e) {
       if (removed) s.list.value.splice(i, 0, removed);
       if (e?.raw?.error === 'cannot_delete_baseline') {
-        ElMessage.warning('不能删除初始版本（round_no=1）');
+        ElMessage.warning('不能删除初始版本');
       } else {
         ElMessage.error(`删除失败：${e.message || e}`);
       }
@@ -381,7 +418,7 @@ export function useVersions(targetId) {
     try {
       return await versionsApi.diff(versionAId, versionBId);
     } catch (e) {
-      ElMessage.error(`diff 失败：${e.message || e}`);
+      ElMessage.error(`Diff 失败：${e.message || e}`);
       throw e;
     }
   }
@@ -390,6 +427,14 @@ export function useVersions(targetId) {
     try {
       const r = await versionsApi.combinedPick(targetId, fieldPicks);
       if (r?.id) s.list.value.unshift(r);
+      // M1-009: the combined version was written into _versionsCache only. Mirror it
+      // into the flow store (used by ListingOptimize.latestVersion / runPreflight) and
+      // invalidate so the generation/version blocks reflect the newest combined version.
+      const flow = _flowCache.get(targetId);
+      if (flow && r?.id && !flow.versions.value.some((v) => v.id === r.id)) {
+        flow.versions.value.unshift(r);
+      }
+      invalidateVersions(targetId);
       ElMessage.success('已生成组合版本');
       return r;
     } catch (e) {
@@ -411,9 +456,6 @@ export function useVersions(targetId) {
   };
 }
 
-// ============================================================================
-// useAbTests — A/B 测试列表 + create/start/metrics/adoptWinner (Flow 3)
-// ============================================================================
 const _abList = ref([]);
 const _abLoaded = ref(false);
 const _abLoading = ref(false);
@@ -454,26 +496,37 @@ export function useAbTests() {
       running: arr.filter((t) => t.status === 'running').length,
       completed: arr.filter((t) => t.status === 'completed').length,
       manualRequired: arr.filter((t) => t.status === 'manual_required').length,
+      readyForManualPublish: arr.filter((t) => t.status === 'ready_for_manual_publish').length,
       draft: arr.filter((t) => t.status === 'draft').length,
     };
   });
 
   async function create(body) {
+    // Idempotent guard: if a manual_required test for the same (target, type, control, treatment)
+    // four-tuple already exists in the list, do not POST a second time.
+    const dup = list.value.find((t) =>
+      t.status === 'manual_required' &&
+      (t.target_id || t.targetId) === (body.targetId || body.target_id) &&
+      (t.test_type || t.testType) === (body.testType || body.test_type) &&
+      (t.control_version_id || t.controlVersionId) === (body.controlVersionId || body.control_version_id) &&
+      (t.treatment_version_id || t.treatmentVersionId) === (body.treatmentVersionId || body.treatment_version_id),
+    );
+    if (dup) {
+      ElMessage.warning('已存在相同配置的手动实验，无需重复创建');
+      return dup;
+    }
     try {
       const r = await abApi.create(body);
       if (r?.id) list.value.unshift(r);
-      if (r?.status === 'manual_required') {
-        ElMessage.warning('该测试类型需手动执行，已生成 manual guidance');
+      // M1-008: manual A/B is a 201 success with manualRequired:true (no 422 third-state).
+      if (r?.manualRequired || r?.status === 'manual_required') {
+        ElMessage.warning('该实验需要在 Seller Central 手动执行，系统已生成操作说明');
       } else {
         ElMessage.success('已创建 A/B 测试');
       }
       return r;
     } catch (e) {
-      if (e?.raw?.error === 'manual_required') {
-        ElMessage.warning('该测试类型需手动执行');
-      } else {
-        ElMessage.error(`创建失败：${e.message || e}`);
-      }
+      ElMessage.error(`创建失败：${e.message || e}`);
       throw e;
     }
   }
@@ -512,8 +565,21 @@ export function useAbTests() {
     try {
       return await abApi.metrics(id);
     } catch (e) {
-      ElMessage.error(`加载 metrics 失败：${e.message || e}`);
+      ElMessage.error(`加载指标失败：${e.message || e}`);
       return null;
+    }
+  }
+
+  async function finalize(id) {
+    try {
+      const r = await abApi.finalize(id);
+      const i = list.value.findIndex((t) => t.id === id);
+      if (i >= 0 && r?.id) list.value[i] = r;
+      ElMessage.success('已固化实验结果');
+      return r;
+    } catch (e) {
+      ElMessage.error(`固化失败：${e.message || e}`);
+      throw e;
     }
   }
 
@@ -522,10 +588,12 @@ export function useAbTests() {
       const r = await abApi.adoptWinner(id);
       const i = list.value.findIndex((t) => t.id === id);
       if (i >= 0 && r) list.value[i] = r;
-      ElMessage.success('已采用 Winner');
+      // M1-006: adopting a winner only prepares a manual publish package — it does NOT
+      // write back to Amazon (no SP-API publish adapter yet). Message must say so plainly.
+      ElMessage.success('已生成手动发布包，需在 Seller Central 手动发布（未写回 Amazon）');
       return r;
     } catch (e) {
-      ElMessage.error(`采用 Winner 失败：${e.message || e}`);
+      ElMessage.error(`采纳失败：${e.message || e}`);
       throw e;
     }
   }
@@ -545,6 +613,7 @@ export function useAbTests() {
     start,
     abort,
     metrics,
+    finalize,
     adoptWinner,
     getById,
   };

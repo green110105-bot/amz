@@ -58,6 +58,21 @@ function openDetail(r) {
   drawer.value = true;
 }
 
+// M4-P2-06: derive the violation type from AI analysis (or a prior operator choice)
+// instead of hardcoding 'unrelated_to_product'. Falls back to undefined so the appeal
+// center can let the operator choose, rather than silently mislabelling the case.
+function resolveViolationType(r) {
+  return (
+    r.violationType ||
+    r.violation_type ||
+    r.aiViolationType ||
+    r.ai_violation_type ||
+    r.suggestedViolationType ||
+    r.suggested_violation_type ||
+    undefined
+  );
+}
+
 async function draftAppeal(r) {
   // 草稿 localStorage 持久化
   const key = `m4_draft_appeal_${r.id}`;
@@ -65,8 +80,13 @@ async function draftAppeal(r) {
     const existing = JSON.parse(localStorage.getItem(key) || 'null');
     if (existing) ElMessage.info('已有草稿，可在申诉中心继续编辑');
   } catch {}
-  await reviews.markAppealable(r.id, { appealable: true, violationType: 'unrelated_to_product' });
-  router.push({ path: '/appeals', query: { reviewId: r.id } });
+  const violationType = resolveViolationType(r);
+  const body = { appealable: true };
+  // Only send violationType when AI/operator actually provided one; never write a
+  // single hardcoded default that degrades appeal quality / semantic correctness.
+  if (violationType) body.violationType = violationType;
+  await reviews.markAppealable(r.id, body);
+  router.push({ path: '/reviews/appeals', query: { reviewId: r.id, ...(violationType ? { violationType } : {}) } });
 }
 
 async function draftRecovery(r) {
@@ -75,7 +95,7 @@ async function draftRecovery(r) {
     const existing = JSON.parse(localStorage.getItem(key) || 'null');
     if (existing) ElMessage.info('已有挽回邮件草稿，可在挽回中心继续编辑');
   } catch {}
-  router.push({ path: '/recovery-emails', query: { reviewId: r.id } });
+  router.push({ path: '/reviews/recovery', query: { reviewId: r.id } });
 }
 
 async function pushToM1(r) {

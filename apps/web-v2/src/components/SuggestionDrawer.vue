@@ -1,9 +1,13 @@
 <script setup>
-import { computed } from 'vue';
+import { computed, ref, markRaw, provide } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useStrategies, useSuggestions } from '../composables/useAdsState';
 import { useCampaigns } from '../composables/useLxState';
+import { strategiesApi } from '../api/ads-strategies';
+import TabDaily from './ad-drawer-tabs/TabDaily.vue';
+import TabHistory from './ad-drawer-tabs/TabHistory.vue';
+import TabCompare from './ad-drawer-tabs/TabCompare.vue';
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -17,6 +21,25 @@ const { list: suggestions } = useSuggestions();
 const { getById: getCampaignById } = useCampaigns();
 
 const s = computed(() => props.suggestion);
+
+// M3-P1-15: refreshKey provide/inject so child tabs re-fetch on demand (bumping the key
+// forces a real re-fetch in each lazy tab, instead of the old no-op refresh).
+const refreshKey = ref(0);
+provide('drawerRefreshKey', refreshKey);
+function refreshTabs() { refreshKey.value++; }
+
+// M3-P2-22 / adanalysisdrawer-lazy: the analysis tabs are rendered lazily — only the
+// active tab's component is mounted (no v-for over all panels), so a heavy tab is not
+// built until selected. currentTab is a single computed object, never an array.
+const tabs = [
+  { key: 'daily', label: '天数据', component: markRaw(TabDaily) },
+  { key: 'compare', label: '对比', component: markRaw(TabCompare) },
+  { key: 'history', label: '历史', component: markRaw(TabHistory) },
+];
+const activeTab = ref('daily');
+const currentTab = computed(() => tabs.find(t => t.key === activeTab.value) || null);
+
+// M3-P1-15: each mock tab carries a '示例数据' watermark — driven by source meta below.
 
 // 来源策略详情
 const sourceStrategy = computed(() => {
@@ -32,21 +55,22 @@ const sameStrategyHistory = computed(() => {
     .slice(0, 5);
 });
 
-// 找到对应的 lx Campaign (按 SKU 匹配)
+// M3-P2-22: match the lx Campaign by a real id only. The old name-keyword portfolioGuess
+// (CASE/CABLE/LAMP -> pf-xxx) was dead/unfounded and is removed. If there is no
+// campaignId match we return null and the UI shows a降级 placeholder (no fabricated link).
 const targetCampaign = computed(() => {
-  const sku = s.value?.entity?.sku;
-  if (!sku) return null;
-  // 通过 campaign 名字关键词推断匹配 — 失败则取第一个有缓存的 campaign
-  const campaignName = s.value?.entity?.campaign || '';
-  const portfolioGuess = campaignName.includes('CASE') ? 'pf-001'
-    : campaignName.includes('CABLE') ? 'pf-003'
-    : (campaignName.includes('LAMP') || campaignName.toLowerCase().includes('lamp')) ? 'pf-004'
-    : null;
-  // 先尝试通过 entity.campaign id 直接查
-  if (s.value?.entity?.campaignId) {
-    return getCampaignById(s.value.entity.campaignId);
-  }
-  return null;
+  const campaignId = s.value?.entity?.campaignId;
+  if (!campaignId) return null;
+  return getCampaignById(campaignId) || null;
+});
+// Whether we have a campaign reference at all (drives the placeholder vs. preview).
+const hasCampaignRef = computed(() => !!s.value?.entity?.campaignId);
+
+// X-P0-06: a real-write origin record may NOT be auto-reverted. The drawer reflects this
+// by gating the action copy (real-write -> '申请人工回滚' blocked state).
+const isRealWriteRecord = computed(() => {
+  const at = s.value?.actionType?.value || s.value?.actionType || '';
+  return s.value?.status === 'real_write_success' || at === 'ACTION_QUEUE_REAL_WRITE';
 });
 
 function close() { emit('update:modelValue', false); }
@@ -65,8 +89,23 @@ function gotoLxCampaign() {
   close();
 }
 
-function muteStrategy() {
-  ElMessage.success(`已静音"${sourceStrategy.value?.name}" 7 天 · 期间不再触发同类建议`);
+// M3-P2-22: muteStrategy must hit a real backend endpoint (no local-only fake success).
+// If the strategy mute endpoint is not available, surface the failure honestly instead of
+// claiming success.
+const muteSupported = computed(() => typeof strategiesApi?.mute === 'function');
+async function muteStrategy() {
+  if (!muteSupported.value) {
+    ElMessage.info('静音功能即将上线');
+    return;
+  }
+  const id = sourceStrategy.value?.id;
+  if (!id) return;
+  try {
+    await strategiesApi.mute(id, { days: 7 });
+    ElMessage.success(`已静音"${sourceStrategy.value?.name}" 7 天`);
+  } catch (e) {
+    ElMessage.error('静音失败：' + (e?.message || e));
+  }
 }
 
 function jumpToTarget(alt) {
@@ -81,11 +120,61 @@ function jumpToTarget(alt) {
   }
 }
 
+function gotoEvidence(ref) {
+  if (!ref?.routePath) {
+    ElMessage.warning('该证据暂未映射到可跳转页面');
+    return;
+  }
+  router.push({ path: ref.routePath, query: ref.routeQuery || {} });
+  close();
+}
+
 const signalColor = {
   good: '#10b981',
   bad: '#ef4444',
   info: '#6b7280',
 };
+
+const typedAction = computed(() => s.value?.typedAction || null);
+const evidenceRefs = computed(() => s.value?.evidenceRefs || []);
+const guardrail = computed(() => s.value?.guardrail || null);
+const rollback = computed(() => s.value?.rollback || s.value?.rollbackPlan || null);
+const sourceMeta = computed(() => s.value?.sourceMeta || null);
+const confidenceBreakdown = computed(() => s.value?.confidenceBreakdown || null);
+
+// AUTH-15(b): drive real-vs-mock rendering from source meta, NOT readiness.
+// When sourceMeta.source is 'mock'/'fixture' (or real writes are disabled), this
+// is fixture data — show a warning + "数据来源: Mock Fixture" tag and never a
+// real-data green badge.
+const isMockSource = computed(() => {
+  const src = String(sourceMeta.value?.source || '').toLowerCase();
+  if (src === 'mock' || src === 'fixture') return true;
+  if (sourceMeta.value && sourceMeta.value.realWriteEnabled === false && (src === '' || src === 'lx-ui' || src === 'lx-route')) return true;
+  return false;
+});
+const sourceLabel = computed(() => (isMockSource.value ? '数据来源: Mock Fixture' : '数据来源: 真实同步'));
+
+// X-P1-01: when source/freshness are absent we must NOT poison-default to a mock
+// label (that would falsely brand real-but-unlabeled data as mock). The honest
+// default is 'unknown' — "来源未知，真假不可断言" — rendered with a warning-orange badge.
+const sourceDisplay = computed(() => sourceMeta.value?.adapter || sourceMeta.value?.source || 'unknown');
+const freshnessDisplay = computed(() => sourceMeta.value?.freshness || 'unknown');
+const isUnknownSource = computed(() => !isMockSource.value && (
+  !sourceMeta.value || (!sourceMeta.value.freshness && !sourceMeta.value.source && !sourceMeta.value.adapter)
+));
+
+function fmtPct(v) {
+  if (v === null || v === undefined || Number.isNaN(Number(v))) return '—';
+  return Math.round(Number(v) * 100) + '%';
+}
+
+function guardrailTagType(status) {
+  return ({ passed: 'success', needs_review: 'warning', blocked: 'danger' })[status] || 'info';
+}
+
+function compactJson(v) {
+  try { return JSON.stringify(v || {}); } catch { return '{}'; }
+}
 </script>
 
 <template>
@@ -113,6 +202,31 @@ const signalColor = {
 
       <h2 class="dt-title">{{ s.title }}</h2>
       <p class="dt-summary">{{ s.detail }}</p>
+
+      <!-- M3-P2-22 / adanalysisdrawer-lazy: lazy analysis tabs — only the active tab's
+           component is mounted (no v-for over all panels). -->
+      <section class="section analysis-tabs">
+        <div class="at-nav">
+          <button
+            v-for="t in tabs"
+            :key="t.key"
+            class="at-tab"
+            :class="{ active: activeTab === t.key }"
+            @click="activeTab = t.key"
+          >{{ t.label }}</button>
+          <span class="spacer" />
+          <el-button size="small" link :icon="'Refresh'" @click="refreshTabs">刷新</el-button>
+        </div>
+        <div v-if="currentTab" class="at-panel">
+          <component :is="currentTab.component" :entity="s?.entity || {}" :key="activeTab + '-' + refreshKey" />
+        </div>
+      </section>
+
+      <!-- X-P0-06: real-write origin records can NOT be auto-reverted -->
+      <div v-if="isRealWriteRecord" class="realwrite-revert-notice">
+        <el-button size="small" type="danger" plain disabled>申请人工回滚</el-button>
+        <span class="rw-note">真实写记录不支持一键自动回滚,请走人工回滚工单</span>
+      </div>
 
       <!-- 来源策略嵌入区块 -->
       <section v-if="sourceStrategy" class="strategy-block">
@@ -160,6 +274,95 @@ const signalColor = {
           <el-tag v-if="!(s.strategicTags || []).length" size="small" effect="plain" type="info">无战略标签</el-tag>
         </div>
       </div>
+
+      <!-- Strategy OS execution contract -->
+      <section class="section contract-section">
+        <h3 class="sh">🧭 标准动作契约</h3>
+        <div class="contract-grid">
+          <div class="contract-box">
+            <span class="ck">TypedAction</span>
+            <strong>{{ typedAction?.actionPrimitiveLabel || typedAction?.actionPrimitive || s.actionType?.label }}</strong>
+            <p>{{ typedAction?.executionMode || 'sandbox_audit_first' }} · dry-run={{ typedAction?.dryRun ? 'true' : 'false' }}</p>
+          </div>
+          <div class="contract-box">
+            <span class="ck">Guardrail</span>
+            <strong>
+              <el-tag size="small" :type="guardrailTagType(guardrail?.status)" effect="light">
+                {{ guardrail?.statusLabel || guardrail?.status || '待复核' }}
+              </el-tag>
+            </strong>
+            <p>{{ guardrail?.automationLevel || 'L2' }} · maxRisk={{ guardrail?.maxRisk || 'medium' }} · 真写={{ sourceMeta?.realWriteEnabled ? '开启' : '关闭' }}</p>
+          </div>
+          <div class="contract-box">
+            <span class="ck">Rollback</span>
+            <strong>{{ rollback?.methodLabel || rollback?.method || '待生成' }}</strong>
+            <p>{{ rollback?.reversible ? `${rollback.windowDays} 天窗口` : '无需回滚' }} · {{ rollback?.auditTrail || 'audit_logs' }}</p>
+          </div>
+        </div>
+        <div v-if="typedAction" class="typed-detail">
+          <div><span>实体路径</span><code>{{ compactJson(typedAction.entityPath) }}</code></div>
+          <div><span>当前值</span><code>{{ compactJson(typedAction.currentValue) }}</code></div>
+          <div><span>建议值</span><code>{{ compactJson(typedAction.recommendedValue) }}</code></div>
+          <div><span>变化量</span><code>{{ compactJson(typedAction.delta) }}</code></div>
+        </div>
+        <div v-if="guardrail?.reasonLabels?.length" class="guardrail-reasons">
+          <el-tag v-for="r in guardrail.reasonLabels" :key="r" size="small" effect="plain" type="warning">{{ r }}</el-tag>
+        </div>
+      </section>
+
+      <section class="section">
+        <h3 class="sh">🧾 EvidenceRef（{{ evidenceRefs.length }} 条，可映射领星/Ads API）</h3>
+        <div class="eref-list">
+          <div v-for="ref in evidenceRefs" :key="ref.id" class="eref-row">
+            <div>
+              <strong>{{ ref.surfaceKey }} / {{ ref.tabKey }}</strong>
+              <span>{{ ref.entityKind }} · {{ ref.entityKey || '全局' }}</span>
+            </div>
+            <div class="eref-metrics">
+              <el-tag v-for="m in ref.metricKeys" :key="m" size="small" effect="plain">{{ m }}</el-tag>
+              <el-button v-if="ref.routePath" size="small" type="primary" link @click="gotoEvidence(ref)">跳到证据</el-button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section source-confidence">
+        <h3 class="sh">📡 来源与置信度</h3>
+        <el-alert
+          v-if="isMockSource"
+          class="mock-source-alert"
+          type="warning"
+          :closable="false"
+          show-icon
+          title="数据来源: Mock Fixture"
+          description="当前数据来自本地 Mock 固件，非 Amazon 真实同步。请勿据此执行真实写操作。"
+        />
+        <el-tag
+          v-if="!isUnknownSource"
+          class="source-mode-tag"
+          size="small"
+          effect="dark"
+          :type="isMockSource ? 'warning' : 'success'"
+        >{{ sourceLabel }}</el-tag>
+        <!-- X-P1-01: unknown source -> warning-orange badge, '来源未知不可断言真假' -->
+        <el-tag
+          v-else
+          class="source-mode-tag source-unknown-tag"
+          size="small"
+          effect="dark"
+          type="warning"
+        >数据来源: unknown（未知 · 不可断言真假）</el-tag>
+        <div class="source-grid">
+          <div><span>来源</span><strong>{{ sourceDisplay }}</strong></div>
+          <div><span>新鲜度</span><strong>{{ freshnessDisplay }}</strong></div>
+          <div><span>数据</span><strong>{{ fmtPct(confidenceBreakdown?.data) }}</strong></div>
+          <div><span>规则</span><strong>{{ fmtPct(confidenceBreakdown?.rule) }}</strong></div>
+          <div><span>影响</span><strong>{{ fmtPct(confidenceBreakdown?.impact) }}</strong></div>
+          <div><span>回滚</span><strong>{{ fmtPct(confidenceBreakdown?.reversibility) }}</strong></div>
+          <div><span>护栏</span><strong>{{ fmtPct(confidenceBreakdown?.guardrail) }}</strong></div>
+          <div><span>最终</span><strong>{{ fmtPct(confidenceBreakdown?.final ?? s.confidence) }}</strong></div>
+        </div>
+      </section>
 
       <!-- 证据链 -->
       <section class="section">
@@ -302,8 +505,10 @@ const signalColor = {
       <!-- 底部固定动作 -->
       <div v-if="s.state === 'pending'" class="drawer-foot">
         <el-button size="large" plain @click="emit('reject', s); close()">忽略</el-button>
+        <!-- X-P0-07 (B方案/纯 mock 坦白): the action is a dry-run / audit-first sandbox
+             step, never a real Amazon write. Copy must not promise a real side-effect. -->
         <el-button size="large" type="primary" @click="emit('execute', s); close()">
-          <el-icon><Check /></el-icon>立即采纳首选方案
+          <el-icon><Check /></el-icon>采纳首选方案（dry-run · 模拟）
         </el-button>
       </div>
     </div>
@@ -571,5 +776,137 @@ const signalColor = {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.contract-section {
+  padding: 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #f8fafc 0%, #eff6ff 100%);
+}
+.contract-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.contract-box {
+  padding: 10px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+.contract-box .ck {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 5px;
+}
+.contract-box strong {
+  display: block;
+  min-height: 22px;
+  font-size: 13px;
+}
+.contract-box p {
+  margin: 5px 0 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+.typed-detail {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+.typed-detail div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.72);
+  border-radius: 6px;
+}
+.typed-detail span {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.typed-detail code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  color: #0f172a;
+}
+.guardrail-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.eref-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.eref-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 9px 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+.eref-row strong {
+  display: block;
+  font-size: 12px;
+  color: #0f172a;
+}
+.eref-row span {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.eref-metrics {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.source-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+.source-grid div {
+  padding: 9px;
+  background: #f9fafb;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+}
+.source-grid span {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.source-grid strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+@media (max-width: 767px) {
+  .contract-grid,
+  .typed-detail,
+  .source-grid {
+    grid-template-columns: 1fr;
+  }
+  .eref-row {
+    grid-template-columns: 1fr;
+  }
+  .eref-metrics {
+    justify-content: flex-start;
+  }
 }
 </style>

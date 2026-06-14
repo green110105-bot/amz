@@ -22,15 +22,21 @@ const dialog = ref(false);
 const editing = ref(null);
 
 const draftKey = 'm2:draft:payment_channel';
-const draft = ref({
-  name: '',
-  provider: 'payoneer',
-  feePct: 0.012,
-  feeFixedPerTx: 0,
-  currency: 'USD',
-  isPrimary: false,
-  enabled: true,
-});
+// M2-P1-06: 补 monthlyVolume / txCount 输入；monthly_cost 由后端单一真相源计算，前端不写
+function defaultChannelDraft() {
+  return {
+    name: '',
+    provider: 'payoneer',
+    feePct: 0.012,
+    feeFixedPerTx: 0,
+    monthlyVolume: 0,
+    txCount: 0,
+    currency: 'USD',
+    isPrimary: false,
+    enabled: true,
+  };
+}
+const draft = ref(defaultChannelDraft());
 
 function loadDraft() {
   try {
@@ -50,28 +56,46 @@ const list = computed(() => channels.list.value || []);
 
 function openCreate() {
   editing.value = null;
+  // 先重置 draft 为默认，避免残留上次 openEdit 的字段
+  draft.value = defaultChannelDraft();
   dialog.value = true;
 }
 function openEdit(row) {
   editing.value = row;
-  draft.value = { ...draft.value, ...row };
+  // 仅挑白名单字段，禁止写 id / monthly_cost（计算列）
+  draft.value = {
+    name: row.name ?? '',
+    provider: row.provider ?? 'payoneer',
+    feePct: row.feePct ?? row.fee_pct ?? 0.012,
+    feeFixedPerTx: row.feeFixedPerTx ?? row.fee_fixed_per_tx ?? 0,
+    monthlyVolume: row.monthlyVolume ?? row.monthly_volume ?? 0,
+    txCount: 0,
+    currency: row.currency ?? 'USD',
+    isPrimary: !!(row.isPrimary ?? row.is_primary),
+    enabled: row.enabled !== false,
+  };
   dialog.value = true;
 }
 
 async function submit() {
   if (!draft.value.name) { ElMessage.warning('请填写通道名称'); return; }
+  // 不发送 monthly_cost（计算列，后端权威）
+  const body = {
+    name: draft.value.name, provider: draft.value.provider,
+    feePct: draft.value.feePct, feeFixedPerTx: draft.value.feeFixedPerTx,
+    monthlyVolume: draft.value.monthlyVolume, txCount: draft.value.txCount,
+    currency: draft.value.currency, isPrimary: draft.value.isPrimary,
+    enabled: draft.value.enabled,
+  };
   try {
     if (editing.value) {
-      await channels.update(editing.value.id, draft.value);
+      await channels.update(editing.value.id, body);
     } else {
-      await channels.create(draft.value);
+      await channels.create(body);
     }
     dialog.value = false;
     clearDraft();
-    draft.value = {
-      name: '', provider: 'payoneer', feePct: 0.012, feeFixedPerTx: 0,
-      currency: 'USD', isPrimary: false, enabled: true,
-    };
+    draft.value = defaultChannelDraft();
   } catch {}
 }
 
@@ -152,6 +176,15 @@ async function remove(row) {
         </el-form-item>
         <el-form-item label="单笔固定 ($)">
           <el-input-number v-model="draft.feeFixedPerTx" :min="0" :step="0.5" :precision="2" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="月提现额 ($)">
+          <el-input-number v-model="draft.monthlyVolume" :min="0" :step="1000" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="月交易笔数">
+          <el-input-number v-model="draft.txCount" :min="0" :step="10" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="预估月成本">
+          <span class="text-muted">{{ formatCurrency((draft.feePct || 0) * (draft.monthlyVolume || 0) + (draft.feeFixedPerTx || 0) * (draft.txCount || 0), 'USD') }} · 实际值由后端计算</span>
         </el-form-item>
         <el-form-item label="主要通道">
           <el-switch v-model="draft.isPrimary" />

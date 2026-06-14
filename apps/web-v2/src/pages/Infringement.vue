@@ -11,6 +11,7 @@ import ResponsiveDialog from '../components/ResponsiveDialog.vue';
 import { useViewport } from '../composables/useViewport';
 import { useInfringement } from '../composables/useM4State';
 import { useNotificationsBus } from '../composables/useNotificationsBus';
+import { infringementApi } from '../api/m4';
 
 const route = useRoute();
 const router = useRouter();
@@ -46,7 +47,7 @@ const list = computed(() => inf.list.value || []);
 function typeTag(t) { return { trademark: 'danger', patent: 'warning', copyright: 'primary', counterfeit: 'danger' }[t] || ''; }
 function typeLabel(t) { return { trademark: '商标', patent: '专利', copyright: '版权', counterfeit: '假货' }[t] || t; }
 function statusType(s) { return { investigating: 'warning', pending_legal_review: '', draft: '', submitted: 'primary', accepted: 'success', rejected: 'danger', resolved: 'success', dismissed: 'info' }[s] || ''; }
-function statusLabel(s) { return { investigating: '调查中', pending_legal_review: '待法律审核', draft: '草稿', submitted: '已提交', accepted: '已接受', rejected: '已拒绝', resolved: '已解决', dismissed: '已忽略' }[s] || s; }
+function statusLabel(s) { return { investigating: '调查中', pending_legal_review: '待法律审核', draft: '草稿', submitted: '人工已提交', accepted: '已接受', rejected: '已拒绝', resolved: '已解决', dismissed: '已忽略' }[s] || s; }
 
 // ---- 草稿 localStorage 持久化 ----
 function draftKey(id) { return `m4_draft_infringement_${id}`; }
@@ -82,14 +83,68 @@ async function submitDraft() {
   const updated = await inf.draft(draftCurrent.value.id, { legalDisclaimerAck: true, draftContent: draftContent.value });
   clearDraft(draftCurrent.value.id);
   showDraft.value = false;
-  bus.pushLocal({ severity: 'P1', sourceModule: 'M4A', title: `IP 投诉草稿已生成`, body: `${typeLabel(draftCurrent.value.type)} · ${draftCurrent.value.asin}`, link: '/infringement' });
+  bus.pushLocal({ severity: 'P1', sourceModule: 'M4A', title: `IP 投诉草稿已生成`, body: `${typeLabel(draftCurrent.value.type)} · ${draftCurrent.value.asin}`, link: '/monitor/infringement' });
 }
 
-async function submitToAmazon(item) {
+function parseManualSubmissionNote(raw = '') {
+  const text = raw.trim();
+  const pick = (patterns) => {
+    const line = text.split(/\n+/).find((l) => patterns.some((p) => p.test(l)));
+    return line ? line.replace(/^[^:：]+[:：]\s*/, '').trim() : '';
+  };
+  return {
+    raw: text,
+    caseId: pick([/case\s*id/i, /caseId/i, /投诉单号/, /案件号/, /case编号/i]),
+    submitter: pick([/提交人/, /操作人/, /submitter/i]),
+    submittedAt: pick([/提交时间/, /submitted\s*at/i, /时间/]),
+    attachment: pick([/证据附件/, /附件/, /attachment/i, /evidence/i]),
+  };
+}
+
+function validateManualSubmissionNote(value) {
+  const parsed = parseManualSubmissionNote(value || '');
+  if (parsed.caseId && parsed.submitter && parsed.submittedAt && parsed.attachment) return true;
+  return '请填写 Case ID/投诉单号、提交人、提交时间、证据附件链接或编号；本操作仅记录人工提交结果。';
+}
+
+function patchInfringementRow(item, updated) {
+  if (!updated?.id) return;
+  Object.assign(item, updated);
+  const idx = inf.list.value.findIndex((r) => r.id === updated.id);
+  if (idx >= 0) inf.list.value.splice(idx, 1, { ...inf.list.value[idx], ...updated });
+}
+
+async function recordManualSubmission(item) {
   try {
-    const { value } = await ElMessageBox.prompt('亚马逊投诉单号（如有）', '提交投诉', { confirmButtonText: '提交' });
-    await inf.submit(item.id, { amazonComplaintId: value });
-    bus.pushLocal({ severity: 'P1', sourceModule: 'M4A', title: '侵权投诉已提交', body: item.asin });
+    const { value } = await ElMessageBox.prompt(
+      '本操作不会调用 Amazon/legal 外部 API；请记录你已人工提交的结果，便于审计追踪。',
+      '记录人工提交结果',
+      {
+        confirmButtonText: '标记已在 Amazon 提交',
+        cancelButtonText: '取消',
+        inputType: 'textarea',
+        inputValue: 'Case ID: \n提交人: \n提交时间: \n证据附件: ',
+        inputPlaceholder: 'Case ID/投诉单号、提交人、提交时间、证据附件链接或编号均为必填',
+        inputValidator: validateManualSubmissionNote,
+      },
+    );
+    const parsed = parseManualSubmissionNote(value);
+    const updated = await infringementApi.submit(item.id, {
+      amazonComplaintId: parsed.caseId,
+      manualSubmissionNote: parsed.raw,
+      submittedBy: parsed.submitter,
+      manualSubmittedAt: parsed.submittedAt,
+      evidenceAttachment: parsed.attachment,
+    });
+    patchInfringementRow(item, updated);
+    ElMessage.success('已记录人工提交结果（未调用外部 Amazon/legal API）');
+    bus.pushLocal({
+      severity: 'P1',
+      sourceModule: 'M4A',
+      title: '已记录人工提交结果',
+      body: `${item.asin} · Case ${parsed.caseId} · 提交人 ${parsed.submitter}`,
+      link: '/monitor/infringement',
+    });
   } catch (_) {}
 }
 async function resolveItem(item) {
@@ -110,7 +165,7 @@ const mobileCols = [
 
 <template>
   <div>
-    <PageHeader title="侵权告警" subtitle="商标 / 专利 / 版权 / 假货 · AI 起草 IP 投诉（草稿入库 + 状态机）">
+    <PageHeader title="侵权告警" subtitle="商标 / 专利 / 版权 / 假货 · AI 起草 IP 投诉；未授权外部 API 前仅记录人工提交结果">
       <template #extra>
         <div class="toolbar">
           <el-select v-model="typeFilter" size="default" class="tb-select tb-select-small">
@@ -125,7 +180,7 @@ const mobileCols = [
             <el-option label="调查中" value="investigating" />
             <el-option label="待法律审核" value="pending_legal_review" />
             <el-option label="草稿" value="draft" />
-            <el-option label="已提交" value="submitted" />
+            <el-option label="人工已提交" value="submitted" />
             <el-option label="已解决" value="resolved" />
           </el-select>
         </div>
@@ -135,7 +190,7 @@ const mobileCols = [
     <el-alert type="info" show-icon :closable="false">
       <template #title>法律免责</template>
       <template #default>
-        本系统起草的文案<strong>不构成法律意见</strong>。涉及商标 / 专利的复杂案件建议咨询专业律师。
+        本系统起草的文案<strong>不构成法律意见</strong>。在取得真实 Amazon/legal 外部 API 授权前，系统不会自动提交投诉；只能保存草稿、记录人工提交结果，并要求填写 Case ID/投诉单号、提交人、提交时间、证据附件。
       </template>
     </el-alert>
 
@@ -160,7 +215,7 @@ const mobileCols = [
         <el-table-column label="操作" width="180">
           <template #default="{ row }">
             <el-button v-if="['investigating', 'pending_legal_review'].includes(row.status)" size="small" type="primary" plain @click="openDraft(row)">起草投诉</el-button>
-            <el-button v-else-if="row.status === 'draft'" size="small" type="primary" @click="submitToAmazon(row)">提交</el-button>
+            <el-button v-else-if="row.status === 'draft'" size="small" type="primary" @click="recordManualSubmission(row)">记录人工提交</el-button>
             <el-button v-else-if="row.status === 'submitted'" size="small" type="success" plain @click="resolveItem(row)">结案</el-button>
             <el-button v-else size="small" link>详情</el-button>
           </template>
@@ -177,7 +232,7 @@ const mobileCols = [
         </template>
         <template #mobile-actions="{ row }">
           <el-button v-if="['investigating', 'pending_legal_review'].includes(row.status)" size="small" type="primary" plain @click="openDraft(row)">起草投诉</el-button>
-          <el-button v-else-if="row.status === 'draft'" size="small" type="primary" @click="submitToAmazon(row)">提交</el-button>
+          <el-button v-else-if="row.status === 'draft'" size="small" type="primary" @click="recordManualSubmission(row)">记录人工提交</el-button>
           <el-button v-else-if="row.status === 'submitted'" size="small" type="success" plain @click="resolveItem(row)">结案</el-button>
           <el-button v-else size="small" link>详情</el-button>
         </template>

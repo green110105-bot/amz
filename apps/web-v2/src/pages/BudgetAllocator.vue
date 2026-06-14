@@ -7,7 +7,7 @@ import ResponsiveTable from '../components/ResponsiveTable.vue';
 import { useViewport } from '../composables/useViewport';
 import { mockBudgetAllocation } from '../utils/mock-data-ads';
 import { formatCurrency } from '../utils/format';
-import { useAudit } from '../composables/useAudit';
+import { actionQueueApi } from '../api/ads-timeline';
 
 const { isMobile } = useViewport();
 const mobileCols = [
@@ -17,8 +17,8 @@ const mobileCols = [
   { prop: 'marginalRoi', label: '边际 ROI', formatter: (v) => v.toFixed(1) + 'x' },
 ];
 
-const { submit } = useAudit();
 const data = ref({ ...mockBudgetAllocation });
+const applying = ref(false);
 
 const totalRecommended = computed(() => data.value.campaigns.reduce((s, c) => s + c.recommendedBudget, 0));
 const totalCurrent = computed(() => data.value.campaigns.reduce((s, c) => s + c.currentBudget, 0));
@@ -27,31 +27,67 @@ function changePct(c) {
   return (c.recommendedBudget - c.currentBudget) / c.currentBudget;
 }
 
+// M3-P0-05/M3-P0-08: budget mutations must NOT use the audit-submit bypass (that skips
+// ActionQueue/guardrail/dry_run). They go through actionQueueApi.enqueue, which lands
+// a needs_review + dryRun=1 row in ad_action_queue. The LOCAL value is updated ONLY
+// after the enqueue succeeds (ok). A failed enqueue must NOT change the local table.
+async function enqueueBudget(c) {
+  return actionQueueApi.enqueue({
+    sourceStrategyName: 'Budget Allocator (manual)',
+    entity: { kind: 'campaign', id: c.id, name: c.name },
+    typedAction: {
+      actionPrimitive: 'SET_CAMPAIGN_BUDGET',
+      sourceSurface: 'budget_allocator',
+      entityKind: 'campaign',
+      resourceId: c.id,
+      currentValue: { dailyBudget: c.currentBudget },
+      recommendedValue: { dailyBudget: c.recommendedBudget },
+      dryRun: true,
+      auditRequired: true,
+    },
+    guardrail: { status: 'needs_review', reasons: ['manual_budget_write_requires_action_queue'] },
+    rollbackPlan: { method: 'manual_revert_required', needsManualReview: true },
+    expectedImpact: { metric: 'monthly_profit', change: c.deltaProfit },
+    note: `${c.name} → $${c.recommendedBudget}/天`,
+  });
+}
+
 async function applyAll() {
-  for (const c of data.value.campaigns) {
-    if (c.currentBudget !== c.recommendedBudget) {
-      await submit({
-        sourceModule: 'M3',
-        actionType: 'INCREASE_BUDGET',
-        target: { type: 'campaign', id: c.id },
-        payload: { amount: Math.abs(c.recommendedBudget - c.currentBudget) },
-        expectedImpact: { metric: 'monthly_profit', change: c.deltaProfit },
-        description: `${c.name} → $${c.recommendedBudget}/天`,
-      });
-      c.currentBudget = c.recommendedBudget;
+  if (applying.value) return;
+  applying.value = true;
+  let queued = 0;
+  try {
+    for (const c of data.value.campaigns) {
+      if (c.currentBudget === c.recommendedBudget) continue;
+      try {
+        const item = await enqueueBudget(c);
+        // gate on TRUE enqueue: a duplicate (queued:false) is not a fresh write — don't
+        // optimistically mutate local budget or count it as queued.
+        if (item && item.queued !== false) { c.currentBudget = c.recommendedBudget; queued += 1; }
+      } catch { /* gate on success: leave local value unchanged on failure */ }
     }
+    if (queued > 0) ElMessage.success(`已加入执行篮 ${queued} 条（待审核 + dry-run，未触达 Amazon）`);
+    else ElMessage.warning('未加入任何条目（无变更或入队失败）');
+  } finally {
+    applying.value = false;
   }
 }
 async function applyOne(c) {
-  await submit({
-    sourceModule: 'M3',
-    actionType: 'INCREASE_BUDGET',
-    target: { type: 'campaign', id: c.id },
-    payload: { amount: Math.abs(c.recommendedBudget - c.currentBudget) },
-    expectedImpact: { metric: 'monthly_profit', change: c.deltaProfit },
-    description: `${c.name} → $${c.recommendedBudget}/天`,
-  });
-  c.currentBudget = c.recommendedBudget;
+  if (applying.value) return;
+  applying.value = true;
+  try {
+    const item = await enqueueBudget(c);
+    if (!item) { ElMessage.warning('入队失败，本地预算未变更'); return; }
+    // A duplicate (queued:false) is already surfaced as info by the api layer; do not
+    // mutate local budget or claim a fresh enqueue.
+    if (item.queued === false) return;
+    c.currentBudget = c.recommendedBudget; // gate on success
+    ElMessage.success('已加入执行篮 1 条（待审核 + dry-run，未触达 Amazon）');
+  } catch (e) {
+    ElMessage.error(`入队失败：${e?.message || e}（本地预算未变更）`);
+  } finally {
+    applying.value = false;
+  }
 }
 </script>
 

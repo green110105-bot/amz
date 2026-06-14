@@ -36,6 +36,20 @@ function severityType(s) {
   return { P0: 'danger', P1: 'warning', P2: 'info' }[s] || '';
 }
 
+const CHANNEL_LABEL = { in_app: '站内', email: '邮件', wechat: '微信', wecom: '企微' };
+// M4-P1-04: read deliveryStatus, not just the channels list. email/wechat are
+//永久 queued (通道未接入) until a real channel is wired, so render them greyed
+// with an honest tooltip instead of implying they were delivered.
+function channelDelivery(n, c) {
+  return (n.deliveryStatus || {})[c] || (c === 'in_app' ? 'delivered' : 'queued');
+}
+function channelIsQueued(n, c) {
+  return channelDelivery(n, c) !== 'delivered';
+}
+function channelTooltip(n, c) {
+  return channelIsQueued(n, c) ? '通道未接入（queued）' : '已送达';
+}
+
 function fmtTime(s) {
   if (!s) return '';
   // bus 中是 ISO；显示成 YYYY-MM-DD HH:mm
@@ -57,7 +71,7 @@ async function markAllRead() {
 
 <template>
   <div v-loading="bus.loading.value">
-    <PageHeader title="通知中心" subtitle="站内 + 邮件 + 微信 多通道 · 静默时段 · 按严重度路由">
+    <PageHeader title="通知中心" subtitle="站内通知（邮件 / 微信通道规划中）· 按严重度路由">
       <template #extra>
         <el-button v-if="summary.unread > 0" type="primary" plain @click="markAllRead">全部已读</el-button>
         <el-button :icon="'Setting'" @click="$router.push('/settings')">通知设置</el-button>
@@ -88,7 +102,15 @@ async function markAllRead() {
           <div class="notif-foot">
             <span class="text-muted tnum">{{ fmtTime(n.createdAt) }}</span>
             <span class="channels">
-              <el-tag v-for="(c, i) in (n.channels || [])" :key="i" size="small" effect="plain" style="margin-left: 4px">{{ ({ in_app: '站内', email: '邮件', wechat: '微信', wecom: '企微' })[c] || c }}</el-tag>
+              <el-tooltip v-for="(c, i) in (n.channels || [])" :key="i" :content="channelTooltip(n, c)" placement="top">
+                <el-tag
+                  size="small"
+                  :effect="channelIsQueued(n, c) ? 'plain' : 'dark'"
+                  :type="channelIsQueued(n, c) ? 'info' : 'success'"
+                  :class="{ 'channel-queued': channelIsQueued(n, c) }"
+                  style="margin-left: 4px"
+                >{{ CHANNEL_LABEL[c] || c }}<template v-if="channelIsQueued(n, c)"> · 未接入</template></el-tag>
+              </el-tooltip>
             </span>
           </div>
         </div>
@@ -128,6 +150,7 @@ async function markAllRead() {
 .notif-text { margin: 4px 0; font-size: 13px; color: var(--text-muted); }
 .notif-foot { display: flex; justify-content: space-between; align-items: center; font-size: 11px; flex-wrap: wrap; gap: 4px; }
 .channels { display: flex; gap: 0; }
+.channel-queued { opacity: 0.55; }
 .dot-unread { width: 8px; height: 8px; border-radius: 50%; background: var(--primary); margin-top: 8px; }
 
 @media (max-width: 767px) {

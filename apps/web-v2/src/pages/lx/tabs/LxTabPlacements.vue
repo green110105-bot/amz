@@ -22,8 +22,8 @@ const enterprise = ref(false);
 const dateRange = ref([new Date('2026-05-13'), new Date('2026-05-13')]);
 const showCompare = ref(false);
 
-async function commitBidAdj(row, newVal) {
-  await setBidAdj(row, newVal);
+async function commitBidAdj(row, newVal, oldVal) {
+  await setBidAdj(row, newVal, oldVal);
 }
 </script>
 
@@ -75,7 +75,7 @@ async function commitBidAdj(row, newVal) {
               size="small"
               :controls="false"
               style="width: 50px"
-              @change="(v) => commitBidAdj(row, v)"
+              @change="(v, old) => commitBidAdj(row, v, old)"
             />
             <span class="pct">%</span>
           </div>

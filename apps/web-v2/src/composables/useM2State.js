@@ -71,8 +71,9 @@ export function useProfit() {
   async function recompute(range = '30d') {
     try {
       const res = await profitApi.recompute({ range, force: true });
-      if (res?.overview) _overview.value = res;
-      ElMessage.success('重算已触发');
+      // M2-P1-02: 同步重算，返回体含 overview（route spread getProfitOverview）；只取 overview 刷新 KPI
+      if (res?.overview) _overview.value = { overview: res.overview, topSkus: res.topSkus, trend: res.trend };
+      ElMessage.success(`重算完成，共 ${res?.count ?? 0} 个 SKU`);
       return res;
     } catch (e) {
       ElMessage.error(`重算失败：${e.message || e}`);
@@ -336,25 +337,36 @@ export function useReorder() {
   }
 
   async function createPO(id, body) {
+    // M2-P0-01: 主键唯一来源 d.reorder.id；乐观态写 d.reorder.status，失败回滚
+    const i = _reorders.value.findIndex((d) => (d.reorder?.id) === id);
+    const prevStatus = i >= 0 ? _reorders.value[i].reorder?.status : null;
+    if (i >= 0 && _reorders.value[i].reorder) _reorders.value[i].reorder.status = 'drafted';
     try {
       const r = await reorderApi.createPO(id, body);
-      const i = _reorders.value.findIndex((d) => (d.id || d.productId) === id);
-      if (i >= 0) _reorders.value[i].status = 'drafted';
       ElMessage.success(`PO 草稿已生成：${r?.poNumber || r?.id || ''}`);
       return r;
     } catch (e) {
+      // 回滚乐观态
+      if (i >= 0 && _reorders.value[i].reorder) _reorders.value[i].reorder.status = prevStatus;
       ElMessage.error(`生成 PO 失败：${e.message || e}`);
       throw e;
     }
   }
 
   async function dismiss(id, reason = '') {
+    // M2-P0-01: 软删 — 以服务端返回的 status='dismissed' 覆盖，而非 splice 硬删
+    const i = _reorders.value.findIndex((d) => (d.reorder?.id) === id);
+    const prevStatus = i >= 0 ? _reorders.value[i].reorder?.status : null;
+    if (i >= 0 && _reorders.value[i].reorder) _reorders.value[i].reorder.status = 'dismissed';
     try {
-      await reorderApi.dismiss(id, { reason });
-      const i = _reorders.value.findIndex((d) => (d.id || d.productId) === id);
-      if (i >= 0) _reorders.value.splice(i, 1);
+      const res = await reorderApi.dismiss(id, { reason });
+      // 服务端权威覆盖（res 为更新后的 reorder 对象）
+      if (i >= 0 && _reorders.value[i].reorder && res?.status) {
+        _reorders.value[i].reorder.status = res.status;
+      }
       ElMessage.success('已忽略');
     } catch (e) {
+      if (i >= 0 && _reorders.value[i].reorder) _reorders.value[i].reorder.status = prevStatus;
       ElMessage.error(`操作失败：${e.message || e}`);
       throw e;
     }
@@ -390,12 +402,21 @@ export function useSlowMoving() {
     }
   }
 
-  async function execute(id, option) {
+  async function preview(id, option = 'A') {
+    return slowMovingApi.preview(id, { option });
+  }
+
+  async function execute(id, option, extra = {}) {
     try {
-      const r = await slowMovingApi.execute(id, { option });
+      const r = await slowMovingApi.execute(id, { option, ...extra });
       const i = _slow.value.findIndex((d) => d.id === id);
       if (i >= 0) _slow.value[i] = { ..._slow.value[i], ...r, status: 'executed' };
-      ElMessage.success(`已执行选项 ${option}`);
+      // M2-P0-05: 诚实文案 — 仅生成 M1 草稿，待上架生效
+      if (option === 'A' && r?.draftStatus) {
+        ElMessage.success('已生成 M1 降价草稿，待 M1 上架生效');
+      } else {
+        ElMessage.success(`已生成选项 ${option} 处置草稿`);
+      }
       return r;
     } catch (e) {
       ElMessage.error(`执行失败：${e.message || e}`);
@@ -407,6 +428,7 @@ export function useSlowMoving() {
     list: _slow,
     loading: _slowLoading,
     fetch,
+    preview,
     execute,
   };
 }
@@ -435,15 +457,32 @@ export function useTransfers() {
   async function approve(id) {
     const i = _transfers.value.findIndex((t) => t.id === id);
     const prev = i >= 0 ? _transfers.value[i].status : null;
-    if (i >= 0) _transfers.value[i].status = 'approved';
+    // M2-P1-05: approve 真实位移库存后状态进入 in_transit
+    if (i >= 0) _transfers.value[i].status = 'in_transit';
     try {
       const r = await transfersApi.approve(id);
       if (i >= 0 && r) _transfers.value[i] = { ..._transfers.value[i], ...r };
-      ElMessage.success('调拨已批准');
+      ElMessage.success('调拨已批准，库存已位移（在途）');
       return r;
     } catch (e) {
       if (i >= 0) _transfers.value[i].status = prev;
       ElMessage.error(`批准失败：${e.message || e}`);
+      throw e;
+    }
+  }
+
+  async function receive(id) {
+    const i = _transfers.value.findIndex((t) => t.id === id);
+    const prev = i >= 0 ? _transfers.value[i].status : null;
+    if (i >= 0) _transfers.value[i].status = 'received';
+    try {
+      const r = await transfersApi.receive(id);
+      if (i >= 0 && r) _transfers.value[i] = { ..._transfers.value[i], ...r };
+      ElMessage.success('已收货');
+      return r;
+    } catch (e) {
+      if (i >= 0) _transfers.value[i].status = prev;
+      ElMessage.error(`收货失败：${e.message || e}`);
       throw e;
     }
   }
@@ -469,6 +508,7 @@ export function useTransfers() {
     loading: _transfersLoading,
     fetch,
     approve,
+    receive,
     cancel,
   };
 }
@@ -681,25 +721,43 @@ export function useRepricing() {
     }
   }
 
-  async function detail(id) {
+  async function apply(id, price, confirmBelowBreakeven = false) {
     try {
-      return await repricingApi.detail(id);
-    } catch (e) {
-      ElMessage.error(`加载详情失败：${e.message || e}`);
-      return null;
-    }
-  }
-
-  async function apply(id, price) {
-    try {
-      const r = await repricingApi.apply(id, { price });
+      const body = { price };
+      if (confirmBelowBreakeven) body.confirmBelowBreakeven = true;
+      const r = await repricingApi.apply(id, body);
       const i = _reprice.value.findIndex((x) => x.id === id);
       if (i >= 0 && r) _reprice.value[i] = { ..._reprice.value[i], ...r, status: 'applied' };
       const m1v = r?.m1VersionId || r?.m1_listing_version_id;
-      ElMessage.success(m1v ? `已应用 → M1 version ${m1v}` : '已应用');
+      // M2-P0-04: 仅生成 M1 草稿，需到 M1 上架才真实改价
+      ElMessage.success(m1v ? `已生成 M1 调价草稿 (version ${m1v})，待 M1 上架生效` : '已生成调价草稿');
       return r;
     } catch (e) {
+      // 透传后端 validation_error（含 breakEvenPrice），供页面分流二次确认
+      const data = e?.response?.data;
+      if (data?.error === 'validation_error') {
+        const err = new Error(data.message || '价格校验失败');
+        err.validation = data;
+        throw err;
+      }
       ElMessage.error(`应用失败：${e.message || e}`);
+      throw e;
+    }
+  }
+
+  // M2-P2-06: 拒绝建议
+  async function reject(id, reason = '') {
+    const i = _reprice.value.findIndex((x) => x.id === id);
+    const prev = i >= 0 ? _reprice.value[i].status : null;
+    if (i >= 0) _reprice.value[i].status = 'rejected';
+    try {
+      const r = await repricingApi.reject(id, { reason });
+      if (i >= 0 && r) _reprice.value[i] = { ..._reprice.value[i], ...r };
+      ElMessage.success('已拒绝该建议');
+      return r;
+    } catch (e) {
+      if (i >= 0) _reprice.value[i].status = prev;
+      ElMessage.error(`拒绝失败：${e.message || e}`);
       throw e;
     }
   }
@@ -720,8 +778,8 @@ export function useRepricing() {
     list: _reprice,
     loading: _repriceLoading,
     fetch,
-    detail,
     apply,
+    reject,
     trigger,
   };
 }
@@ -916,19 +974,39 @@ export function useAlerts() {
     }
   }
 
-  async function ackEvent(id) {
+  async function ackEvent(id, ackBy) {
     const i = _events.value.findIndex((e) => e.id === id);
-    if (i >= 0) _events.value[i].acknowledged = 1;
+    const prev = i >= 0 ? _events.value[i].acknowledged : null;
+    if (i >= 0) _events.value[i].acknowledged = true;
     try {
-      const r = await alertsApi.events.ack(id);
+      const r = await alertsApi.events.ack(id, ackBy ? { ackBy } : {});
       if (i >= 0 && r) _events.value[i] = { ..._events.value[i], ...r };
       ElMessage.success('已确认');
       return r;
     } catch (e) {
-      if (i >= 0) _events.value[i].acknowledged = 0;
+      if (i >= 0) _events.value[i].acknowledged = prev;
       ElMessage.error(`确认失败：${e.message || e}`);
       throw e;
     }
+  }
+
+  // M2-P3-01: 批量确认
+  async function ackBatch(ids, ackBy) {
+    try {
+      const r = await alertsApi.events.ackBatch(ids, ackBy);
+      const set = new Set(ids);
+      _events.value = _events.value.map((e) => set.has(e.id) ? { ...e, acknowledged: true } : e);
+      ElMessage.success(`已确认 ${r?.acknowledged ?? ids.length} 条`);
+      return r;
+    } catch (e) {
+      ElMessage.error(`批量确认失败：${e.message || e}`);
+      throw e;
+    }
+  }
+
+  // M2-P0-07: 扫描 / 立即测试规则
+  async function scan(body = {}) {
+    return alertsApi.scan(body);
   }
 
   return {
@@ -942,6 +1020,8 @@ export function useAlerts() {
     updateRule,
     removeRule,
     ackEvent,
+    ackBatch,
+    scan,
   };
 }
 

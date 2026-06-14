@@ -66,9 +66,36 @@ const chart = computed(() => {
 
 async function apply(s) {
   if (!current.value) return;
+  const breakEven = Number(current.value.breakEvenPrice || current.value.break_even_price || 0);
+  const belowBe = breakEven > 0 && Number(s.price) < breakEven;
   try {
-    await ElMessageBox.confirm(`将售价改为 $${s.price}（${s.label || ''}）？将联动 M1 生成新 listing 版本`, '采纳跟价建议', { type: 'warning' });
+    await ElMessageBox.confirm(
+      `将建议售价改为 $${s.price}（${s.label || ''}）？此操作仅生成 M1 调价草稿，需到 M1 上架才真实改价。`,
+      '采纳跟价建议', { type: belowBe ? 'warning' : 'info' });
+  } catch { return; }
+  try {
     await repricing.apply(current.value.id, s.price);
+    await load();
+  } catch (e) {
+    // M2-P0-04: 后端拒绝低于保本价 → 二次危险确认后带 confirmBelowBreakeven 重试
+    if (e?.validation) {
+      try {
+        await ElMessageBox.confirm(
+          `$${s.price} 低于保本价 $${e.validation.breakEvenPrice ?? breakEven}，将亏本销售。仍生成草稿？（需到 M1 上架才真实改价）`,
+          '亏本调价确认', { type: 'warning', confirmButtonText: '仍然生成草稿', cancelButtonText: '取消' });
+      } catch { return; }
+      try { await repricing.apply(current.value.id, s.price, true); await load(); } catch {}
+    }
+  }
+}
+
+async function reject() {
+  if (!current.value) return;
+  try {
+    const { value } = await ElMessageBox.prompt('拒绝原因（可选）', '拒绝跟价建议', {
+      confirmButtonText: '确认拒绝', cancelButtonText: '取消', inputPlaceholder: '如：竞品已回价',
+    });
+    await repricing.reject(current.value.id, value || '');
     await load();
   } catch {}
 }
@@ -90,7 +117,9 @@ async function apply(s) {
       </template>
     </PageHeader>
 
-    <EmptyState v-if="!current && !repricing.loading.value" title="无跟价建议" description="后端暂未生成跟价建议" />
+    <EmptyState v-if="!current && !repricing.loading.value"
+      :title="statusFilter !== 'all' ? '当前筛选无结果' : '暂无重定价建议'"
+      :description="statusFilter !== 'all' ? '切换筛选条件或清除筛选查看全部建议' : '后端暂未生成跟价建议'" />
 
     <template v-if="current">
       <el-row :gutter="16" class="kpi-row">
@@ -123,21 +152,26 @@ async function apply(s) {
               <strong class="tnum" :class="row.recommended ? 'text-success' : ''">${{ row.expectedTotalProfit30d }}</strong>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="160">
+          <el-table-column label="操作" width="200">
             <template #default="{ row }">
-              <el-button v-if="row.recommended" type="primary" size="small" :disabled="current.status === 'applied'" @click="apply(row)">采用 ⭐</el-button>
-              <el-button v-else size="small" plain :disabled="current.status === 'applied'" @click="apply(row)">采用</el-button>
+              <el-button v-if="row.recommended" type="primary" size="small" :disabled="current.status === 'applied' || current.status === 'rejected'" @click="apply(row)">采用 ⭐</el-button>
+              <el-button v-else size="small" plain :disabled="current.status === 'applied' || current.status === 'rejected'" @click="apply(row)">采用</el-button>
             </template>
           </el-table-column>
           <template #mobile-actions="{ row }">
-            <el-button :type="row.recommended ? 'primary' : 'default'" size="small" :disabled="current.status === 'applied'" @click.stop="apply(row)">
+            <el-button :type="row.recommended ? 'primary' : 'default'" size="small" :disabled="current.status === 'applied' || current.status === 'rejected'" @click.stop="apply(row)">
               {{ row.recommended ? '采用 ⭐' : '采用' }}
             </el-button>
           </template>
         </ResponsiveTable>
+        <div style="margin-top: 12px; display: flex; gap: 8px; align-items: center">
+          <el-button size="small" plain type="danger" :disabled="current.status === 'applied' || current.status === 'rejected'" @click="reject">拒绝此建议</el-button>
+          <span v-if="current.status === 'rejected'" class="text-muted">该建议已拒绝</span>
+        </div>
         <p v-if="current.status === 'applied'" class="text-muted" style="margin-top: 8px">
-          已应用 → M1 version
+          已生成 M1 调价草稿 → version
           <span class="tnum">{{ current.m1VersionId || current.m1_listing_version_id }}</span>
+          （需到 M1 上架才真实生效）
         </p>
       </el-card>
     </template>
