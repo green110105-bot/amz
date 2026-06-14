@@ -2,6 +2,9 @@
 
 This repository follows the PRD-driven, multi-role workflow described in `PRD.md`.
 
+> **必读且强制：开发/修复/验证任何能力前，先读并遵守 [`CODEX.md`](CODEX.md) 的七步工作法。**
+> 核心铁律：测试绿 ≠ 可交付——必须叠加独立对抗式核验 + 全量重跑（`npm.cmd run check` EXIT=0）+ 真实探针，且不得为变绿而削弱安全不变量断言。安全不变量基线见 `codex22claude.md`。
+
 ## Default Mode
 - Work autonomously with minimal user interruption.
 - Account, payment, real-store authorization, and production write operations must be mocked or sandboxed until credentials are provided.

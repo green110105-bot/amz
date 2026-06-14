@@ -1,0 +1,253 @@
+✔ AUTH-15(b): SuggestionDrawer keys mock rendering off source meta, not readiness (2.7615ms)
+✖ AUTH-15(c): AmazonAuthCenter greys real-sync buttons in ads_mock_fixture mode (1.5142ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 49.3757
+
+✖ failing tests:
+
+test at tests\web\auth15-mock-source-rendering.test.mjs:29:1
+✖ AUTH-15(c): AmazonAuthCenter greys real-sync buttons in ads_mock_fixture mode (1.5142ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /:disabled="adsMockFixture"[^>]*@click="syncAll"|@click="syncAll"[^>]*:disabled="adsMockFixture"/. Input:
+  
+  '<script setup>\n' +
+    "import { computed, nextTick, onMounted, ref, watch } from 'vue';\n" +
+    "import { ElMessage, ElMessageBox } from 'element-plus';\n" +
+    "import { useRoute, useRouter } from 'vue-router';\n" +
+    "import PageHeader from '../components/PageHeader.vue';\n" +
+    "import { useLocalStore } from '../composables/useLocalStore';\n" +
+    "import { amazonIntegrationsApi } from '../api/integrations';\n" +
+    '\n' +
+    'const localStore = useLocalStore();\n' +
+    'const route = useRoute();\n' +
+    'const router = useRouter();\n' +
+    '\n' +
+    'const loading = ref(false);\n' +
+    "const saving = ref('');\n" +
+    "const syncing = ref('');\n" +
+    "const oauthLoading = ref('');\n" +
+    "const revoking = ref('');\n" +
+    'const status = ref(null);\n' +
+    'const diagnostics = ref(null);\n' +
+    'const oauthConfig = ref(null);\n' +
+    'const probeResult = ref(null);\n' +
+    'const lastResult = ref(null);\n' +
+    '// AUTH-03: marketplaceIds the backend discovered, shown as a read-only hint.\n' +
+    'const discoveredMarketplaceIds = ref([]);\n' +
+    "const activeStep = ref('credentials');\n" +
+    "const selectedStoreId = ref('');\n" +
+    'const advancedPanels = ref([]);\n' +
+    '\n' +
+    'const spapiForm = ref({\n' +
+    "  refreshToken: '',\n" +
+    "  sellingPartnerId: '',\n" +
+    "  region: 'NA',\n" +
+    '  // AUTH-03: no hardcoded US marketplace default. An EU/JP seller would otherwise be\n' +
+    "  // silently filled with the US marketplace and pull the wrong site's data. The\n" +
+    '  // placeholder still shows ATVPDKIKX0DER as a hint; discovered values back-fill below.\n' +
+    "  marketplaceIds: '',\n" +
+    '});\n' +
+    'const adsForm = ref({\n' +
+    "  refreshToken: '',\n" +
+    "  profileId: '',\n" +
+    "  region: 'NA',\n" +
+    '});\n' +
+    'const syncForm = ref({\n' +
+    '  since: new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10),\n' +
+    "  until: '',\n" +
+    '  settlementSince: new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10),\n' +
+    "  settlementUntil: '',\n" +
+    "  asins: '',\n" +
+    "  profileId: '',\n" +
+    '});\n' +
+    '\n' +
+    'const stores = computed(() => localStore.stores || []);\n' +
+    'const currentStore = computed(() => localStore.currentStore || null);\n' +
+    "const currentStoreId = computed(() => localStore.currentStoreId || currentStore.value?.id || '');\n" +
+    'const providers = computed(() => diagnostics.value?.providers || []);\n' +
+    'const providerStatusRows = computed(() => status.value?.providers || []);\n' +
+    "const spapiDiag = computed(() => providers.value.find((p) => p.provider === 'spapi') || null);\n" +
+    "const adsDiag = computed(() => providers.value.find((p) => p.provider === 'ads') || null);\n" +
+    "const spapiReadiness = computed(() => spapiDiag.value?.readiness || providerStatusRows.value.find((p) => p.provider === 'spapi')?.status || 'unknown');\n" +
+    "const adsReadiness = computed(() => adsDiag.value?.readiness || providerStatusRows.value.find((p) => p.provider === 'ads')?.status || 'unknown');\n" +
+    'const m3Impact = computed(() => diagnostics.value?.m3Impact || {});\n' +
+    '// AUTH-15(c): when M3 is reading fixtures (ADS_API_MOCK=1 → m3DataMode\n' +
+    "// 'ads_mock_fixture'), real Ads sync is meaningless and must be greyed out so\n" +
+    '// fixture data is never mistaken for a real sync result.\n' +
+    "const adsMockFixture = computed(() => m3Impact.value?.m3DataMode === 'ads_mock_fixture');\n" +
+    '// AUTH-07: a single global sync gate. While ANY sync is running, every sync button\n' +
+    '// (single + syncAll) is disabled, so the user cannot fire two concurrent syncs from\n' +
+    '// different buttons and trigger quota / token races (the backend has no in_progress\n' +
+    "// lock yet — that is carry-forward). syncing is a single string ('' when idle).\n" +
+    'const syncBusy = computed(() => !!syncing.value);\n' +
+    '// AUTH-07(b): the backend already returns a `steps` array from sync/all; surface it\n' +
+    '// as a per-step ok/error checklist instead of dropping it on the floor.\n' +
+    'const syncSteps = computed(() => {\n' +
+    '  const r = lastResult.value?.result;\n' +
+    '  return Array.isArray(r?.steps) ? r.steps : [];\n' +
+    '});\n' +
+    "const savedAdsProfileId = computed(() => providerStatusRows.value.find((p) => p.provider === 'ads')?.profileId || '');\n" +
+    'const oauthProviders = computed(() => oauthConfig.value?.providers || {});\n' +
+    'const spapiOAuthReady = computed(() => !!oauthProviders.value.spapi?.ready);\n' +
+    'const adsOAuthReady = computed(() => !!oauthProviders.value.ads?.ready);\n' +
+    '\n' +
+    '// AUTH-11: candidates surfaced directly from the OAuth callback redirect, so the\n' +
+    '// explicit profile-selection path does NOT depend on a second (easily-timed-out)\n' +
+    '// live probe.\n' +
+    'const adsProfileSelection = ref([]);\n' +
+    '\n' +
+    'const adsProfileCandidates = computed(() => {\n' +
+    '  const probeProviders = probeResult.value?.providers || diagnostics.value?.providers || [];\n' +
+    "  const ads = probeProviders.find((p) => p.provider === 'ads');\n" +
+    '  const checks = ads?.liveProbe?.checks || [];\n' +
+    '  const candidates = checks\n' +
+    "    .find((c) => c.name === 'ads_profiles_list')\n" +
+    '    ?.profileIdCandidates || [];\n' +
+    '  // Merge non-probe (callback) candidates with any probe-derived ones.\n' +
+    '  return [...new Set([...adsProfileSelection.value, ...candidates].map((v) => String(v)).filter(Boolean))];\n' +
+    '});\n' +
+    '\n' +
+    'const envRows = computed(() => {\n' +
+    '  const env = diagnostics.value?.environment || {};\n' +
+    '  return [\n' +
+    '    {\n' +
+    "      key: 'CREDENTIAL_ENC_KEY',\n" +
+    '      configured: !!env.credentialEncryption?.ready,\n' +
+    "      source: env.credentialEncryption?.requiredEnv || 'CREDENTIAL_ENC_KEY',\n" +
+    "      desc: '加密保存 refresh token；未就绪时禁止落库真实凭证。',\n" +
+    '    },\n' +
+    '    {\n' +
+    "      key: 'SPAPI_OAUTH_APPLICATION_ID',\n" +
+    '      configured: !!oauthProviders.value.spapi?.appIdConfigured,\n' +
+    "      source: oauthProviders.value.spapi?.appIdSource || 'SPAPI_OAUTH_APPLICATION_ID',\n" +
+    "      desc: 'Seller Central 公共应用 application_id；一键授权 SP-API 必需。',\n" +
+    '    },\n' +
+    '    {\n' +
+    "      key: 'SPAPI_OAUTH_LOGIN_URI',\n" +
+    '      configured: !!oauthProviders.value.spapi?.loginUri,\n' +
+    "      source: oauthProviders.value.spapi?.loginUri || 'inferred from request origin',\n" +
+    "      desc: 'SP-API 公共应用 Login URI；Amazon 授权中转会回到这里再进入 callback。',\n" +
+    '    },\n' +
+    '    {\n' +
+    "      key: 'SPAPI_OAUTH_REDIRECT_URI',\n" +
+    '      configured: !!oauthProviders.value.spapi?.redirectUri,\n' +
+    "      source: oauthProviders.value.spapi?.redirectUri || 'inferred from request origin',\n" +
+    "      desc: 'SP-API OAuth redirect URI；必须在 Seller Central 应用配置中登记。',\n" +
+    '    },\n' +
+    '    {\n' +
+    "      key: 'SPAPI_LWA_CLIENT_ID',\n" +
+    '      configured: !!env.spapi?.clientId?.configured,\n' +
+    "      source: env.spapi?.clientId?.source || 'SPAPI_LWA_CLIENT_ID',\n" +
+    "      desc: 'SP-API LWA 应用 client id。',\n" +
+    '    },\n' +
+    '    {\n' +
+    "      key: 'SPAPI_LWA_CLIENT_SECRET',\n" +
+    '      configured: !!env.spapi?.clientSecret?.configured,\n' +
+    "      source: env.spapi?.clientSecret?.source || 'SPAPI_LWA_CLIENT_SECRET',\n" +
+    "      desc: 'SP-API LWA 应用 client secret。',\n" +
+    '    },\n' +
+    '    {\n' +
+    "      key: 'ADS_OAUTH_REDIRECT_URI',\n" +
+    '      configured: !!oauthProviders.value.ads?.redirectUri,\n' +
+    "      source: oauthProviders.value.ads?.redirectUri || 'inferred from request origin',\n" +
+    "      desc: 'Amazon Ads/LWA redirect URI；必须在 LWA security profile 中登记。',\n" +
+    '    },\n' +
+    '    {\n' +
+    "      key: 'ADS_LWA_CLIENT_ID / ADS_CLIENT_ID',\n" +
+    '      configured: !!env.ads?.clientId?.configured,\n' +
+    "      source: env.ads?.clientId?.source || 'ADS_LWA_CLIENT_ID',\n" +
+    "      desc: 'Amazon Ads LWA 应用 client id；兼容旧变量 ADS_CLIENT_ID。',\n" +
+    '    },\n' +
+    '    {\n' +
+    "      key: 'ADS_LWA_CLIENT_SECRET / ADS_CLIENT_SECRET',\n" +
+    '      configured: !!env.ads?.clientSecret?.configured,\n' +
+    "      source: env.ads?.clientSecret?.source || 'ADS_LWA_CLIENT_SECRET',\n" +
+    "      desc: 'Amazon Ads LWA 应用 client secret；兼容旧变量 ADS_CLIENT_SECRET。',\n" +
+    '    },\n' +
+    '  ];\n' +
+    '});\n' +
+    '\n' +
+    'watch(currentStoreId, (id) => {\n' +
+    "  selectedStoreId.value = id || '';\n" +
+    '}, { immediate: true });\n' +
+    '\n' +
+    'function splitList(value) {\n' +
+    "  return String(value || '')\n" +
+    '    .split(/[\\s,，;；]+/)\n' +
+    '    .map((s) => s.trim())\n' +
+    '    .filter(Boolean);\n' +
+    '}\n' +
+    'function toIsoDateStart(day) {\n' +
+    '  return day ? `${day}T00:00:00Z` : undefined;\n' +
+    '}\n' +
+    'function toIsoDateEnd(day) {\n' +
+    '  return day ? `${day}T23:59:59Z` : undefined;\n' +
+    '}\n' +
+    '// AUTH-02(a): exhaustive readiness → tag-type mapping. NO default fall-through to\n' +
+    "// 'success'. live_partial and mock_ready are explicitly WARNING (not green), and\n" +
+    "// 'active' is no longer treated as ready-green (it only means a credential row\n" +
+    "// exists, which can still be半就绪). Anything unknown is neutral 'info'.\n" +
+    'function readinessType(value) {\n' +
+    "  if (value === 'ready' || value === 'live_ok') return 'success';\n" +
+    "  if (['live_partial', 'mock_ready', 'blocked', 'missing', 'needs_attention'].includes(value)) return 'warning';\n" +
+    "  if (value === 'live_error' || value === 'revoked') return 'danger';\n" +
+    "  return 'info';\n" +
+    '}\n' +
+    'function formatJson(value) {\n' +
+    '  return JSON.stringify(value || {}, null, 2);\n' +
+    '}\n' +
+    'function maskValue(value) {\n' +
+    "  if (!value) return '-';\n" +
+    '  const s = String(value);\n' +
+    '  return s.length <= 8 ? s : `${s.slice(0, 4)}***${s.slice(-4)}`;\n' +
+    '}\n' +
+    'function firstProfileFrom(result) {\n' +
+    "  const ads = result?.providers?.find((p) => p.provider === 'ads');\n" +
+    '  const checks = ads?.liveProbe?.checks || [];\n' +
+    "  return checks.find((c) => c.name === 'ads_profiles_list')?.profileIdCandidates?.[0] || '';\n" +
+    '}\n' +
+    'function applyStatusToForms(nextStatus) {\n' +
+    '  const rows = nextStatus?.providers || [];\n' +
+    "  const spapi = rows.find((p) => p.provider === 'spapi');\n" +
+    "  const ads = rows.find((p) => p.provider === 'ads');\n" +
+    '  if (spapi?.region) spapiForm.value.region = spapi.region;\n' +
+    '  // AUTH-03: when the backend has discovered real marketplaceIds, unconditionally\n' +
+    '  // overwrite the form value. The previous code AND-ed in a "form field still empty"\n' +
+    '  // guard that was永假 here (status load happens after the form may已被填), so a\n' +
+    '  // discovered EU/JP site never replaced a stale value. discoveredMarketplaceIds\n' +
+    '  // drives a read-only "已自动发现站点" hint in the template.\n' +
+    '  if (spapi?.marketplaceIds?.length) {\n' +
+    "    spapiForm.value.marketplaceIds = spapi.marketplaceIds.join('\\n');\n" +
+    '    discoveredMarketplaceIds.value = spapi.marketplaceIds.slice();\n' +
+    '  }\n' +
+    '  if (ads?.region) adsForm.value.region = ads.region;\n' +
+    '  if (ads?.profileId && !adsForm.value.profileId) adsForm.value.profileId = String(ads.profileId);\n' +
+    '  if (ads?.profileId && !syncForm.value.profileId) syncForm.value.profileId = String(ads.profileId);\n' +
+    '}\n' +
+    'async function ensureHydrated() {\n' +
+    '  if (!localStore.hydrated) await localStore.hydrate?.();\n' +
+    "  selectedStoreId.value = currentStoreId.value || '';\n" +
+    '}\n' +
+    'async function capture(label, fn) {\n' +
+    '  try {\n' +
+    '    const result = await fn();\n' +
+    "    lastResult.value = { label, ok: true, result, at: new Date().toLocaleString('zh-CN', { hour12: false }) };\n" +
+    '    return result;\n' +
+    '  } catch (e) {\n' +
+    '    lastResult.value = { label, ok: false, error: e?.raw || e?.message || String'... 40758 more characters
+  
+      at TestContext.<anonymous> (file:///D:/amz/tests/web/auth15-mock-source-rendering.test.mjs:34:10)
+      at async Test.run (node:internal/test_runner/test:1110:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:785:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '<script setup>\nimport { computed, nextTick, onMounted, ref, watch } from \'vue\';\nimport { ElMessage, ElMessageBox } from \'element-plus\';\nimport { useRoute, useRouter } from \'vue-router\';\nimport PageHeader from \'../components/PageHeader.vue\';\nimport { useLocalStore } from \'../composables/useLocalStore\';\nimport { amazonIntegrationsApi } from \'../api/integrations\';\n\nconst localStore = useLocalStore();\nconst route = useRoute();\nconst router = useRouter();\n\nconst loading = ref(false);\nconst saving = ref(\'\');\nconst syncing = ref(\'\');\nconst oauthLoading = ref(\'\');\nconst revoking = ref(\'\');\nconst status = ref(null);\nconst diagnostics = ref(null);\nconst oauthConfig = ref(null);\nconst probeResult = ref(null);\nconst lastResult = ref(null);\n// AUTH-03: marketplaceIds the backend discovered, shown as a read-only hint.\nconst discoveredMarketplaceIds = ref([]);\nconst activeStep = ref(\'credentials\');\nconst selectedStoreId = ref(\'\');\nconst advancedPanels = ref([]);\n\nconst spapiForm = ref({\n  refreshToken: \'\',\n  sellingPartnerId: \'\',\n  region: \'NA\',\n  // AUTH-03: no hardcoded US marketplace default. An EU/JP seller would otherwise be\n  // silently filled with the US marketplace and pull the wrong site\'s data. The\n  // placeholder still shows ATVPDKIKX0DER as a hint; discovered values back-fill below.\n  marketplaceIds: \'\',\n});\nconst adsForm = ref({\n  refreshToken: \'\',\n  profileId: \'\',\n  region: \'NA\',\n});\nconst syncForm = ref({\n  since: new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10),\n  until: \'\',\n  settlementSince: new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10),\n  settlementUntil: \'\',\n  asins: \'\',\n  profileId: \'\',\n});\n\nconst stores = computed(() => localStore.stores || []);\nconst currentStore = computed(() => localStore.currentStore || null);\nconst currentStoreId = computed(() => localStore.currentStoreId || currentStore.value?.id || \'\');\nconst providers = computed(() => diagnostics.value?.providers || []);\nconst providerStatusRows = computed(() => status.value?.providers || []);\nconst spapiDiag = computed(() => providers.value.find((p) => p.provider === \'spapi\') || null);\nconst adsDiag = computed(() => providers.value.find((p) => p.provider === \'ads\') || null);\nconst spapiReadiness = computed(() => spapiDiag.value?.readiness || providerStatusRows.value.find((p) => p.provider === \'spapi\')?.status || \'unknown\');\nconst adsReadiness = computed(() => adsDiag.value?.readiness || providerStatusRows.value.find((p) => p.provider === \'ads\')?.status || \'unknown\');\nconst m3Impact = computed(() => diagnostics.value?.m3Impact || {});\n// AUTH-15(c): when M3 is reading fixtures (ADS_API_MOCK=1 → m3DataMode\n// \'ads_mock_fixture\'), real Ads sync is meaningless and must be greyed out so\n// fixture data is never mistaken for a real sync result.\nconst adsMockFixture = computed(() => m3Impact.value?.m3DataMode === \'ads_mock_fixture\');\n// AUTH-07: a single global sync gate. While ANY sync is running, every sync button\n// (single + syncAll) is disabled, so the user cannot fire two concurrent syncs from\n// different buttons and trigger quota / token races (the backend has no in_progress\n// lock yet — that is carry-forward). syncing is a single string (\'\' when idle).\nconst syncBusy = computed(() => !!syncing.value);\n// AUTH-07(b): the backend already returns a `steps` array from sync/all; surface it\n// as a per-step ok/error checklist instead of dropping it on the floor.\nconst syncSteps = computed(() => {\n  const r = lastResult.value?.result;\n  return Array.isArray(r?.steps) ? r.steps : [];\n});\nconst savedAdsProfileId = computed(() => providerStatusRows.value.find((p) => p.provider === \'ads\')?.profileId || \'\');\nconst oauthProviders = computed(() => oauthConfig.value?.providers || {});\nconst spapiOAuthReady = computed(() => !!oauthProviders.value.spapi?.ready);\nconst adsOAuthReady = computed(() => !!oauthProviders.value.ads?.ready);\n\n// AUTH-11: candidates surfaced directly from the OAuth callback redirect, so the\n// explicit profile-selection path does NOT depend on a second (easily-timed-out)\n// live probe.\nconst adsProfileSelection = ref([]);\n\nconst adsProfileCandidates = computed(() => {\n  const probeProviders = probeResult.value?.providers || diagnostics.value?.providers || [];\n  const ads = probeProviders.find((p) => p.provider === \'ads\');\n  const checks = ads?.liveProbe?.checks || [];\n  const candidates = checks\n    .find((c) => c.name === \'ads_profiles_list\')\n    ?.profileIdCandidates || [];\n  // Merge non-probe (callback) candidates with any probe-derived ones.\n  return [...new Set([...adsProfileSelection.value, ...candidates].map((v) => String(v)).filter(Boolean))];\n});\n\nconst envRows = computed(() => {\n  const env = diagnostics.value?.environment || {};\n  return [\n    {\n      key: \'CREDENTIAL_ENC_KEY\',\n      configured: !!env.credentialEncryption?.ready,\n      source: env.credentialEncryption?.requiredEnv || \'CREDENTIAL_ENC_KEY\',\n      desc: \'加密保存 refresh token；未就绪时禁止落库真实凭证。\',\n    },\n    {\n      key: \'SPAPI_OAUTH_APPLICATION_ID\',\n      configured: !!oauthProviders.value.spapi?.appIdConfigured,\n      source: oauthProviders.value.spapi?.appIdSource || \'SPAPI_OAUTH_APPLICATION_ID\',\n      desc: \'Seller Central 公共应用 application_id；一键授权 SP-API 必需。\',\n    },\n    {\n      key: \'SPAPI_OAUTH_LOGIN_URI\',\n      configured: !!oauthProviders.value.spapi?.loginUri,\n      source: oauthProviders.value.spapi?.loginUri || \'inferred from request origin\',\n      desc: \'SP-API 公共应用 Login URI；Amazon 授权中转会回到这里再进入 callback。\',\n    },\n    {\n      key: \'SPAPI_OAUTH_REDIRECT_URI\',\n      configured: !!oauthProviders.value.spapi?.redirectUri,\n      source: oauthProviders.value.spapi?.redirectUri || \'inferred from request origin\',\n      desc: \'SP-API OAuth redirect URI；必须在 Seller Central 应用配置中登记。\',\n    },\n    {\n      key: \'SPAPI_LWA_CLIENT_ID\',\n      configured: !!env.spapi?.clientId?.configured,\n      source: env.spapi?.clientId?.source || \'SPAPI_LWA_CLIENT_ID\',\n      desc: \'SP-API LWA 应用 client id。\',\n    },\n    {\n      key: \'SPAPI_LWA_CLIENT_SECRET\',\n      configured: !!env.spapi?.clientSecret?.configured,\n      source: env.spapi?.clientSecret?.source || \'SPAPI_LWA_CLIENT_SECRET\',\n      desc: \'SP-API LWA 应用 client secret。\',\n    },\n    {\n      key: \'ADS_OAUTH_REDIRECT_URI\',\n      configured: !!oauthProviders.value.ads?.redirectUri,\n      source: oauthProviders.value.ads?.redirectUri || \'inferred from request origin\',\n      desc: \'Amazon Ads/LWA redirect URI；必须在 LWA security profile 中登记。\',\n    },\n    {\n      key: \'ADS_LWA_CLIENT_ID / ADS_CLIENT_ID\',\n      configured: !!env.ads?.clientId?.configured,\n      source: env.ads?.clientId?.source || \'ADS_LWA_CLIENT_ID\',\n      desc: \'Amazon Ads LWA 应用 client id；兼容旧变量 ADS_CLIENT_ID。\',\n    },\n    {\n      key: \'ADS_LWA_CLIENT_SECRET / ADS_CLIENT_SECRET\',\n      configured: !!env.ads?.clientSecret?.configured,\n      source: env.ads?.clientSecret?.source || \'ADS_LWA_CLIENT_SECRET\',\n      desc: \'Amazon Ads LWA 应用 client secret；兼容旧变量 ADS_CLIENT_SECRET。\',\n    },\n  ];\n});\n\nwatch(currentStoreId, (id) => {\n  selectedStoreId.value = id || \'\';\n}, { immediate: true });\n\nfunction splitList(value) {\n  return String(value || \'\')\n    .split(/[\\s,，;；]+/)\n    .map((s) => s.trim())\n    .filter(Boolean);\n}\nfunction toIsoDateStart(day) {\n  return day ? `${day}T00:00:00Z` : undefined;\n}\nfunction toIsoDateEnd(day) {\n  return day ? `${day}T23:59:59Z` : undefined;\n}\n// AUTH-02(a): exhaustive readiness → tag-type mapping. NO default fall-through to\n// \'success\'. live_partial and mock_ready are explicitly WARNING (not green), and\n// \'active\' is no longer treated as ready-green (it only means a credential row\n// exists, which can still be半就绪). Anything unknown is neutral \'info\'.\nfunction readinessType(value) {\n  if (value === \'ready\' || value === \'live_ok\') return \'success\';\n  if ([\'live_partial\', \'mock_ready\', \'blocked\', \'missing\', \'needs_attention\'].includes(value)) return \'warning\';\n  if (value === \'live_error\' || value === \'revoked\') return \'danger\';\n  return \'info\';\n}\nfunction formatJson(value) {\n  return JSON.stringify(value || {}, null, 2);\n}\nfunction maskValue(value) {\n  if (!value) return \'-\';\n  const s = String(value);\n  return s.length <= 8 ? s : `${s.slice(0, 4)}***${s.slice(-4)}`;\n}\nfunction firstProfileFrom(result) {\n  const ads = result?.providers?.find((p) => p.provider === \'ads\');\n  const checks = ads?.liveProbe?.checks || [];\n  return checks.find((c) => c.name === \'ads_profiles_list\')?.profileIdCandidates?.[0] || \'\';\n}\nfunction applyStatusToForms(nextStatus) {\n  const rows = nextStatus?.providers || [];\n  const spapi = rows.find((p) => p.provider === \'spapi\');\n  const ads = rows.find((p) => p.provider === \'ads\');\n  if (spapi?.region) spapiForm.value.region = spapi.region;\n  // AUTH-03: when the backend has discovered real marketplaceIds, unconditionally\n  // overwrite the form value. The previous code AND-ed in a "form field still empty"\n  // guard that was永假 here (status load happens after the form may已被填), so a\n  // discovered EU/JP site never replaced a stale value. discoveredMarketplaceIds\n  // drives a read-only "已自动发现站点" hint in the template.\n  if (spapi?.marketplaceIds?.length) {\n    spapiForm.value.marketplaceIds = spapi.marketplaceIds.join(\'\\n\');\n    discoveredMarketplaceIds.value = spapi.marketplaceIds.slice();\n  }\n  if (ads?.region) adsForm.value.region = ads.region;\n  if (ads?.profileId && !adsForm.value.profileId) adsForm.value.profileId = String(ads.profileId);\n  if (ads?.profileId && !syncForm.value.profileId) syncForm.value.profileId = String(ads.profileId);\n}\nasync function ensureHydrated() {\n  if (!localStore.hydrated) await localStore.hydrate?.();\n  selectedStoreId.value = currentStoreId.value || \'\';\n}\nasync function capture(label, fn) {\n  try {\n    const result = await fn();\n    lastResult.value = { label, ok: true, result, at: new Date().toLocaleString(\'zh-CN\', { hour12: false }) };\n    return result;\n  } catch (e) {\n    lastResult.value = { label, ok: false, error: e?.raw || e?.message || String'... 40758 more characters,
+    expected: /:disabled="adsMockFixture"[^>]*@click="syncAll"|@click="syncAll"[^>]*:disabled="adsMockFixture"/,
+    operator: 'match',
+    diff: 'simple'
+  }

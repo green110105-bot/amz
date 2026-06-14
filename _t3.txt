@@ -1,0 +1,20 @@
+), 0, 'real-write row must keep reverted=0');
+});
+
+test('X-P0-05-03: local-reversible action STILL auto-reverts (dispatchedInverse===true) — contract not over-broadened', async () => {
+  // Regression guard: blocking real writes must not accidentally block legitimate
+  // local reversals. A plain ADD_NEGATIVE_KEYWORD remains auto-reversible.
+  const c = createNegative(getDbInstance(), USER_ID, STORE_ID, {
+    term: 'qa-xp005-local-' + randomBytes(6).toString('hex'),
+    matchType: 'exact', campaignId: globalThis.__qaCmpId,
+  });
+  const log = await lastLog('ADD_NEGATIVE_KEYWORD');
+  assert.ok(log && log.resourceId === c.id);
+  const rv = revertAuditLog(USER_ID, STORE_ID, log.id);
+  assert.equal(rv.dispatchedInverse, true, 'local reversible action must still auto-revert');
+  assert.equal(rawReverted(log.id), 1, 'local reversible row is marked reverted=1');
+  const row = getDbInstance().prepare('SELECT id FROM lx_negatives WHERE id=?').get(c.id);
+  assert.equal(row, undefined, 'inverse actually deleted the negative');
+});
+
+test('

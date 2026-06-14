@@ -1,0 +1,1 @@
+["import assert from 'node:assert/strict';\r","import { readFileSync } from 'node:fs';\r","import test from 'node:test';\r","\r","const read = (path) => readFileSync(path, 'utf8');\r"]

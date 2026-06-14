@@ -1,0 +1,1367 @@
+diff --git a/tests/qa/m3-button-level.test.mjs b/tests/qa/m3-button-level.test.mjs
+index 3f9a8c6..3136b25 100644
+--- a/tests/qa/m3-button-level.test.mjs
++++ b/tests/qa/m3-button-level.test.mjs
+@@ -25,6 +25,17 @@ const {
+   appendAuditLog, listAuditLogs, revertAuditLog,
+ } = await import('../../apps/api/src/data-store.mjs');
+ const { syncAdsHierarchy } = await import('../../apps/api/src/integrations/ads-api/sync/campaigns-sync.mjs');
++const {
++  createPortfolio,
++  createCampaign,
++  createAdGroup,
++  createAd,
++  createTargeting,
++  updateTargeting,
++  createNegative,
++  createKwGrabbing,
++  createAmcAudience,
++} = await import('../../apps/api/src/data-store-ads.mjs');
+ 
+ // -----------------------------------------------------------------------------
+ // Test scaffold — use the auto-seeded demo user (the only user that gets the
+@@ -89,6 +100,42 @@ async function callStore(method, path, opts) {
+   return { status: res.status, body: json };
+ }
+ 
++function assertQueuedWrite(r, primitive) {
++  assert.equal(r.status, 201);
++  assert.equal(r.body.state, 'queued');
++  assert.equal(r.body.dryRun, true);
++  assert.equal(r.body.auditRequired, true);
++  assert.equal(r.body.typedAction?.actionPrimitive, primitive);
++  assert.equal(r.body.guardrail?.status, 'needs_review');
++  return r.body;
++}
++
++function rowCount(table) {
++  const db = getDbInstance();
++  return db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE user_id=? AND store_id=?`).get(USER_ID, STORE_ID).n;
++}
++
++async function assertQueueDryRunRoundTrip(item) {
++  // M3-P0-03/04: LX manual writes are needs_review and CANNOT be approved
++  // (approve_requires_passed_guardrail). They also cannot execute without
++  // approval — assert that block first, then dry-run via the explicit force
++  // path (operator override) so the run still records dry_run + revert.
++  const approveAttempt = await callAds('POST', '/api/v1/store/ads/action-queue/' + item.id + '/approve', { body: { note: 'qa approve attempt' } });
++  assert.equal(approveAttempt.status, 400);
++  assert.match(approveAttempt.body.message, /approve_requires_passed_guardrail/);
++  const blocked = await callAds('POST', '/api/v1/store/ads/action-queue/' + item.id + '/execute', { body: {} });
++  assert.equal(blocked.status, 400);
++  assert.match(blocked.body.message, /approval_required/);
++  const executed = await callAds('POST', '/api/v1/store/ads/action-queue/' + item.id + '/execute', { body: { force: true } });
++  assert.equal(executed.status, 200);
++  assert.equal(executed.body.state, 'executed');
++  assert.equal(executed.body.latestRun.dryRun, true);
++  const reverted = await callAds('POST', '/api/v1/store/ads/action-queue/' + item.id + '/revert', { body: { reason: 'qa revert queued lx write' } });
++  assert.equal(reverted.status, 200);
++  assert.equal(reverted.body.state, 'reverted');
++  return reverted.body;
++}
++
+ // =============================================================================
+ // 1. Auth / scoping
+ // =============================================================================
+@@ -189,6 +236,50 @@ test('M3-strat-12: DELETE /strategies/:id removes', async () => {
+   assert.equal(after.status, 404);
+ });
+ 
++test('M3-goal-01: GET /goal-profile returns default Strategy OS guardrails', async () => {
++  const r = await callAds('GET', '/api/v1/store/ads/goal-profile');
++  assert.equal(r.status, 200);
++  assert.equal(r.body.primaryGoal, 'balanced_profit');
++  assert.equal(r.body.guardrailPolicy.realWriteEnabled, false);
++  assert.ok(Array.isArray(r.body.guardrailPolicy.requireReviewPrimitives));
++  assert.ok(r.body.budgetBoundary.bidChangePctMax > 0);
++});
++
++test('M3-goal-02: PUT /goal-profile persists protected entities and affects suggestion guardrails', async () => {
++  const list = await callAds('GET', '/api/v1/store/ads/suggestions', { qs: { state: 'pending' } });
++  const sug = list.body.items.find((x) => x.entity?.sku) || list.body.items[0];
++  assert.ok(sug?.id, 'need a pending suggestion');
++  const sku = sug.entity?.sku || 'QA-SKU';
++
++  const updated = await callAds('PUT', '/api/v1/store/ads/goal-profile', {
++    body: {
++      primaryGoal: 'profit_first',
++      riskPreference: 'conservative',
++      automationLevel: 'guarded_auto',
++      protectedEntities: { skus: [sku] },
++      budgetBoundary: { bidChangePctMax: 0.1, dailyBudgetIncreasePctMax: 0.08 },
++      guardrailPolicy: { minConfidenceToAutoExecute: 0.9, realWriteEnabled: true },
++    },
++  });
++  assert.equal(updated.status, 200);
++  assert.equal(updated.body.primaryGoal, 'profit_first');
++  assert.equal(updated.body.guardrailPolicy.realWriteEnabled, false);
++  assert.deepEqual(updated.body.protectedEntities.skus, [sku]);
++
++  const fresh = await callAds('GET', '/api/v1/store/ads/suggestions/' + sug.id);
++  assert.equal(fresh.status, 200);
++  assert.equal(fresh.body.guardrail.profileSnapshot.primaryGoal, 'profit_first');
++  if (fresh.body.entity?.sku === sku) {
++    assert.ok(fresh.body.guardrail.reasons.includes('profile_protected_entity'));
++    assert.equal(fresh.body.guardrail.gates.protectedEntity, 'profile_protected');
++  }
++});
++
++test('M3-goal-03: PUT /goal-profile rejects invalid enum values', async () => {
++  const r = await callAds('PUT', '/api/v1/store/ads/goal-profile', { body: { primaryGoal: 'magic' } });
++  assert.equal(r.status, 400);
++});
++
+ // =============================================================================
+ // 3. Suggestions (3.2)
+ // =============================================================================
+@@ -198,6 +289,29 @@ test('M3-sug-01: GET /suggestions lists', async () => {
+   assert.ok(Array.isArray(r.body.items));
+ });
+ 
++test('M3-sug-01b: suggestions expose Strategy OS execution contract', async () => {
++  const r = await callAds('GET', '/api/v1/store/ads/suggestions');
++  assert.equal(r.status, 200);
++  const item = r.body.items[0];
++  assert.ok(item, 'need a seeded suggestion');
++  assert.ok(item.typedAction?.actionPrimitive, 'typedAction.actionPrimitive is required');
++  assert.equal(item.typedAction.dryRun, true);
++  assert.equal(item.typedAction.auditRequired, true);
++  assert.ok(Array.isArray(item.evidenceRefs), 'evidenceRefs must be an array');
++  assert.ok(item.evidenceRefs[0]?.surfaceKey, 'evidenceRef.surfaceKey is required');
++  assert.ok(item.evidenceRefs[0]?.routePath, 'evidenceRef.routePath is required');
++  assert.equal(typeof item.evidenceRefs[0]?.routeQuery, 'object');
++  assert.ok(['passed', 'needs_review', 'blocked'].includes(item.guardrail?.status));
++  assert.equal(item.guardrail.dryRunOnly, true);
++  assert.ok(item.guardrail.profileSnapshot?.primaryGoal, 'guardrail.profileSnapshot is required');
++  assert.equal(typeof item.rollback?.reversible, 'boolean');
++  assert.equal(item.sourceMeta?.source, 'mock');
++  assert.equal(item.sourceMeta?.realWriteEnabled, false);
++  assert.ok(item.sourceMeta?.goalProfile?.automationLevel, 'sourceMeta.goalProfile is required');
++  assert.ok(item.impactEstimate?.monthly, 'impactEstimate.monthly is required');
++  assert.ok(item.confidenceBreakdown?.final !== undefined, 'confidenceBreakdown.final is required');
++});
++
+ test('M3-sug-02: GET /suggestions?state=pending filters', async () => {
+   const r = await callAds('GET', '/api/v1/store/ads/suggestions', { qs: { state: 'pending' } });
+   for (const it of r.body.items) assert.equal(it.state, 'pending');
+@@ -242,6 +356,211 @@ test('M3-sug-07: POST /suggestions/:id/accept on unknown id → 404', async () =
+   assert.equal(r.status, 404);
+ });
+ 
++// M3-P0-03/M3-P0-04: approve is gated on a passing guardrail. Seed a suggestion
++// whose server-recomputed guardrail is 'passed' (ADJUST_BID, confident, evidence
++// present) so the approve→execute→revert happy path is exercised honestly.
++function seedPassedSuggestion(id) {
++  const db = getDbInstance();
++  const now = new Date().toISOString();
++  db.prepare(`INSERT INTO ad_suggestions(id,user_id,store_id,time_bucket,severity,action_type,entity,title,summary,detail,confidence,evidence,state,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
++    id, USER_ID, STORE_ID, now, JSON.stringify({ level: 'P2' }), JSON.stringify({ primitive: 'ADJUST_BID', label: '调竞价' }),
++    JSON.stringify({ kind: 'keyword', keyword: 'generic widget ' + id, campaignId: 'c1', adGroupId: 'g1', targetingId: 't1' }),
++    'qa passed', 's', 'd', 0.82,
++    JSON.stringify([{ label: 'acos', value: '30%', signal: 'warn' }, { label: 'spend', value: '$100', signal: 'info' }]),
++    'pending', now,
++  );
++  return id;
++}
++
++test('M3-aq-01: action queue add/approve/execute/revert dry-run loop', async () => {
++  const sugId = seedPassedSuggestion('sug-qa-aq01');
++  const sug = (await callAds('GET', '/api/v1/store/ads/suggestions/' + sugId)).body;
++  assert.equal(sug.guardrail?.status, 'passed', 'seeded suggestion should have a passed guardrail');
++
++  const enq = await callAds('POST', '/api/v1/store/ads/suggestions/' + sug.id + '/enqueue', { body: { note: 'qa queue' } });
++  assert.equal(enq.status, 201);
++  assert.equal(enq.body.suggestionId, sug.id);
++  assert.equal(enq.body.state, 'queued');
++  assert.ok(enq.body.typedAction?.actionPrimitive);
++  assert.equal(enq.body.guardrail?.status, 'passed');
++
++  const dup = await callAds('POST', '/api/v1/store/ads/action-queue', { body: { suggestionId: sug.id } });
++  assert.equal(dup.status, 200);
++  assert.equal(dup.body.duplicate, true);
++
++  const approved = await callAds('POST', '/api/v1/store/ads/action-queue/' + enq.body.id + '/approve', { body: { note: 'qa approve' } });
++  assert.equal(approved.status, 200);
++  assert.equal(approved.body.state, 'approved');
++  assert.ok(approved.body.approvedAt);
++
++  const executed = await callAds('POST', '/api/v1/store/ads/action-queue/' + enq.body.id + '/execute', { body: {} });
++  assert.equal(executed.status, 200);
++  assert.equal(executed.body.state, 'executed');
++  assert.equal(executed.body.latestRun.status, 'dry_run_success');
++  assert.equal(executed.body.latestRun.dryRun, true);
++
++  const freshSug = await callAds('GET', '/api/v1/store/ads/suggestions/' + sug.id);
++  assert.equal(freshSug.body.state, 'observing');
++
++  const runs = await callAds('GET', '/api/v1/store/ads/action-runs', { qs: { queueItemId: enq.body.id } });
++  assert.equal(runs.status, 200);
++  assert.ok(runs.body.items.some((x) => x.status === 'dry_run_success'));
++
++  const reverted = await callAds('POST', '/api/v1/store/ads/action-queue/' + enq.body.id + '/revert', { body: { reason: 'qa revert action queue' } });
++  assert.equal(reverted.status, 200);
++  assert.equal(reverted.body.state, 'reverted');
++
++  const revertedSug = await callAds('GET', '/api/v1/store/ads/suggestions/' + sug.id);
++  assert.equal(revertedSug.body.state, 'pending');
++});
++
++test('M3-aq-02: batch approve only releases passed-guardrail queued actions before dry-run', async () => {
++  const sugId = seedPassedSuggestion('sug-qa-aq02');
++  const enq = await callAds('POST', '/api/v1/store/ads/action-queue', { body: { suggestionId: sugId, note: 'qa batch' } });
++  assert.ok([200, 201].includes(enq.status));
++  const batch = await callAds('POST', '/api/v1/store/ads/action-queue/execute-batch', { body: { ids: [enq.body.id], approve: true } });
++  assert.equal(batch.status, 200);
++  assert.equal(batch.body.total, 1);
++  assert.equal(batch.body.succeeded, 1);
++  assert.equal(batch.body.failed, 0);
++  assert.deepEqual(batch.body.skipped, []);
++});
++
++// M3-P0-02: batch approve must skip (never auto-approve) needs_review items.
++test('M3-P0-02: batch{approve:true} skips needs_review, executes passed', async () => {
++  const passedId = seedPassedSuggestion('sug-qa-p002-pass');
++  const list = await callAds('GET', '/api/v1/store/ads/suggestions', { qs: { state: 'pending' } });
++  const needsReview = list.body.items.find((x) => x.guardrail?.status === 'needs_review');
++  assert.ok(needsReview?.id, 'need a needs_review suggestion');
++
++  const enqPassed = await callAds('POST', '/api/v1/store/ads/action-queue', { body: { suggestionId: passedId } });
++  const enqNeeds = await callAds('POST', '/api/v1/store/ads/action-queue', { body: { suggestionId: needsReview.id } });
++  assert.equal(enqNeeds.body.guardrail.status, 'needs_review');
++
++  const batch = await callAds('POST', '/api/v1/store/ads/action-queue/execute-batch', {
++    body: { ids: [enqNeeds.body.id, enqPassed.body.id], approve: true },
++  });
++  assert.equal(batch.status, 200);
++  // needs_review item: not executed, still queued, surfaced in skipped[]
++  assert.ok(batch.body.skipped.some((x) => x.id === enqNeeds.body.id), 'needs_review must be skipped');
++  const needsAfter = await callAds('GET', '/api/v1/store/ads/action-queue/' + enqNeeds.body.id);
++  assert.equal(needsAfter.body.state, 'queued');
++  // passed item executed
++  const passedAfter = await callAds('GET', '/api/v1/store/ads/action-queue/' + enqPassed.body.id);
++  assert.equal(passedAfter.body.state, 'executed');
++});
++
++// M3-P0-03: approveActionQueueItem rejects non-passed guardrail.
++test('M3-P0-03: approve on needs_review throws approve_requires_passed_guardrail', async () => {
++  const list = await callAds('GET', '/api/v1/store/ads/suggestions', { qs: { state: 'pending' } });
++  const needsReview = list.body.items.find((x) => x.guardrail?.status === 'needs_review');
++  assert.ok(needsReview?.id);
++  const enq = await callAds('POST', '/api/v1/store/ads/action-queue', { body: { suggestionId: needsReview.id } });
++  const approve = await callAds('POST', '/api/v1/store/ads/action-queue/' + enq.body.id + '/approve', { body: {} });
++  assert.equal(approve.status, 400);
++  assert.match(approve.body.message, /approve_requires_passed_guardrail/);
++  // passed item approves fine
++  const passedId = seedPassedSuggestion('sug-qa-p003-pass');
++  const enqP = await callAds('POST', '/api/v1/store/ads/action-queue', { body: { suggestionId: passedId } });
++  const approveP = await callAds('POST', '/api/v1/store/ads/action-queue/' + enqP.body.id + '/approve', { body: {} });
++  assert.equal(approveP.status, 200);
++  assert.equal(approveP.body.state, 'approved');
++});
++
++// M3-P0-04: raw forged body.guardrail.status='passed' + body.state='approved'
++// must NOT be trusted — server recomputes guardrail and forces state='queued'.
++test('M3-P0-04: enqueueManualAction ignores forged guardrail/state', async () => {
++  const enq = await callAds('POST', '/api/v1/store/ads/action-queue', {
++    body: {
++      sourceStrategyName: 'LX manual operation',
++      entity: { kind: 'campaign', id: 'cmp-forge-' + Date.now(), name: 'forge' },
++      typedAction: { actionPrimitive: 'TOGGLE_CAMPAIGN', sourceSurface: 'lx', currentValue: { enabled: true }, recommendedValue: { enabled: false } },
++      guardrail: { status: 'passed', reasons: ['forged'] },
++      state: 'approved',
++    },
++  });
++  assert.ok([200, 201].includes(enq.status));
++  assert.equal(enq.body.state, 'queued', 'forged state=approved must be ignored');
++  assert.notEqual(enq.body.guardrail.status, 'passed', 'forged guardrail=passed must be recomputed away');
++  // direct execute must be blocked by approval_required (not a queued-passed bypass)
++  const exec = await callAds('POST', '/api/v1/store/ads/action-queue/' + enq.body.id + '/execute', { body: {} });
++  assert.equal(exec.status, 400);
++  assert.match(exec.body.message, /approval_required/);
++});
++
++// M3-P1-09: executeActionQueueItem is dry-run-only even with realWriteEnabled.
++test('M3-P1-09: execute is dry-run only; realWriteEnabled has no effect on non-real path', async () => {
++  const passedId = seedPassedSuggestion('sug-qa-p109');
++  const enq = await callAds('POST', '/api/v1/store/ads/action-queue', { body: { suggestionId: passedId } });
++  await callAds('POST', '/api/v1/store/ads/action-queue/' + enq.body.id + '/approve', { body: {} });
++  // NOTE: realWriteEnabled:true on /execute routes to the real executor, which
++  // would require live mode; executeActionQueueItem itself ignores it. We assert
++  // the internal dry-run executor pins dry_run via the default execute path.
++  const exec = await callAds('POST', '/api/v1/store/ads/action-queue/' + enq.body.id + '/execute', { body: {} });
++  assert.equal(exec.status, 200);
++  assert.equal(exec.body.state, 'executed');
++  assert.equal(exec.body.latestRun.dryRun, true);
++  assert.equal(exec.body.latestRun.status, 'dry_run_success');
++});
++
++// M3-P1-10: manual enqueue dedupe on (entity, primitive) → 200 + duplicate.
++test('M3-P1-10: duplicate manual enqueue returns 200 + duplicate, queue stays length 1', async () => {
++  const entityId = 'cmp-dedupe-' + Date.now();
++  const body = {
++    sourceStrategyName: 'LX manual operation',
++    entity: { kind: 'campaign', id: entityId, name: 'dedupe' },
++    typedAction: { actionPrimitive: 'TOGGLE_CAMPAIGN', sourceSurface: 'lx', recommendedValue: { enabled: false } },
++  };
++  const first = await callAds('POST', '/api/v1/store/ads/action-queue', { body });
++  assert.equal(first.status, 201);
++  assert.ok(!first.body.duplicate);
++  const second = await callAds('POST', '/api/v1/store/ads/action-queue', { body });
++  assert.equal(second.status, 200);
++  assert.equal(second.body.duplicate, true);
++  assert.equal(second.body.existing.id, first.body.id);
++});
++
++// M3-P2-23: accepted suggestion is filtered out of the eligible/triggerable list
++// until its observation window expires.
++test('M3-P2-23: accept lands next_eligible_at and hides suggestion from eligible list', async () => {
++  const sugId = seedPassedSuggestion('sug-qa-p223');
++  const accept = await callAds('POST', '/api/v1/store/ads/suggestions/' + sugId + '/accept', { body: {} });
++  assert.equal(accept.status, 200);
++  assert.equal(accept.body.state, 'observing');
++  assert.ok(accept.body.nextEligibleAt, 'next_eligible_at must be set');
++  assert.equal(accept.body.eligible, false);
++  // not in eligible-only listing
++  const eligible = await callAds('GET', '/api/v1/store/ads/suggestions', { qs: { eligibleOnly: '1' } });
++  assert.ok(!eligible.body.items.some((x) => x.id === sugId), 'observing item must not be eligible-triggerable');
++});
++
++test('M3-aq-03: manual LX write-like actions can enter action queue without mutating directly', async () => {
++  const enq = await callAds('POST', '/api/v1/store/ads/action-queue', {
++    body: {
++      sourceStrategyName: 'LX manual operation',
++      entity: { kind: 'campaign', id: 'cmp-qa-manual', name: 'QA manual campaign' },
++      typedAction: {
++        actionPrimitive: 'TOGGLE_CAMPAIGN',
++        sourceSurface: 'lx',
++        currentValue: { enabled: true },
++        recommendedValue: { enabled: false },
++        dryRun: true,
++        auditRequired: true,
++      },
++      guardrail: { status: 'needs_review', reasons: ['manual_lx_write_requires_action_queue'] },
++      rollbackPlan: { method: 'restore_previous_enabled_state', needsManualReview: true },
++      note: 'qa manual lx action',
++    },
++  });
++  assert.equal(enq.status, 201);
++  assert.equal(enq.body.suggestionId, null);
++  assert.equal(enq.body.state, 'queued');
++  assert.equal(enq.body.dryRun, true);
++  assert.equal(enq.body.auditRequired, true);
++  assert.equal(enq.body.typedAction.actionPrimitive, 'TOGGLE_CAMPAIGN');
++  assert.equal(enq.body.guardrail.status, 'needs_review');
++});
++
+ // =============================================================================
+ // 4. Manual changes (3.3)
+ // =============================================================================
+@@ -287,13 +606,16 @@ test('M3-pf-01: GET /lx/portfolios lists', async () => {
+   const r = await callAds('GET', '/api/v1/store/ads/lx/portfolios');
+   assert.equal(r.status, 200);
+   assert.ok(Array.isArray(r.body.items));
++  assert.ok(r.body.items.length > 0);
++  globalThis.__qaPfId = r.body.items[0].id;
+ });
+ 
+-test('M3-pf-02: POST /lx/portfolios creates', async () => {
++test('M3-pf-02: POST /lx/portfolios queues create intent', async () => {
++  const before = rowCount('lx_portfolios');
+   const r = await callAds('POST', '/api/v1/store/ads/lx/portfolios', { body: { name: 'qa-pf', budgetCap: 500 } });
+-  assert.equal(r.status, 201);
+-  assert.equal(r.body.name, 'qa-pf');
+-  globalThis.__qaPfId = r.body.id;
++  const item = assertQueuedWrite(r, 'CREATE_PORTFOLIO');
++  assert.equal(item.typedAction.recommendedValue.name, 'qa-pf');
++  assert.equal(rowCount('lx_portfolios'), before);
+ });
+ 
+ test('M3-pf-03: POST /lx/portfolios missing name → 400', async () => {
+@@ -306,16 +628,19 @@ test('M3-pf-04: GET /lx/portfolios/:id', async () => {
+   assert.equal(r.status, 200);
+ });
+ 
+-test('M3-pf-05: PUT /lx/portfolios/:id updates name', async () => {
++test('M3-pf-05: PUT /lx/portfolios/:id queues update intent', async () => {
++  const before = (await callAds('GET', '/api/v1/store/ads/lx/portfolios/' + globalThis.__qaPfId)).body.name;
+   const r = await callAds('PUT', '/api/v1/store/ads/lx/portfolios/' + globalThis.__qaPfId, { body: { name: 'qa-pf-renamed' } });
+-  assert.equal(r.status, 200);
+-  assert.equal(r.body.name, 'qa-pf-renamed');
++  assertQueuedWrite(r, 'UPDATE_PORTFOLIO');
++  const after = (await callAds('GET', '/api/v1/store/ads/lx/portfolios/' + globalThis.__qaPfId)).body.name;
++  assert.equal(after, before);
+ });
+ 
+-test('M3-pf-06: POST /lx/portfolios/:id/toggle disables', async () => {
++
++test('M3-pf-06: POST /lx/portfolios/:id/toggle queues write intent', async () => {
+   const r = await callAds('POST', '/api/v1/store/ads/lx/portfolios/' + globalThis.__qaPfId + '/toggle', { body: { enabled: false } });
+-  assert.equal(r.status, 200);
+-  assert.equal(r.body.enabled, false);
++  assertQueuedWrite(r, 'TOGGLE_PORTFOLIO');
++  assert.equal(r.body.typedAction.recommendedValue.enabled, false);
+ });
+ 
+ test('M3-pf-07: POST /lx/portfolios/:id/toggle missing enabled → 400', async () => {
+@@ -323,10 +648,11 @@ test('M3-pf-07: POST /lx/portfolios/:id/toggle missing enabled → 400', async (
+   assert.equal(r.status, 400);
+ });
+ 
+-test('M3-pf-08: PUT /lx/portfolios/:id/budget updates budgetCap', async () => {
++
++test('M3-pf-08: PUT /lx/portfolios/:id/budget queues write intent', async () => {
+   const r = await callAds('PUT', '/api/v1/store/ads/lx/portfolios/' + globalThis.__qaPfId + '/budget', { body: { budgetCap: 999 } });
+-  assert.equal(r.status, 200);
+-  assert.equal(r.body.budgetCap, 999);
++  assertQueuedWrite(r, 'ADJUST_PORTFOLIO_BUDGET');
++  assert.equal(r.body.typedAction.recommendedValue.budgetCap, 999);
+ });
+ 
+ test('M3-pf-09: PUT /lx/portfolios/:id/budget missing → 400', async () => {
+@@ -334,9 +660,11 @@ test('M3-pf-09: PUT /lx/portfolios/:id/budget missing → 400', async () => {
+   assert.equal(r.status, 400);
+ });
+ 
+-test('M3-pf-10: DELETE /lx/portfolios/:id', async () => {
++test('M3-pf-10: DELETE /lx/portfolios/:id queues delete intent', async () => {
+   const r = await callAds('DELETE', '/api/v1/store/ads/lx/portfolios/' + globalThis.__qaPfId);
+-  assert.equal(r.status, 200);
++  assertQueuedWrite(r, 'DELETE_PORTFOLIO');
++  const after = await callAds('GET', '/api/v1/store/ads/lx/portfolios/' + globalThis.__qaPfId);
++  assert.equal(after.status, 200);
+ });
+ 
+ // =============================================================================
+@@ -347,12 +675,15 @@ test('M3-cmp-01: GET /lx/campaigns lists', async () => {
+   assert.equal(r.status, 200);
+   assert.ok(r.body.items.length > 0);
+   globalThis.__qaSeedCmpId = r.body.items[0].id;
++  globalThis.__qaCmpId = r.body.items[0].id;
+ });
+ 
+-test('M3-cmp-02: POST /lx/campaigns creates', async () => {
++test('M3-cmp-02: POST /lx/campaigns queues create intent', async () => {
++  const before = rowCount('lx_campaigns');
+   const r = await callAds('POST', '/api/v1/store/ads/lx/campaigns', { body: { name: 'qa-cmp', dailyBudget: 30 } });
+-  assert.equal(r.status, 201);
+-  globalThis.__qaCmpId = r.body.id;
++  const item = assertQueuedWrite(r, 'CREATE_CAMPAIGN');
++  assert.equal(item.typedAction.recommendedValue.name, 'qa-cmp');
++  assert.equal(rowCount('lx_campaigns'), before);
+ });
+ 
+ test('M3-cmp-03: POST /lx/campaigns missing name → 400', async () => {
+@@ -365,22 +696,26 @@ test('M3-cmp-04: GET /lx/campaigns/:id', async () => {
+   assert.equal(r.status, 200);
+ });
+ 
+-test('M3-cmp-05: PATCH /lx/campaigns/:id', async () => {
++test('M3-cmp-05: PATCH /lx/campaigns/:id queues update intent', async () => {
++  const before = (await callAds('GET', '/api/v1/store/ads/lx/campaigns/' + globalThis.__qaCmpId)).body.name;
+   const r = await callAds('PATCH', '/api/v1/store/ads/lx/campaigns/' + globalThis.__qaCmpId, { body: { name: 'qa-cmp-2' } });
+-  assert.equal(r.status, 200);
+-  assert.equal(r.body.name, 'qa-cmp-2');
++  assertQueuedWrite(r, 'UPDATE_CAMPAIGN');
++  const after = (await callAds('GET', '/api/v1/store/ads/lx/campaigns/' + globalThis.__qaCmpId)).body.name;
++  assert.equal(after, before);
+ });
+ 
+-test('M3-cmp-06: POST /lx/campaigns/:id/toggle', async () => {
++
++test('M3-cmp-06: POST /lx/campaigns/:id/toggle queues write intent', async () => {
+   const r = await callAds('POST', '/api/v1/store/ads/lx/campaigns/' + globalThis.__qaCmpId + '/toggle', { body: { enabled: false } });
+-  assert.equal(r.status, 200);
+-  assert.equal(r.body.enabled, false);
++  assertQueuedWrite(r, 'TOGGLE_CAMPAIGN');
++  assert.equal(r.body.typedAction.recommendedValue.enabled, false);
+ });
+ 
+-test('M3-cmp-07: PUT /lx/campaigns/:id/budget updates', async () => {
++
++test('M3-cmp-07: PUT /lx/campaigns/:id/budget queues write intent', async () => {
+   const r = await callAds('PUT', '/api/v1/store/ads/lx/campaigns/' + globalThis.__qaCmpId + '/budget', { body: { dailyBudget: 99 } });
+-  assert.equal(r.status, 200);
+-  assert.equal(r.body.dailyBudget, 99);
++  assertQueuedWrite(r, 'ADJUST_CAMPAIGN_BUDGET');
++  assert.equal(r.body.typedAction.recommendedValue.dailyBudget, 99);
+ });
+ 
+ test('M3-cmp-08: PUT /lx/campaigns/:id/budget missing → 400', async () => {
+@@ -388,10 +723,12 @@ test('M3-cmp-08: PUT /lx/campaigns/:id/budget missing → 400', async () => {
+   assert.equal(r.status, 400);
+ });
+ 
+-test('M3-cmp-09: PUT /lx/campaigns/:id/bid-strategy', async () => {
+-  const r = await callAds('PUT', '/api/v1/store/ads/lx/campaigns/' + globalThis.__qaCmpId + '/bid-strategy', { body: { bidStrategy: '动态竞价 - 提高和降低' } });
+-  assert.equal(r.status, 200);
+-  assert.equal(r.body.bidStrategy, '动态竞价 - 提高和降低');
++
++test('M3-cmp-09: PUT /lx/campaigns/:id/bid-strategy queues write intent', async () => {
++  const nextStrategy = 'dynamic-bids-up-and-down';
++  const r = await callAds('PUT', '/api/v1/store/ads/lx/campaigns/' + globalThis.__qaCmpId + '/bid-strategy', { body: { bidStrategy: nextStrategy } });
++  assertQueuedWrite(r, 'UPDATE_CAMPAIGN_BID_STRATEGY');
++  assert.equal(r.body.typedAction.recommendedValue.bidStrategy, nextStrategy);
+ });
+ 
+ test('M3-cmp-10: PUT /lx/campaigns/:id/bid-strategy missing → 400', async () => {
+@@ -405,18 +742,23 @@ test('M3-cmp-11: GET /lx/campaigns/:id/strategies (3.1 m2m bindings)', async ()
+   assert.ok(Array.isArray(r.body.items));
+ });
+ 
+-test('M3-cmp-12: POST /lx/campaigns/:id/copy duplicates', async () => {
++test('M3-cmp-12: POST /lx/campaigns/:id/copy queues copy intent', async () => {
++  const before = rowCount('lx_campaigns');
+   const r = await callAds('POST', '/api/v1/store/ads/lx/campaigns/' + globalThis.__qaSeedCmpId + '/copy', { body: { name: 'qa-copy' } });
+-  assert.equal(r.status, 201);
+-  assert.equal(r.body.name, 'qa-copy');
+-  globalThis.__qaCopyCmpId = r.body.id;
++  const item = assertQueuedWrite(r, 'COPY_CAMPAIGN');
++  assert.equal(item.typedAction.recommendedValue.name, 'qa-copy');
++  assert.equal(rowCount('lx_campaigns'), before);
+ });
+ 
+-test('M3-cmp-13: POST /lx/campaigns/bulk-budget updates many', async () => {
++
++test('M3-cmp-13: POST /lx/campaigns/bulk-budget queues write intent', async () => {
+   const r = await callAds('POST', '/api/v1/store/ads/lx/campaigns/bulk-budget', { body: [{ id: globalThis.__qaCmpId, dailyBudget: 77 }] });
+-  assert.equal(r.status, 200);
+-  assert.equal(r.body.updated, 1);
++  assertQueuedWrite(r, 'BULK_ADJUST_CAMPAIGN_BUDGET');
++  assert.equal(r.body.typedAction.recommendedValue.items.length, 1);
+   globalThis.__qaBulkBudgetAuditCmpId = globalThis.__qaCmpId;
++  // M3-P1-10: same (entity,primitive) active dedup uses a fixed bulk-budget
++  // entity id — free this active item so later bulk-budget tests can re-enqueue.
++  await callAds('DELETE', '/api/v1/store/ads/action-queue/' + r.body.id);
+ });
+ 
+ test('M3-cmp-14: POST /lx/promote-to-manual missing fields → 400', async () => {
+@@ -424,20 +766,21 @@ test('M3-cmp-14: POST /lx/promote-to-manual missing fields → 400', async () =>
+   assert.equal(r.status, 400);
+ });
+ 
+-test('M3-cmp-15: POST /lx/promote-to-manual creates targeting + negative', async () => {
++
++test('M3-cmp-15: POST /lx/promote-to-manual queues targeting + negative intent', async () => {
+   const r = await callAds('POST', '/api/v1/store/ads/lx/promote-to-manual', { body: {
+     term: 'qa-promote-term', autoCampaignId: globalThis.__qaSeedCmpId, autoAdGroupId: null,
+     manualCampaignId: globalThis.__qaCmpId, manualAdGroupId: 'ag-fake', matchType: 'exact', bid: 1.5,
+   } });
+-  assert.equal(r.status, 201);
+-  assert.ok(r.body.targeting?.id);
+-  globalThis.__qaPromoteTargetingId = r.body.targeting.id;
++  assertQueuedWrite(r, 'PROMOTE_SEARCH_TERM');
++  assert.equal(r.body.typedAction.recommendedValue.term, 'qa-promote-term');
+ });
+ 
+-test('M3-cmp-99: DELETE /lx/campaigns/:id deletes', async () => {
+-  // Leave qaCmpId alive; delete copy only
+-  const r = await callAds('DELETE', '/api/v1/store/ads/lx/campaigns/' + globalThis.__qaCopyCmpId);
+-  assert.equal(r.status, 200);
++test('M3-cmp-99: DELETE /lx/campaigns/:id queues delete intent', async () => {
++  const r = await callAds('DELETE', '/api/v1/store/ads/lx/campaigns/' + globalThis.__qaSeedCmpId);
++  assertQueuedWrite(r, 'DELETE_CAMPAIGN');
++  const after = await callAds('GET', '/api/v1/store/ads/lx/campaigns/' + globalThis.__qaSeedCmpId);
++  assert.equal(after.status, 200);
+ });
+ 
+ // =============================================================================
+@@ -446,6 +789,8 @@ test('M3-cmp-99: DELETE /lx/campaigns/:id deletes', async () => {
+ test('M3-ag-01: GET /lx/ad-groups lists', async () => {
+   const r = await callAds('GET', '/api/v1/store/ads/lx/ad-groups');
+   assert.equal(r.status, 200);
++  assert.ok(r.body.items.length > 0);
++  globalThis.__qaAgId = r.body.items[0].id;
+ });
+ 
+ test('M3-ag-02: GET /lx/ad-groups?campaignId=X filters', async () => {
+@@ -453,10 +798,12 @@ test('M3-ag-02: GET /lx/ad-groups?campaignId=X filters', async () => {
+   for (const it of r.body.items) assert.equal(it.campaignId, globalThis.__qaSeedCmpId);
+ });
+ 
+-test('M3-ag-03: POST /lx/ad-groups creates', async () => {
++test('M3-ag-03: POST /lx/ad-groups queues create intent', async () => {
++  const before = rowCount('lx_ad_groups');
+   const r = await callAds('POST', '/api/v1/store/ads/lx/ad-groups', { body: { name: 'qa-ag', campaignId: globalThis.__qaCmpId, defaultBid: 1.0 } });
+-  assert.equal(r.status, 201);
+-  globalThis.__qaAgId = r.body.id;
++  const item = assertQueuedWrite(r, 'CREATE_AD_GROUP');
++  assert.equal(item.typedAction.recommendedValue.name, 'qa-ag');
++  assert.equal(rowCount('lx_ad_groups'), before);
+ });
+ 
+ test('M3-ag-04: POST /lx/ad-groups missing name → 400', async () => {
+@@ -469,15 +816,19 @@ test('M3-ag-05: GET /lx/ad-groups/:id', async () => {
+   assert.equal(r.status, 200);
+ });
+ 
+-test('M3-ag-06: PATCH /lx/ad-groups/:id', async () => {
++test('M3-ag-06: PATCH /lx/ad-groups/:id queues update intent', async () => {
++  const before = (await callAds('GET', '/api/v1/store/ads/lx/ad-groups/' + globalThis.__qaAgId)).body.name;
+   const r = await callAds('PATCH', '/api/v1/store/ads/lx/ad-groups/' + globalThis.__qaAgId, { body: { name: 'qa-ag-2' } });
+-  assert.equal(r.status, 200);
++  assertQueuedWrite(r, 'UPDATE_AD_GROUP');
++  const after = (await callAds('GET', '/api/v1/store/ads/lx/ad-groups/' + globalThis.__qaAgId)).body.name;
++  assert.equal(after, before);
+ });
+ 
+-test('M3-ag-07: PUT /lx/ad-groups/:id/bid updates bid', async () => {
++
++test('M3-ag-07: PUT /lx/ad-groups/:id/bid queues write intent', async () => {
+   const r = await callAds('PUT', '/api/v1/store/ads/lx/ad-groups/' + globalThis.__qaAgId + '/bid', { body: { defaultBid: 2.5 } });
+-  assert.equal(r.status, 200);
+-  assert.equal(r.body.defaultBid, 2.5);
++  assertQueuedWrite(r, 'ADJUST_AD_GROUP_BID');
++  assert.equal(r.body.typedAction.recommendedValue.defaultBid, 2.5);
+ });
+ 
+ test('M3-ag-08: PUT /lx/ad-groups/:id/bid missing → 400', async () => {
+@@ -485,11 +836,11 @@ test('M3-ag-08: PUT /lx/ad-groups/:id/bid missing → 400', async () => {
+   assert.equal(r.status, 400);
+ });
+ 
+-test('M3-ag-09: DELETE /lx/ad-groups/:id', async () => {
+-  // Don't delete primary; create disposable
+-  const create = await callAds('POST', '/api/v1/store/ads/lx/ad-groups', { body: { name: 'qa-ag-tmp' } });
+-  const r = await callAds('DELETE', '/api/v1/store/ads/lx/ad-groups/' + create.body.id);
+-  assert.equal(r.status, 200);
++test('M3-ag-09: DELETE /lx/ad-groups/:id queues delete intent', async () => {
++  const r = await callAds('DELETE', '/api/v1/store/ads/lx/ad-groups/' + globalThis.__qaAgId);
++  assertQueuedWrite(r, 'DELETE_AD_GROUP');
++  const after = await callAds('GET', '/api/v1/store/ads/lx/ad-groups/' + globalThis.__qaAgId);
++  assert.equal(after.status, 200);
+ });
+ 
+ // =============================================================================
+@@ -498,24 +849,28 @@ test('M3-ag-09: DELETE /lx/ad-groups/:id', async () => {
+ test('M3-ad-01: GET /lx/ads lists', async () => {
+   const r = await callAds('GET', '/api/v1/store/ads/lx/ads');
+   assert.equal(r.status, 200);
++  assert.ok(r.body.items.length > 0);
++  globalThis.__qaAdId = r.body.items[0].id;
+ });
+ 
+-test('M3-ad-02: POST /lx/ads creates', async () => {
++test('M3-ad-02: POST /lx/ads queues create intent', async () => {
++  const before = rowCount('lx_ads');
+   const r = await callAds('POST', '/api/v1/store/ads/lx/ads', { body: { adGroupId: globalThis.__qaAgId, asin: 'B0QA0001', sku: 'SKU-QA' } });
+-  assert.equal(r.status, 201);
+-  globalThis.__qaAdId = r.body.id;
++  const item = assertQueuedWrite(r, 'CREATE_AD');
++  assert.equal(item.typedAction.recommendedValue.asin, 'B0QA0001');
++  assert.equal(rowCount('lx_ads'), before);
+ });
+ 
+-test('M3-ad-03: PATCH /lx/ads/:id', async () => {
++test('M3-ad-03: PATCH /lx/ads/:id queues update intent', async () => {
+   const r = await callAds('PATCH', '/api/v1/store/ads/lx/ads/' + globalThis.__qaAdId, { body: { headline: 'qa headline' } });
+-  assert.equal(r.status, 200);
+-  assert.equal(r.body.headline, 'qa headline');
++  assertQueuedWrite(r, 'UPDATE_AD');
+ });
+ 
+-test('M3-ad-04: POST /lx/ads/:id/toggle', async () => {
++
++test('M3-ad-04: POST /lx/ads/:id/toggle queues write intent', async () => {
+   const r = await callAds('POST', '/api/v1/store/ads/lx/ads/' + globalThis.__qaAdId + '/toggle', { body: { enabled: false } });
+-  assert.equal(r.status, 200);
+-  assert.equal(r.body.enabled, false);
++  assertQueuedWrite(r, 'TOGGLE_AD');
++  assert.equal(r.body.typedAction.recommendedValue.enabled, false);
+ });
+ 
+ test('M3-ad-05: POST /lx/ads/:id/toggle missing enabled → 400', async () => {
+@@ -523,10 +878,9 @@ test('M3-ad-05: POST /lx/ads/:id/toggle missing enabled → 400', async () => {
+   assert.equal(r.status, 400);
+ });
+ 
+-test('M3-ad-06: DELETE /lx/ads/:id', async () => {
+-  const c = await callAds('POST', '/api/v1/store/ads/lx/ads', { body: { adGroupId: globalThis.__qaAgId, asin: 'B0QA0002' } });
+-  const r = await callAds('DELETE', '/api/v1/store/ads/lx/ads/' + c.body.id);
+-  assert.equal(r.status, 200);
++test('M3-ad-06: DELETE /lx/ads/:id queues delete intent', async () => {
++  const r = await callAds('DELETE', '/api/v1/store/ads/lx/ads/' + globalThis.__qaAdId);
++  assertQueuedWrite(r, 'DELETE_AD');
+ });
+ 
+ // =============================================================================
+@@ -535,15 +889,19 @@ test('M3-ad-06: DELETE /lx/ads/:id', async () => {
+ test('M3-tgt-01: GET /lx/targetings lists', async () => {
+   const r = await callAds('GET', '/api/v1/store/ads/lx/targetings');
+   assert.equal(r.status, 200);
++  assert.ok(r.body.items.length > 0);
++  globalThis.__qaTgtId = r.body.items[0].id;
+ });
+ 
+-test('M3-tgt-02: POST /lx/targetings creates', async () => {
++test('M3-tgt-02: POST /lx/targetings queues create intent', async () => {
++  const before = rowCount('lx_targetings');
+   const r = await callAds('POST', '/api/v1/store/ads/lx/targetings', { body: {
+     campaignId: globalThis.__qaCmpId, adGroupId: globalThis.__qaAgId,
+     type: 'keyword', term: 'qa-term', matchType: 'exact', bid: 1.2,
+   } });
+-  assert.equal(r.status, 201);
+-  globalThis.__qaTgtId = r.body.id;
++  const item = assertQueuedWrite(r, 'CREATE_TARGETING');
++  assert.equal(item.typedAction.recommendedValue.term, 'qa-term');
++  assert.equal(rowCount('lx_targetings'), before);
+ });
+ 
+ test('M3-tgt-03: GET /lx/targetings/:id', async () => {
+@@ -551,16 +909,19 @@ test('M3-tgt-03: GET /lx/targetings/:id', async () => {
+   assert.equal(r.status, 200);
+ });
+ 
+-test('M3-tgt-04: PATCH /lx/targetings/:id', async () => {
++test('M3-tgt-04: PATCH /lx/targetings/:id queues update intent', async () => {
++  const before = (await callAds('GET', '/api/v1/store/ads/lx/targetings/' + globalThis.__qaTgtId)).body.matchType;
+   const r = await callAds('PATCH', '/api/v1/store/ads/lx/targetings/' + globalThis.__qaTgtId, { body: { matchType: 'phrase' } });
+-  assert.equal(r.status, 200);
+-  assert.equal(r.body.matchType, 'phrase');
++  assertQueuedWrite(r, 'UPDATE_TARGETING');
++  const after = (await callAds('GET', '/api/v1/store/ads/lx/targetings/' + globalThis.__qaTgtId)).body.matchType;
++  assert.equal(after, before);
+ });
+ 
+-test('M3-tgt-05: PUT /lx/targetings/:id/bid updates', async () => {
++
++test('M3-tgt-05: PUT /lx/targetings/:id/bid queues write intent', async () => {
+   const r = await callAds('PUT', '/api/v1/store/ads/lx/targetings/' + globalThis.__qaTgtId + '/bid', { body: { bid: 2.0 } });
+-  assert.equal(r.status, 200);
+-  assert.equal(r.body.bid, 2.0);
++  assertQueuedWrite(r, 'ADJUST_TARGETING_BID');
++  assert.equal(r.body.typedAction.recommendedValue.bid, 2.0);
+ });
+ 
+ test('M3-tgt-06: PUT /lx/targetings/:id/bid missing → 400', async () => {
+@@ -568,21 +929,24 @@ test('M3-tgt-06: PUT /lx/targetings/:id/bid missing → 400', async () => {
+   assert.equal(r.status, 400);
+ });
+ 
+-test('M3-tgt-07: POST /lx/targetings/:id/toggle', async () => {
++
++test('M3-tgt-07: POST /lx/targetings/:id/toggle queues write intent', async () => {
+   const r = await callAds('POST', '/api/v1/store/ads/lx/targetings/' + globalThis.__qaTgtId + '/toggle', { body: { enabled: false } });
+-  assert.equal(r.status, 200);
++  assertQueuedWrite(r, 'TOGGLE_TARGETING');
+ });
+ 
+-test('M3-tgt-08: POST /lx/targetings/bulk-bid updates multiple', async () => {
++
++test('M3-tgt-08: POST /lx/targetings/bulk-bid queues write intent', async () => {
+   const r = await callAds('POST', '/api/v1/store/ads/lx/targetings/bulk-bid', { body: [{ id: globalThis.__qaTgtId, bid: 3.0 }] });
+-  assert.equal(r.status, 200);
+-  assert.equal(r.body.updated, 1);
++  assertQueuedWrite(r, 'BULK_ADJUST_TARGETING_BID');
++  assert.equal(r.body.typedAction.recommendedValue.items.length, 1);
+ });
+ 
+-test('M3-tgt-09: DELETE /lx/targetings/:id', async () => {
+-  const c = await callAds('POST', '/api/v1/store/ads/lx/targetings', { body: { term: 'qa-tgt-tmp', matchType: 'exact', bid: 0.5 } });
+-  const r = await callAds('DELETE', '/api/v1/store/ads/lx/targetings/' + c.body.id);
+-  assert.equal(r.status, 200);
++test('M3-tgt-09: DELETE /lx/targetings/:id queues delete intent', async () => {
++  const r = await callAds('DELETE', '/api/v1/store/ads/lx/targetings/' + globalThis.__qaTgtId);
++  assertQueuedWrite(r, 'DELETE_TARGETING');
++  const after = await callAds('GET', '/api/v1/store/ads/lx/targetings/' + globalThis.__qaTgtId);
++  assert.equal(after.status, 200);
+ });
+ 
+ // =============================================================================
+@@ -591,20 +955,32 @@ test('M3-tgt-09: DELETE /lx/targetings/:id', async () => {
+ test('M3-neg-01: GET /lx/negatives lists', async () => {
+   const r = await callAds('GET', '/api/v1/store/ads/lx/negatives');
+   assert.equal(r.status, 200);
++  if (!r.body.items.length) {
++    const fixture = createNegative(getDbInstance(), USER_ID, STORE_ID, {
++      campaignId: globalThis.__qaCmpId,
++      type: 'keyword',
++      term: 'qa-neg-fixture',
++      matchType: 'exact',
++    });
++    globalThis.__qaNegId = fixture.id;
++  } else {
++    globalThis.__qaNegId = r.body.items[0].id;
++  }
+ });
+ 
+-test('M3-neg-02: POST /lx/negatives creates', async () => {
++test('M3-neg-02: POST /lx/negatives queues create intent', async () => {
++  const before = rowCount('lx_negatives');
+   const r = await callAds('POST', '/api/v1/store/ads/lx/negatives', { body: {
+     campaignId: globalThis.__qaCmpId, type: 'keyword', term: 'qa-neg-1', matchType: 'exact',
+   } });
+-  assert.equal(r.status, 201);
+-  globalThis.__qaNegId = r.body.id;
++  const item = assertQueuedWrite(r, 'CREATE_NEGATIVE');
++  assert.equal(item.typedAction.recommendedValue.term, 'qa-neg-1');
++  assert.equal(rowCount('lx_negatives'), before);
+ });
+ 
+-test('M3-neg-03: DELETE /lx/negatives/:id', async () => {
+-  const c = await callAds('POST', '/api/v1/store/ads/lx/negatives', { body: { term: 'qa-neg-tmp', matchType: 'exact' } });
+-  const r = await callAds('DELETE', '/api/v1/store/ads/lx/negatives/' + c.body.id);
+-  assert.equal(r.status, 200);
++test('M3-neg-03: DELETE /lx/negatives/:id queues delete intent', async () => {
++  const r = await callAds('DELETE', '/api/v1/store/ads/lx/negatives/' + globalThis.__qaNegId);
++  assertQueuedWrite(r, 'DELETE_NEGATIVE');
+ });
+ 
+ // =============================================================================
+@@ -620,14 +996,14 @@ test('M3-ust-02: POST /lx/user-search-terms/promote missing term → 400', async
+   assert.equal(r.status, 400);
+ });
+ 
+-test('M3-ust-03: POST /lx/user-search-terms/promote OK', async () => {
++test('M3-ust-03: POST /lx/user-search-terms/promote queues intent', async () => {
+   const r = await callAds('POST', '/api/v1/store/ads/lx/user-search-terms/promote', { body: { term: 'qa-promote-2', campaignId: globalThis.__qaCmpId, adGroupId: globalThis.__qaAgId, bid: 0.8 } });
+-  assert.equal(r.status, 201);
++  assertQueuedWrite(r, 'PROMOTE_SEARCH_TERM');
+ });
+ 
+-test('M3-ust-04: POST /lx/user-search-terms/negate OK', async () => {
++test('M3-ust-04: POST /lx/user-search-terms/negate queues intent', async () => {
+   const r = await callAds('POST', '/api/v1/store/ads/lx/user-search-terms/negate', { body: { term: 'qa-negate-1', campaignId: globalThis.__qaCmpId } });
+-  assert.equal(r.status, 201);
++  assertQueuedWrite(r, 'NEGATE_SEARCH_TERM');
+ });
+ 
+ // =============================================================================
+@@ -655,6 +1031,17 @@ test('M3-daily-01: GET /lx/daily', async () => {
+ test('M3-kwg-01: GET /lx/kw-grabbing lists', async () => {
+   const r = await callAds('GET', '/api/v1/store/ads/lx/kw-grabbing');
+   assert.equal(r.status, 200);
++  if (!r.body.items.length) {
++    const fixture = createKwGrabbing(getDbInstance(), USER_ID, STORE_ID, {
++      keyword: 'qa-kwg-fixture',
++      campaignId: globalThis.__qaCmpId,
++      currentBid: 1.0,
++      suggestedBid: 1.5,
++    });
++    globalThis.__qaKwgId = fixture.id;
++  } else {
++    globalThis.__qaKwgId = r.body.items[0].id;
++  }
+ });
+ 
+ test('M3-kwg-02: POST /lx/kw-grabbing missing keyword → 400', async () => {
+@@ -662,29 +1049,30 @@ test('M3-kwg-02: POST /lx/kw-grabbing missing keyword → 400', async () => {
+   assert.equal(r.status, 400);
+ });
+ 
+-test('M3-kwg-03: POST /lx/kw-grabbing creates', async () => {
++test('M3-kwg-03: POST /lx/kw-grabbing queues create intent', async () => {
++  const before = rowCount('lx_kw_grabbing');
+   const r = await callAds('POST', '/api/v1/store/ads/lx/kw-grabbing', { body: {
+     keyword: 'qa-kw-grab', campaignId: globalThis.__qaCmpId, currentBid: 1.0, suggestedBid: 1.5, currentPosition: 6.0, targetPosition: 3,
+   } });
+-  assert.equal(r.status, 201);
+-  globalThis.__qaKwgId = r.body.id;
++  const item = assertQueuedWrite(r, 'CREATE_KW_GRABBING');
++  assert.equal(item.typedAction.recommendedValue.keyword, 'qa-kw-grab');
++  assert.equal(rowCount('lx_kw_grabbing'), before);
+ });
+ 
+-test('M3-kwg-04: PATCH /lx/kw-grabbing/:id', async () => {
++test('M3-kwg-04: PATCH /lx/kw-grabbing/:id queues update intent', async () => {
+   const r = await callAds('PATCH', '/api/v1/store/ads/lx/kw-grabbing/' + globalThis.__qaKwgId, { body: { targetPosition: 5 } });
+-  assert.equal(r.status, 200);
++  assertQueuedWrite(r, 'UPDATE_KW_GRABBING');
+ });
+ 
+-test('M3-kwg-05: POST /lx/kw-grabbing/:id/apply-bid applies suggested bid', async () => {
++
++test('M3-kwg-05: POST /lx/kw-grabbing/:id/apply-bid queues write intent', async () => {
+   const r = await callAds('POST', '/api/v1/store/ads/lx/kw-grabbing/' + globalThis.__qaKwgId + '/apply-bid');
+-  assert.equal(r.status, 200);
+-  assert.equal(r.body.currentBid, 1.5);
++  assertQueuedWrite(r, 'APPLY_KW_GRABBING_BID');
+ });
+ 
+-test('M3-kwg-06: DELETE /lx/kw-grabbing/:id', async () => {
+-  const c = await callAds('POST', '/api/v1/store/ads/lx/kw-grabbing', { body: { keyword: 'qa-tmp' } });
+-  const r = await callAds('DELETE', '/api/v1/store/ads/lx/kw-grabbing/' + c.body.id);
+-  assert.equal(r.status, 200);
++test('M3-kwg-06: DELETE /lx/kw-grabbing/:id queues delete intent', async () => {
++  const r = await callAds('DELETE', '/api/v1/store/ads/lx/kw-grabbing/' + globalThis.__qaKwgId);
++  assertQueuedWrite(r, 'DELETE_KW_GRABBING');
+ });
+ 
+ // =============================================================================
+@@ -696,30 +1084,40 @@ test('M3-pl-01: GET /lx/placements lists', async () => {
+   globalThis.__qaPlId = r.body.items[0]?.id;
+ });
+ 
+-test('M3-pl-02: PATCH /lx/placements/:id updates bidAdj', async () => {
++
++test('M3-pl-02: PATCH /lx/placements/:id queues write intent', async () => {
+   if (!globalThis.__qaPlId) return;
+   const r = await callAds('PATCH', '/api/v1/store/ads/lx/placements/' + globalThis.__qaPlId, { body: { bidAdj: 50 } });
+-  assert.equal(r.status, 200);
+-  assert.equal(r.body.bidAdj, 50);
++  assertQueuedWrite(r, 'UPDATE_PLACEMENT_BID');
++  assert.equal(r.body.typedAction.recommendedValue.bidAdj, 50);
+ });
+ 
+-// =============================================================================
+-// 15. AMC audiences
+-// =============================================================================
+ test('M3-amc-01: GET /lx/amc-audiences', async () => {
+   const r = await callAds('GET', '/api/v1/store/ads/lx/amc-audiences');
+   assert.equal(r.status, 200);
++  if (!r.body.items.length) {
++    const fixture = createAmcAudience(getDbInstance(), USER_ID, STORE_ID, {
++      name: 'qa-amc-fixture',
++      size: 1000,
++      source: 'AMC',
++    });
++    globalThis.__qaAmcId = fixture.id;
++  } else {
++    globalThis.__qaAmcId = r.body.items[0].id;
++  }
+ });
+ 
+-test('M3-amc-02: POST /lx/amc-audiences creates', async () => {
++test('M3-amc-02: POST /lx/amc-audiences queues create intent', async () => {
++  const before = rowCount('lx_amc_audiences');
+   const r = await callAds('POST', '/api/v1/store/ads/lx/amc-audiences', { body: { name: 'qa-amc', size: 1000, source: 'AMC' } });
+-  assert.equal(r.status, 201);
+-  globalThis.__qaAmcId = r.body.id;
++  const item = assertQueuedWrite(r, 'CREATE_AMC_AUDIENCE');
++  assert.equal(item.typedAction.recommendedValue.name, 'qa-amc');
++  assert.equal(rowCount('lx_amc_audiences'), before);
+ });
+ 
+-test('M3-amc-03: DELETE /lx/amc-audiences/:id', async () => {
++test('M3-amc-03: DELETE /lx/amc-audiences/:id queues delete intent', async () => {
+   const r = await callAds('DELETE', '/api/v1/store/ads/lx/amc-audiences/' + globalThis.__qaAmcId);
+-  assert.equal(r.status, 200);
++  assertQueuedWrite(r, 'DELETE_AMC_AUDIENCE');
+ });
+ 
+ // =============================================================================
+@@ -740,14 +1138,14 @@ test('M3-rep-03: POST /reports/search-terms/promote missing term → 400', async
+   assert.equal(r.status, 400);
+ });
+ 
+-test('M3-rep-04: POST /reports/search-terms/promote OK', async () => {
++test('M3-rep-04: POST /reports/search-terms/promote queues intent', async () => {
+   const r = await callAds('POST', '/api/v1/store/ads/reports/search-terms/promote', { body: { term: 'qa-rep-promote' } });
+-  assert.equal(r.status, 201);
++  assertQueuedWrite(r, 'REPORT_PROMOTE_SEARCH_TERM');
+ });
+ 
+-test('M3-rep-05: POST /reports/search-terms/negate OK', async () => {
++test('M3-rep-05: POST /reports/search-terms/negate queues intent', async () => {
+   const r = await callAds('POST', '/api/v1/store/ads/reports/search-terms/negate', { body: { term: 'qa-rep-negate' } });
+-  assert.equal(r.status, 201);
++  assertQueuedWrite(r, 'REPORT_NEGATE_SEARCH_TERM');
+ });
+ 
+ test('M3-sqp-01: GET /sqp lists', async () => {
+@@ -767,76 +1165,93 @@ test('M3-sqp-03: POST /sqp/take-action missing fields → 400', async () => {
+   assert.equal(r.status, 400);
+ });
+ 
+-test('M3-sqp-04: POST /sqp/take-action add_targeting creates', async () => {
++test('M3-sqp-04: POST /sqp/take-action add_targeting queues intent', async () => {
+   if (!globalThis.__qaSqp) return;
++  const before = rowCount('lx_targetings');
+   const r = await callAds('POST', '/api/v1/store/ads/sqp/take-action', { body: {
+     queryId: globalThis.__qaSqp.id, action: 'add_targeting',
+     payload: { campaignId: globalThis.__qaCmpId, adGroupId: globalThis.__qaAgId, matchType: 'exact', bid: 1.1 },
+   } });
+-  assert.equal(r.status, 201);
++  assertQueuedWrite(r, 'SQP_TAKE_ACTION');
++  assert.equal(rowCount('lx_targetings'), before);
+ });
+ 
+-test('M3-sqp-05: POST /sqp/take-action dedupe → 409', async () => {
++// M3-P1-10: duplicate SQP intent is a benign duplicate → 200 + {duplicate}
++// (was 409, which the FE wrongly caught as an error).
++test('M3-sqp-05: POST /sqp/take-action dedupe → 200 + duplicate', async () => {
+   if (!globalThis.__qaSqp) return;
+   const r = await callAds('POST', '/api/v1/store/ads/sqp/take-action', { body: {
+     queryId: globalThis.__qaSqp.id, action: 'add_targeting',
+     payload: { campaignId: globalThis.__qaCmpId, adGroupId: globalThis.__qaAgId, matchType: 'exact' },
+   } });
+-  assert.equal(r.status, 409);
++  assert.equal(r.status, 200);
++  assert.equal(r.body.duplicate, true);
++  assert.ok(r.body.existing);
+ });
+ 
+ // =============================================================================
+ // 17. Bulk endpoints + CSV
+ // =============================================================================
+-test('M3-bulk-01: POST /lx/bulk-create-campaigns', async () => {
++test('M3-bulk-01: POST /lx/bulk-create-campaigns queues intent', async () => {
++  const before = rowCount('lx_campaigns');
+   const r = await callAds('POST', '/api/v1/store/ads/lx/bulk-create-campaigns', { body: {
+     strategyId: 'qa-str', portfolioId: null,
+     campaigns: [{ name: 'qa-bulk-1', dailyBudget: 10 }, { name: 'qa-bulk-2', dailyBudget: 20 }],
+   } });
+-  assert.equal(r.status, 201);
+-  assert.equal(r.body.created, 2);
++  const item = assertQueuedWrite(r, 'BULK_CREATE_CAMPAIGNS');
++  assert.equal(item.typedAction.recommendedValue.campaigns.length, 2);
++  assert.equal(rowCount('lx_campaigns'), before);
+ });
+ 
+-test('M3-bulk-02: POST /lx/bulk-import JSON path (campaigns)', async () => {
++test('M3-bulk-02: POST /lx/bulk-import JSON path (campaigns) queues intent', async () => {
++  const before = rowCount('lx_campaigns');
+   const r = await callAds('POST', '/api/v1/store/ads/lx/bulk-import', { body: {
+     type: 'campaigns',
+     rows: [{ name: 'qa-bulk-json-1', dailyBudget: 5 }, { name: 'qa-bulk-json-2', dailyBudget: 7 }],
+   } });
+-  assert.equal(r.status, 201);
+-  assert.equal(r.body.created, 2);
++  const item = assertQueuedWrite(r, 'BULK_IMPORT');
++  assert.equal(item.typedAction.recommendedValue.rows.length, 2);
++  assert.equal(rowCount('lx_campaigns'), before);
++  // M3-P1-10: bulk-import uses a fixed (entityKind,id) per type — free this
++  // active item so the next same-type bulk-import enqueues fresh (not a dup).
++  await callAds('DELETE', '/api/v1/store/ads/action-queue/' + item.id);
+ });
+ 
+-test('M3-bulk-03: POST /lx/bulk-import multipart CSV (campaigns)', async () => {
+-  const csv = 'name,budget,bid_strategy,state\nqa-csv-1,12,动态竞价 - 仅降低,enabled\nqa-csv-2,15,动态竞价 - 仅降低,enabled\n';
++test('M3-bulk-03: POST /lx/bulk-import multipart CSV (campaigns) queues intent', async () => {
++  const before = rowCount('lx_campaigns');
++  const csv = 'name,budget,bid_strategy,state\nqa-csv-1,12,dynamic-bids-down-only,enabled\nqa-csv-2,15,dynamic-bids-down-only,enabled\n';
+   const r = await callAds('POST', '/api/v1/store/ads/lx/bulk-import', { multipart: {
+     type: 'campaigns',
+     file: { filename: 'c.csv', content: csv },
+   } });
+-  assert.equal(r.status, 201);
+-  assert.equal(r.body.created, 2);
++  const item = assertQueuedWrite(r, 'BULK_IMPORT');
++  assert.equal(item.typedAction.recommendedValue.rows.length, 2);
++  assert.equal(rowCount('lx_campaigns'), before);
+   globalThis.__qaCsvAudit = true;
++  await callAds('DELETE', '/api/v1/store/ads/action-queue/' + item.id);
+ });
+ 
+-test('M3-bulk-04: POST /lx/bulk-import unknown type returns errors entries', async () => {
++test('M3-bulk-04: POST /lx/bulk-import unknown type returns validation error', async () => {
+   const r = await callAds('POST', '/api/v1/store/ads/lx/bulk-import', { body: {
+     type: 'mystery', rows: [{ name: 'x' }],
+   } });
+-  assert.equal(r.status, 201);
+-  assert.equal(r.body.errors, 1);
++  assert.equal(r.status, 400);
+ });
+ 
+-test('M3-bulk-05: POST /lx/bulk-import multipart missing file → 400', async () => {
++test('M3-bulk-05: POST /lx/bulk-import multipart missing file -> 400', async () => {
+   const r = await callAds('POST', '/api/v1/store/ads/lx/bulk-import', { multipart: { type: 'campaigns' } });
+   assert.equal(r.status, 400);
+ });
+ 
+-test('M3-bulk-06: POST /lx/bulk-import targetings rows', async () => {
++test('M3-bulk-06: POST /lx/bulk-import targetings rows queues intent', async () => {
++  const before = rowCount('lx_targetings');
+   const r = await callAds('POST', '/api/v1/store/ads/lx/bulk-import', { body: {
+     type: 'targetings',
+     rows: [{ campaignId: globalThis.__qaCmpId, adGroupId: globalThis.__qaAgId, term: 'qa-bulk-tgt', matchType: 'exact', bid: 0.9 }],
+   } });
+-  assert.equal(r.status, 201);
+-  assert.equal(r.body.created, 1);
++  const item = assertQueuedWrite(r, 'BULK_IMPORT');
++  assert.equal(item.typedAction.recommendedValue.rows.length, 1);
++  assert.equal(rowCount('lx_targetings'), before);
+ });
+ 
+ // =============================================================================
+@@ -921,30 +1336,25 @@ test('M3-sync-06: synced campaign supports strategy binding (m2m cross with sync
+   assert.ok(inv.body.items.length >= 1);
+ });
+ 
+-test('M3-sync-07: budget update on synced campaign + revert restores via audit', async () => {
++
++test('M3-sync-07: budget update on synced campaign queues and leaves DB unchanged until executor', async () => {
+   const cmpId = globalThis.__qaSyncedCmpId;
+   const before = (await callAds('GET', '/api/v1/store/ads/lx/campaigns/' + cmpId)).body.dailyBudget;
+-  await callAds('PUT', '/api/v1/store/ads/lx/campaigns/' + cmpId + '/budget', { body: { dailyBudget: 42.0 } });
++  const q = await callAds('PUT', '/api/v1/store/ads/lx/campaigns/' + cmpId + '/budget', { body: { dailyBudget: 42.0 } });
++  const item = assertQueuedWrite(q, 'ADJUST_CAMPAIGN_BUDGET');
++  assert.equal(item.typedAction.recommendedValue.dailyBudget, 42.0);
+   const after = (await callAds('GET', '/api/v1/store/ads/lx/campaigns/' + cmpId)).body.dailyBudget;
+-  assert.equal(after, 42.0);
+-  // Find audit log
+-  const logs = listAuditLogs(USER_ID, STORE_ID, { actionType: 'LX_CAMPAIGN_BUDGET_UPDATE', limit: 10 });
+-  const target = logs.find((l) => l.resourceId === cmpId);
+-  assert.ok(target, 'audit log not found');
+-  const reverted = revertAuditLog(USER_ID, STORE_ID, target.id);
+-  assert.ok(reverted.reverted, 'revert flag not set');
+-  assert.ok(reverted.dispatchedInverse, 'inverse dispatcher must succeed');
+-  const restored = (await callAds('GET', '/api/v1/store/ads/lx/campaigns/' + cmpId)).body.dailyBudget;
+-  assert.equal(restored, before);
++  assert.equal(after, before, 'LX budget route must not mutate directly');
++  await assertQueueDryRunRoundTrip(item);
++  const finalBudget = (await callAds('GET', '/api/v1/store/ads/lx/campaigns/' + cmpId)).body.dailyBudget;
++  assert.equal(finalBudget, before, 'dry-run/revert keeps synced campaign unchanged');
+ });
+ 
++
+ // =============================================================================
+-// 20. 17 actionType revert paths
++// 20. actionType revert paths
+ // =============================================================================
+ async function lastLog(actionType) {
+-  // Direct DB query with rowid tie-breaker — listAuditLogs uses ORDER BY executed_at DESC
+-  // only, which is non-deterministic when adjacent calls collide on the same millisecond.
+-  // Returned shape matches the camelCase rowToAudit output that other tests rely on.
+   const db = getDbInstance();
+   const row = db.prepare(
+     `SELECT * FROM audit_logs
+@@ -966,6 +1376,8 @@ async function lastLog(actionType) {
+     revertReason: row.revert_reason,
+     executedAt: row.executed_at,
+     payload: row.payload,
++    previousValues: row.previous_values,
++    newValues: row.new_values,
+   };
+ }
+ 
+@@ -1042,8 +1454,10 @@ test('M3-revert-06: TIMELINE_REVERT revert restores observing', async () => {
+ });
+ 
+ test('M3-revert-07: ADD_NEGATIVE_KEYWORD revert deletes negative', async () => {
+-  const c = await callAds('POST', '/api/v1/store/ads/lx/negatives', { body: { term: 'qa-r-neg', matchType: 'exact', campaignId: globalThis.__qaCmpId } });
+-  const id = c.body.id;
++  const c = createNegative(getDbInstance(), USER_ID, STORE_ID, {
++    term: 'qa-r-neg', matchType: 'exact', campaignId: globalThis.__qaCmpId,
++  });
++  const id = c.id;
+   const log = await lastLog('ADD_NEGATIVE_KEYWORD');
+   const rv = revertAuditLog(USER_ID, STORE_ID, log.id);
+   assert.equal(rv.dispatchedInverse, true);
+@@ -1052,130 +1466,101 @@ test('M3-revert-07: ADD_NEGATIVE_KEYWORD revert deletes negative', async () => {
+   assert.equal(row, undefined);
+ });
+ 
+-test('M3-revert-08: PROMOTE_TO_MANUAL revert deletes targeting + negative', async () => {
++
++test('M3-revert-08: PROMOTE_TO_MANUAL route queues dry-run/revert instead of direct insert', async () => {
+   const r = await callAds('POST', '/api/v1/store/ads/lx/promote-to-manual', { body: {
+     term: 'qa-r-prom', autoCampaignId: globalThis.__qaCmpId, autoAdGroupId: null,
+     manualCampaignId: globalThis.__qaCmpId, manualAdGroupId: globalThis.__qaAgId, matchType: 'exact', bid: 1.0,
+   } });
+-  const tId = r.body.targeting.id;
+-  const nId = r.body.negative.id;
+-  const log = await lastLog('PROMOTE_TO_MANUAL');
+-  const rv = revertAuditLog(USER_ID, STORE_ID, log.id);
+-  assert.equal(rv.dispatchedInverse, true);
+-  const db = getDbInstance();
+-  assert.equal(db.prepare('SELECT id FROM lx_targetings WHERE id=?').get(tId), undefined);
+-  assert.equal(db.prepare('SELECT id FROM lx_negatives WHERE id=?').get(nId), undefined);
++  const item = assertQueuedWrite(r, 'PROMOTE_SEARCH_TERM');
++  await assertQueueDryRunRoundTrip(item);
+ });
+ 
+-test('M3-revert-09: BULK_CHANGE_BUDGET revert restores previous values', async () => {
++
++test('M3-revert-09: BULK_CHANGE_BUDGET route queues dry-run/revert instead of direct mutation', async () => {
+   const cmps = (await callAds('GET', '/api/v1/store/ads/lx/campaigns')).body.items.slice(0, 2);
+   const before = cmps.map((c) => c.dailyBudget);
+-  await callAds('POST', '/api/v1/store/ads/lx/campaigns/bulk-budget', { body: cmps.map((c) => ({ id: c.id, dailyBudget: 88 })) });
+-  const log = await lastLog('BULK_CHANGE_BUDGET');
+-  const rv = revertAuditLog(USER_ID, STORE_ID, log.id);
+-  assert.equal(rv.dispatchedInverse, true);
++  const r = await callAds('POST', '/api/v1/store/ads/lx/campaigns/bulk-budget', { body: cmps.map((c) => ({ id: c.id, dailyBudget: 88 })) });
++  const item = assertQueuedWrite(r, 'BULK_ADJUST_CAMPAIGN_BUDGET');
++  await assertQueueDryRunRoundTrip(item);
+   const after = (await callAds('GET', '/api/v1/store/ads/lx/campaigns')).body.items.slice(0, 2);
+   assert.deepEqual(after.map((c) => c.dailyBudget), before);
+ });
+ 
+-test('M3-revert-10: COPY_CAMPAIGN revert deletes the copy', async () => {
++test('M3-revert-10: COPY_CAMPAIGN route queues dry-run/revert instead of direct copy', async () => {
+   const cmps = (await callAds('GET', '/api/v1/store/ads/lx/campaigns')).body.items;
+-  const src = cmps[0].id;
+-  const r = await callAds('POST', '/api/v1/store/ads/lx/campaigns/' + src + '/copy', { body: { name: 'qa-r-copy' } });
+-  const copyId = r.body.id;
+-  const log = await lastLog('COPY_CAMPAIGN');
+-  const rv = revertAuditLog(USER_ID, STORE_ID, log.id);
+-  assert.equal(rv.dispatchedInverse, true);
+-  const db = getDbInstance();
+-  assert.equal(db.prepare('SELECT id FROM lx_campaigns WHERE id=?').get(copyId), undefined);
++  const before = rowCount('lx_campaigns');
++  const r = await callAds('POST', '/api/v1/store/ads/lx/campaigns/' + cmps[0].id + '/copy', { body: { name: 'qa-r-copy' } });
++  const item = assertQueuedWrite(r, 'COPY_CAMPAIGN');
++  await assertQueueDryRunRoundTrip(item);
++  assert.equal(rowCount('lx_campaigns'), before);
+ });
+ 
+-test('M3-revert-11: SQP_ADD_TARGETING revert deletes targeting', async () => {
+-  // Find a fresh SQP query
++test('M3-revert-11: SQP take-action route queues dry-run/revert instead of direct targeting', async () => {
+   const sqps = (await callAds('GET', '/api/v1/store/ads/sqp')).body.items;
+   const fresh = sqps.find((s) => s.id && s.id !== globalThis.__qaSqp?.id);
+   if (!fresh) return;
+-  await callAds('POST', '/api/v1/store/ads/sqp/take-action', { body: {
++  const before = rowCount('lx_targetings');
++  const r = await callAds('POST', '/api/v1/store/ads/sqp/take-action', { body: {
+     queryId: fresh.id, action: 'add_targeting',
+     payload: { campaignId: globalThis.__qaCmpId, adGroupId: globalThis.__qaAgId, matchType: 'exact' },
+   } });
+-  const log = await lastLog('SQP_ADD_TARGETING');
+-  if (!log) return;
+-  const payload = typeof log.payload === 'string' ? JSON.parse(log.payload) : (log.payload || {});
+-  const tId = payload?.payload?.targetingId || payload?.targetingId;
+-  const rv = revertAuditLog(USER_ID, STORE_ID, log.id);
+-  assert.equal(rv.dispatchedInverse, true);
+-  const db = getDbInstance();
+-  if (tId) assert.equal(db.prepare('SELECT id FROM lx_targetings WHERE id=?').get(tId), undefined);
++  const item = assertQueuedWrite(r, 'SQP_TAKE_ACTION');
++  await assertQueueDryRunRoundTrip(item);
++  assert.equal(rowCount('lx_targetings'), before);
+ });
+ 
+-test('M3-revert-12: LX_UST_PROMOTE revert deletes targeting', async () => {
+-  // Note: do not rely on listAuditLogs ORDER BY executed_at DESC to find "the
+-  // latest" audit row — adjacent tests can collide on the millisecond, and
+-  // SQLite's tie-break order is unspecified. Look up the audit by resource_id
+-  // (the returned targeting id) instead.
++
++test('M3-revert-12: LX_UST_PROMOTE route queues dry-run/revert instead of direct insert', async () => {
+   const r = await callAds('POST', '/api/v1/store/ads/lx/user-search-terms/promote', { body: { term: 'qa-r-ust-' + randomBytes(8).toString('hex'), campaignId: globalThis.__qaCmpId, adGroupId: globalThis.__qaAgId } });
+-  const tId = r.body.id;
+-  assert.ok(tId, 'promote should return a targeting id');
+-  const db = getDbInstance();
+-  const auditRow = db.prepare(
+-    `SELECT id FROM audit_logs WHERE user_id=? AND store_id=? AND action_type='LX_UST_PROMOTE' AND resource_id=? LIMIT 1`
+-  ).get(USER_ID, STORE_ID, tId);
+-  assert.ok(auditRow, 'LX_UST_PROMOTE audit row should exist for the new targeting');
+-  const rv = revertAuditLog(USER_ID, STORE_ID, auditRow.id);
+-  assert.equal(rv.dispatchedInverse, true);
+-  assert.equal(db.prepare('SELECT id FROM lx_targetings WHERE id=?').get(tId), undefined);
++  const item = assertQueuedWrite(r, 'PROMOTE_SEARCH_TERM');
++  await assertQueueDryRunRoundTrip(item);
+ });
+ 
+-test('M3-revert-13: LX_TARGETING_BID_UPDATE revert restores bid', async () => {
+-  const t = await callAds('POST', '/api/v1/store/ads/lx/targetings', { body: {
++
++test('M3-revert-13: LX_TARGETING_BID_UPDATE route queues dry-run/revert and preserves bid', async () => {
++  const t = createTargeting(getDbInstance(), USER_ID, STORE_ID, {
+     campaignId: globalThis.__qaCmpId, adGroupId: globalThis.__qaAgId,
+     type: 'keyword', term: 'qa-r-bid', matchType: 'exact', bid: 1.0,
+-  } });
+-  await callAds('PUT', '/api/v1/store/ads/lx/targetings/' + t.body.id + '/bid', { body: { bid: 3.5 } });
+-  const log = await lastLog('LX_TARGETING_BID_UPDATE');
+-  const rv = revertAuditLog(USER_ID, STORE_ID, log.id);
+-  assert.equal(rv.dispatchedInverse, true);
+-  const fresh = await callAds('GET', '/api/v1/store/ads/lx/targetings/' + t.body.id);
++  });
++  const q = await callAds('PUT', '/api/v1/store/ads/lx/targetings/' + t.id + '/bid', { body: { bid: 3.5 } });
++  const item = assertQueuedWrite(q, 'ADJUST_TARGETING_BID');
++  await assertQueueDryRunRoundTrip(item);
++  const fresh = await callAds('GET', '/api/v1/store/ads/lx/targetings/' + t.id);
+   assert.equal(fresh.body.bid, 1.0);
+ });
+ 
+-test('M3-revert-14: LX_TARGETING_UPDATE revert restores matchType', async () => {
+-  const t = await callAds('POST', '/api/v1/store/ads/lx/targetings', { body: {
++test('M3-revert-14: LX_TARGETING_UPDATE revert restores matchType for direct audit dispatcher', async () => {
++  const t = createTargeting(getDbInstance(), USER_ID, STORE_ID, {
+     campaignId: globalThis.__qaCmpId, adGroupId: globalThis.__qaAgId,
+     type: 'keyword', term: 'qa-r-mt', matchType: 'exact', bid: 0.5,
+-  } });
+-  await callAds('PATCH', '/api/v1/store/ads/lx/targetings/' + t.body.id, { body: { matchType: 'phrase' } });
++  });
++  updateTargeting(getDbInstance(), USER_ID, STORE_ID, t.id, { matchType: 'phrase' });
+   const log = await lastLog('LX_TARGETING_UPDATE');
+   const rv = revertAuditLog(USER_ID, STORE_ID, log.id);
+   assert.equal(rv.dispatchedInverse, true);
+-  const fresh = await callAds('GET', '/api/v1/store/ads/lx/targetings/' + t.body.id);
++  const fresh = await callAds('GET', '/api/v1/store/ads/lx/targetings/' + t.id);
+   assert.equal(fresh.body.matchType, 'exact');
+ });
+ 
+-test('M3-revert-15: LX_ADGROUP_BID_UPDATE revert restores defaultBid', async () => {
+-  const ag = await callAds('POST', '/api/v1/store/ads/lx/ad-groups', { body: { name: 'qa-r-ag', defaultBid: 0.5 } });
+-  await callAds('PUT', '/api/v1/store/ads/lx/ad-groups/' + ag.body.id + '/bid', { body: { defaultBid: 2.5 } });
+-  const log = await lastLog('LX_ADGROUP_BID_UPDATE');
+-  const rv = revertAuditLog(USER_ID, STORE_ID, log.id);
+-  assert.equal(rv.dispatchedInverse, true);
+-  const fresh = await callAds('GET', '/api/v1/store/ads/lx/ad-groups/' + ag.body.id);
++
++test('M3-revert-15: LX_ADGROUP_BID_UPDATE route queues dry-run/revert and preserves defaultBid', async () => {
++  const ag = createAdGroup(getDbInstance(), USER_ID, STORE_ID, { name: 'qa-r-ag', defaultBid: 0.5 });
++  const q = await callAds('PUT', '/api/v1/store/ads/lx/ad-groups/' + ag.id + '/bid', { body: { defaultBid: 2.5 } });
++  const item = assertQueuedWrite(q, 'ADJUST_AD_GROUP_BID');
++  await assertQueueDryRunRoundTrip(item);
++  const fresh = await callAds('GET', '/api/v1/store/ads/lx/ad-groups/' + ag.id);
+   assert.equal(fresh.body.defaultBid, 0.5);
+ });
+ 
+-test('M3-revert-16: BULK_CSV_IMPORT revert deletes created entities', async () => {
++test('M3-revert-16: BULK_IMPORT route queues dry-run/revert instead of direct CSV inserts', async () => {
++  const before = rowCount('lx_campaigns');
+   const r = await callAds('POST', '/api/v1/store/ads/lx/bulk-import', { body: {
+     type: 'campaigns', rows: [{ name: 'qa-r-csv-1', dailyBudget: 1 }, { name: 'qa-r-csv-2', dailyBudget: 1 }],
+   } });
+-  assert.equal(r.body.created, 2);
+-  const ids = r.body.createdIds.map((x) => x.id);
+-  const log = await lastLog('BULK_CSV_IMPORT');
+-  const rv = revertAuditLog(USER_ID, STORE_ID, log.id);
+-  assert.equal(rv.dispatchedInverse, true);
+-  const db = getDbInstance();
+-  for (const id of ids) {
+-    assert.equal(db.prepare('SELECT id FROM lx_campaigns WHERE id=?').get(id), undefined);
+-  }
++  const item = assertQueuedWrite(r, 'BULK_IMPORT');
++  await assertQueueDryRunRoundTrip(item);
++  assert.equal(rowCount('lx_campaigns'), before);
+ });
+ 
+ test('M3-revert-17: ACCEPT_ALTERNATIVE_TO_MANUAL_CHANGE revert restores pending', async () => {
+@@ -1203,33 +1588,30 @@ test('M3-revert-18: MANUAL_CHANGE_IGNORE revert restores pending', async () => {
+   assert.equal(fresh.state, 'pending');
+ });
+ 
+-test('M3-revert-19: LX_CAMPAIGN_TOGGLE revert restores enabled', async () => {
++
++test('M3-revert-19: LX_CAMPAIGN_TOGGLE route queues dry-run/revert and preserves enabled', async () => {
+   const cmps = (await callAds('GET', '/api/v1/store/ads/lx/campaigns')).body.items;
+   const before = cmps[0].enabled;
+-  await callAds('POST', '/api/v1/store/ads/lx/campaigns/' + cmps[0].id + '/toggle', { body: { enabled: !before } });
+-  const log = await lastLog('LX_CAMPAIGN_TOGGLE');
+-  const rv = revertAuditLog(USER_ID, STORE_ID, log.id);
+-  assert.equal(rv.dispatchedInverse, true);
++  const q = await callAds('POST', '/api/v1/store/ads/lx/campaigns/' + cmps[0].id + '/toggle', { body: { enabled: !before } });
++  const item = assertQueuedWrite(q, 'TOGGLE_CAMPAIGN');
++  await assertQueueDryRunRoundTrip(item);
+   const after = await callAds('GET', '/api/v1/store/ads/lx/campaigns/' + cmps[0].id);
+   assert.equal(after.body.enabled, before);
+ });
+ 
+-test('M3-revert-20: LX_KWG_APPLY_BID revert restores currentBid', async () => {
+-  const kwg = await callAds('POST', '/api/v1/store/ads/lx/kw-grabbing', { body: {
++
++test('M3-revert-20: LX_KWG_APPLY_BID route queues dry-run/revert and preserves currentBid', async () => {
++  const kwg = createKwGrabbing(getDbInstance(), USER_ID, STORE_ID, {
+     keyword: 'qa-r-kwg', campaignId: globalThis.__qaCmpId, currentBid: 1.0, suggestedBid: 2.5,
+-  } });
+-  await callAds('POST', '/api/v1/store/ads/lx/kw-grabbing/' + kwg.body.id + '/apply-bid');
+-  const log = await lastLog('LX_KWG_APPLY_BID');
+-  const rv = revertAuditLog(USER_ID, STORE_ID, log.id);
+-  assert.equal(rv.dispatchedInverse, true);
++  });
++  const q = await callAds('POST', '/api/v1/store/ads/lx/kw-grabbing/' + kwg.id + '/apply-bid');
++  const item = assertQueuedWrite(q, 'APPLY_KW_GRABBING_BID');
++  await assertQueueDryRunRoundTrip(item);
+   const db = getDbInstance();
+-  const row = db.prepare('SELECT current_bid FROM lx_kw_grabbing WHERE id=?').get(kwg.body.id);
++  const row = db.prepare('SELECT current_bid FROM lx_kw_grabbing WHERE id=?').get(kwg.id);
+   assert.equal(row.current_bid, 1.0);
+ });
+ 
+-// =============================================================================
+-// 21. Audit logs filtering & pagination (via /store/audit-logs)
+-// =============================================================================
+ test('M3-audit-01: GET /audit-logs?sourceModule=M3 returns only M3 rows', async () => {
+   const r = await callStore('GET', '/api/v1/store/audit-logs', { qs: { sourceModule: 'M3', limit: '50' } });
+   assert.equal(r.status, 200);

@@ -1,0 +1,189 @@
+[
+  {
+    "id": "M3-P0-01",
+    "title": "useLxState 全 mutation 删除成功路径 snapback,仅 catch 回滚",
+    "type": "bug",
+    "priority": "P0",
+    "files": [
+      "apps/web-v2/src/composables/useLxState.js"
+    ],
+    "acceptanceCriteria": "删除 toggle(:208/:421)/setBid(:402)/setBudget(:226)/setBidStrategy(:244)/setBidAdj 成功路径上 await 之前的 x=prev/x=previousVal 写回行;prev 仅用于入队 payload(currentValue)与 catch 失败回滚。可断言测试:mock enqueueLxManualAction resolve 后,被操作 reactive 实体的字段值===desired(不回到 prev);mock reject 后字段值===prev 且 ElMessage.error 被调用。对 toggle 还需断言 desired 由真实 reactive 引用 c.enabled 计算而非传入副本。",
+    "rationale": "已实锤:成功路径在 await 前置 prev 且从不写回 desired,导致每次内联编辑视觉回滚,用户误以为操作失败。证据链闭合(setBid 因所有调用方都传 oldVal 故 previousBid 恒!==undefined)。"
+  },
+  {
+    "id": "M3-P0-06",
+    "title": "修复 LxTabTargeting.commitBulkState 入队值反转 + 移除无条件 success toast",
+    "type": "bug",
+    "priority": "P0",
+    "files": [
+      "apps/web-v2/src/pages/lx/tabs/LxTabTargeting.vue"
+    ],
+    "acceptanceCriteria": "commitBulkState(:74-82)改为对每行调用 toggle(row, !row.enabled) 传真实 reactive row 引用(不再 toggle({...row, enabled:!row.enabled}) 传副本,该副本既使 composable 改不到真实行又使 desired 取反);移除 :82 无条件 ElMessage.success,改为按 enqueue 返回真实统计 '已加入执行篮 N 条(待审核+dry-run)',全失败时 error/warning。测试:mock enqueue,断言每行传入 toggle 的对象 === 原 reactive row 且 recommendedValue.enabled === 用户意图值;部分失败时 toast 文案含真实成功条数。",
+    "rationale": "已实锤 success 谎报:漏传 desired 致入队值反转 + 副本致表格行不变 + 无条件 success toast,证伪 'LX 是诚实只读剧场'。"
+  },
+  {
+    "id": "M3-P0-07",
+    "title": "AdsTimeline manual-change revert:后端端点就绪前隐藏撤销/恢复按钮且禁止单独写 TIMELINE_REVERT 审计",
+    "type": "bug",
+    "priority": "P0",
+    "files": [
+      "apps/web-v2/src/pages/AdsTimeline.vue"
+    ],
+    "acceptanceCriteria": "revertProcessed(:206-222)对 entry.kind==='manual_change' 分支:在后端 /manual-changes/:id/revert 端点就绪前,前端隐藏该类条目的撤销/恢复按钮,且绝不执行 :206 的 submit({actionType:'TIMELINE_REVERT'}) 也不仅做本地 entry.item.state='pending' 写回;suggestion 撤销仅调用后端 revert(由后端写审计),删除前端 :206 的 submit 双写。测试:manual_change 条目无可点击撤销按钮(或点击不发任何 submit);suggestion 撤销断言不调用前端 submit、仅调用 revert API。",
+    "rationale": "已实锤审计/数据分叉:前端先写 TIMELINE_REVERT 审计后仅改本地 state,无后端真实写入,制造审计与数据不一致。"
+  },
+  {
+    "id": "M3-P1-11",
+    "title": "前端 enqueue 包装层把 duplicate/409 统一降级为 info,成功打 queuedInBasket 禁用重复入篮",
+    "type": "bug",
+    "priority": "P1",
+    "files": [
+      "apps/web-v2/src/api/ads-timeline.js",
+      "apps/web-v2/src/composables/useLxState.js",
+      "apps/web-v2/src/composables/useAdsState.js"
+    ],
+    "acceptanceCriteria": "actionQueueApi.enqueue 包装层识别 res.duplicate===true 或 409,统一 ElMessage.info('已在执行篮中')而非 error;enqueueSuggestion/enqueueLxManualAction 成功后给对应实体打 queuedInBasket 标记并禁用重复入篮控件。测试:mock enqueue 返回 duplicate:true 时调用 ElMessage.info 不调用 ElMessage.error;成功入队后再次点击同控件被 disabled/拦截。",
+    "rationale": "配合 M3-P1-10 的契约统一,消除良性重复被报错的体验。"
+  },
+  {
+    "id": "M3-P1-12",
+    "title": "AdsHub dataHealth/healthType/aiContribution mock 诚实化",
+    "type": "bug",
+    "priority": "P1",
+    "files": [
+      "apps/web-v2/src/pages/AdsHub.vue"
+    ],
+    "acceptanceCriteria": "dataHealth(:115-120):去掉 lx 硬编码 'healthy'(:119)与 m2 'partial' 计入 healthy;provider-mode!=='real' 时全 adapter status 强制 'mock';healthy 仅 real+真实回流时给出。healthType(:123)在非 real 下恒 'warning'(去除 >=3 即 success)。aiContribution(:109-113,hero :224)在 mock 下隐藏数值或加 '示例估算' 角标,不以 formatCurrency 美元净额作 hero 主视觉。测试:stub provider-mode='mock' 时 dataHealth 无 status==='healthy' 项、healthType==='warning'、AI 贡献区不渲染裸美元 hero(带示例标记或隐藏)。",
+    "rationale": "已实锤语义颠倒:有 mock seed 反标 healthy、lx 硬编码 healthy、>=3 恒 success、把 mock impact 求和当美元 hero,误导采购/续费。"
+  },
+  {
+    "id": "M3-P1-13",
+    "title": "三态机诚实降级:裁剪为 pending/observing/rejected,删 succeeded/failed 死分支与观察期回流/自动回滚/回测文案",
+    "type": "refactor",
+    "priority": "P1",
+    "files": [
+      "apps/web-v2/src/pages/AdsTimeline.vue"
+    ],
+    "acceptanceCriteria": "stateText/stateType(:230-248)删除 succeeded/failed(及 accepted 若无后端推进则一并核实)死分支;删除 :subtitle(:136 '按小时数据周期更新')、:167 等 '观察期回流/自动回滚/回测' 空头文案;observing 文案改 '已入队/待人工复盘' 或保留但不承诺自动结算。测试:全仓无 cron 推进 observing→succeeded 的证据下,UI 不出现 succeeded/failed 标签与 '已生效/未达预期' 文案;状态枚举集合 ⊆ {pending,observing,rejected}。",
+    "rationale": "已实锤:succeeded/failed/观察期回流/自动回滚为不可达死码 + 空头承诺(无 cron 推进、observationWindow/cooldown 仅入库不消费)。"
+  },
+  {
+    "id": "M3-P1-14",
+    "title": "LxAllCampaigns 过滤/同步工具条接真实过滤或全 disabled+即将上线;修 Clock 未 import",
+    "type": "bug",
+    "priority": "P1",
+    "files": [
+      "apps/web-v2/src/pages/lx/LxAllCampaigns.vue"
+    ],
+    "acceptanceCriteria": "filterDate(:65/:91)接 watch 或并入 fetchAll(params) 查询参数;查询(:100)/重置(:101)/同步(:111)绑定真实 handler(查询→fetchAll(params)、重置→清空+refetch、同步→fetchAll(force=true)+loading);未实现控件 disabled + '即将上线' tooltip。修复 Clock(:182)未 import(当前仅 import Histogram :4)致渲染错误。测试:点 查询 调用 fetchAll 带 filterDate 参数;点 同步 触发 force refetch+loading;组件挂载渲染无 Clock 未定义错误(快照/渲染测试通过)。",
+    "rationale": "已实锤死控件群 + Clock 未 import 渲染报错。"
+  },
+  {
+    "id": "M3-P1-15",
+    "title": "AdAnalysisDrawer 治理:refreshKey 触发重取、preset 标量单向 applyPreset、统一 fetcher 接 api/lx.js、mock tab 加示例水印",
+    "type": "feature",
+    "priority": "P1",
+    "files": [
+      "apps/web-v2/src/components/SuggestionDrawer.vue",
+      "apps/web-v2/src/api/lx.js",
+      "apps/web-v2/src/composables/useLxState.js"
+    ],
+    "acceptanceCriteria": "刷新改 refreshKey provide/inject 触发各 tab 真实 re-fetch;日期 preset radio 改字符串标量 v-model 单向驱动 applyPreset(date) 触发 fetch;抽象统一 fetcher 接 api/lx.js 并对齐字段契约;每个 mock tab 加 '示例数据' 水印,Compare 无真实数据时禁用语义色。测试:改 refreshKey 后断言 tab fetcher 被再次调用;选 preset 触发对应日期 fetch;mock 数据 tab 渲染含 '示例数据' 标记。",
+    "rationale": "抽屉刷新不重取、preset 双向绑定与 mock 无标识,误导分析判断。"
+  },
+  {
+    "id": "M3-P1-17",
+    "title": "LX 内联编辑范式定稿并统一应用(乐观 pending 角标 / 加入执行篮)",
+    "type": "ux",
+    "priority": "P1",
+    "files": [
+      "apps/web-v2/src/composables/useLxState.js",
+      "apps/web-v2/src/pages/lx/tabs/LxTabTargeting.vue",
+      "apps/web-v2/src/pages/lx/LxAllCampaigns.vue",
+      "apps/web-v2/src/pages/lx/LxPortfolioDetail.vue"
+    ],
+    "acceptanceCriteria": "全 lx tab 统一范式:成功 enqueue 后控件停在 desired 并显示 pending 角标(从 action-queue 反查该实体 active 动作),区分 '当前生效值' 与 '篮中待执行值';toast 统一 '已加入执行篮待批准生效'。本期范式裁决:乐观 pending 角标(保留 v-model);影子回写/纯审计列为 carryForward 架构项。测试:enqueue 成功后控件值===desired 且渲染 pending 角标;角标数据源自 action-queue active 查询而非本地猜测。",
+    "rationale": "snapback 修复后须定义控件停 desired 的可观测范式,避免控件值≠真值二义。依赖 M3-P0-01。"
+  },
+  {
+    "id": "M3-P2-19",
+    "title": "lx.js 客户端直写 API 标 @deprecated 或迁 admin/internal,注释禁止 UI 直调须经 Action Queue",
+    "type": "refactor",
+    "priority": "P2",
+    "files": [
+      "apps/web-v2/src/api/lx.js"
+    ],
+    "acceptanceCriteria": "lx.js 中 toggle/setBudget/setBid/update/remove 等直写 API 标 @deprecated 注释 '禁止 UI 直调,实体 mutation 须经 actionQueueApi.enqueue';或迁至 admin/internal 命名空间。测试:grep 业务页(非 admin)无对这些 deprecated 直写 API 的调用。",
+    "rationale": "配合 M3-P2-18 前端侧收敛,防止绕过 Action Queue。"
+  },
+  {
+    "id": "M3-P2-20",
+    "title": "StrategyLibrary 诚实化:去魔法数83、未实现入口移除/置灰、排序/视图加 handler 或移除",
+    "type": "ux",
+    "priority": "P2",
+    "files": [
+      "apps/web-v2/src/pages/StrategyLibrary.vue"
+    ],
+    "acceptanceCriteria": "strategyCount(:101)去掉 ||83 魔法数兜底,无数据显示 0 或加载态;'我创建的'(:228)/'模板库'(:237)未实现前从左栏移除或置灰带 tooltip;排序(:251)/视图(:252)按钮加真实 handler 或移除;已 disabled 的模板库/导入/新建(:136-138)保持并核对 tooltip 上线时间。测试:无策略数据时 UI 不出现 83;排序/视图按钮要么有 @click 要么不渲染;未实现左栏项 disabled 或不存在。",
+    "rationale": "魔法数83伪造规模、死按钮与未实现入口降低可信度(部分按钮已正确 disabled)。"
+  },
+  {
+    "id": "M3-P2-21",
+    "title": "LxTab 工具栏死按钮统一 disabled+tooltip,优先实现前端 CSV 导出当前数据",
+    "type": "feature",
+    "priority": "P2",
+    "files": [
+      "apps/web-v2/src/pages/lx/tabs/LxTabTargeting.vue",
+      "apps/web-v2/src/pages/lx/tabs/LxTabAdGroups.vue",
+      "apps/web-v2/src/pages/lx/tabs/LxTabSearchTerms.vue"
+    ],
+    "acceptanceCriteria": "添加投放/CSV批量改/列配置/导出 等无 handler 按钮统一 disabled + '即将上线' tooltip;导出按钮优先实现纯前端 CSV 导出当前已加载表格数据。测试:无 handler 按钮均 disabled 且有 tooltip;点击导出生成含当前行数据的 CSV blob。",
+    "rationale": "死控件群体验问题,CSV 导出可低成本兑现。"
+  },
+  {
+    "id": "M3-P2-22",
+    "title": "SuggestionDrawer 死代码清理:portfolioGuess/muteStrategy/targetCampaign 降级",
+    "type": "bug",
+    "priority": "P2",
+    "files": [
+      "apps/web-v2/src/components/SuggestionDrawer.vue"
+    ],
+    "acceptanceCriteria": "删除死的 portfolioGuess 或落实 SKU/portfolio 真实匹配;muteStrategy 接后端静音端点回写策略状态(端点未就绪则按钮 disabled+tooltip,不本地伪装);targetCampaign 匹配失败给降级占位而非空/错值。测试:portfolioGuess 不再渲染无依据猜测;muteStrategy 调后端端点或 disabled;targetCampaign 无匹配时显示占位。",
+    "rationale": "抽屉内 portfolio 猜测与 muteStrategy 本地伪装属诚实度问题。"
+  },
+  {
+    "id": "M3-P3-24",
+    "title": "LxTabSearchTerms negate 加轻确认/撤销 toast;promote 缺 cpc 时禁用避免异常出价进队",
+    "type": "ux",
+    "priority": "P3",
+    "files": [
+      "apps/web-v2/src/pages/lx/tabs/LxTabSearchTerms.vue"
+    ],
+    "acceptanceCriteria": "单条 negate(GOVERN_KEYWORD)加轻确认或可撤销 toast;promote 出价缺 cpc(undefined/0/NaN)时禁用 promote 按钮,避免零/异常出价入队。测试:cpc 缺失时 promote 按钮 disabled;negate 操作产生确认或撤销入口。",
+    "rationale": "防止异常出价进队与误否定,低优体验项。"
+  },
+  {
+    "id": "M4-P0-05",
+    "title": "TabHistory.vue revert 假成功修复:读 dispatchedInverse 决定 reverted",
+    "type": "bug",
+    "priority": "P0",
+    "files": [
+      "apps/web-v2/src/components/ad-drawer-tabs/TabHistory.vue"
+    ],
+    "acceptanceCriteria": "onRevert(89) 在 revertAuditLog 返回后,仅当响应 dispatchedInverse!==false 才设 row.reverted=true(105);dispatchedInverse===false 时不置 reverted、弹 warning『撤销未生效(动作未实际反转)』并 reload。测试:(a)mock 返回 {dispatchedInverse:true} → row.reverted=true;(b)mock 返回 {dispatchedInverse:false} → row.reverted 不变、出现 warning。",
+    "rationale": "实测 data-store.mjs:549 后端诚实回传 dispatchedInverse,但 TabHistory.vue:105 无条件 row.reverted=true 不读真值,造成 UI 假回滚。"
+  },
+  {
+    "id": "X-P0-06",
+    "title": "UI 对 real-write 记录禁用一键回滚改 申请人工回滚 阻断态; 真实写自动反向通道在 change-limit 悖论解决前不上线",
+    "type": "ux",
+    "priority": "P0",
+    "files": [
+      "apps/web-v2/src/pages/Audit.vue",
+      "apps/web-v2/src/components/SuggestionDrawer.vue",
+      "apps/web-v2/src/components/SuggestionCard.vue"
+    ],
+    "acceptanceCriteria": "审计/抽屉 UI 对 origin 为真实写(real-write / status===real_write_success)的记录: 回滚按钮置为 '申请人工回滚' 阻断态(不可触发自动反向), 本地可逆记录保留 '回滚' 按钮。可写测试(组件): 给定记录 {actionType:'ACTION_QUEUE_REAL_WRITE'} → assert 渲染 '申请人工回滚' 且自动 revert 不被调用; 给定 {actionType:'STRATEGY_TOGGLE'} → assert 渲染可点回滚。",
+    "rationale": "全员附议硬约束: 反向写自身再过 assertRealWriteGate+assertChangeLimit(live-action-executor.mjs:69-78, previousValue 偏差>10% 触发 real_write_delta_too_large), 自动回滚工程上不可兑现, UI 绝不可承诺一键回滚。"
+  }
+]

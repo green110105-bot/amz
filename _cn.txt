@@ -1,0 +1,13 @@
+export function createNegative(db, userId, storeId, body) {
+  const id = body.id || newId('nt');
+  const now = nowIso();
+  const tx = db.transaction(() => {
+    db.prepare(`INSERT INTO lx_negatives(
+      id, user_id, store_id, campaign_id, ad_group_id, type, term, asin, match_type, scope, added_at, added_by, extra, created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      id, userId, storeId, body.campaignId || null, body.adGroupId || null,
+      body.type || 'keyword', body.term || null, body.asin || null,
+      body.matchType || 'exact', body.scope || 'Campaign',
+      body.addedAt || now.slice(0, 10), body.addedBy || 'operator',
+      JSON.stringify({}), now
+    );
