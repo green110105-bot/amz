@@ -290,12 +290,36 @@ test('POST /scores/trigger: existing target happy -> 201 with 5 dims', async () 
     assert.ok(typeof r.body[k] === 'number', `missing score dim ${k}`);
   }
   assert.ok(Array.isArray(r.body.improvement_ranking) && r.body.improvement_ranking.length >= 3);
+  // Provenance (N4-m1-score-ismock): PRNG/seed synthesized score MUST be honestly flagged mock.
+  assert.equal(r.body.isMock, true, 'synthetic score must report isMock=true');
+  assert.equal(r.body.is_mock, true, 'synthetic score must report is_mock=true');
+  assert.ok(r.body.sourceMeta && typeof r.body.sourceMeta === 'object', 'sourceMeta must be present');
+  assert.equal(r.body.sourceMeta.provider, 'synthetic_demo', 'sourceMeta.provider must be synthetic_demo');
+  assert.equal(r.body.sourceMeta.mode, 'mock', 'sourceMeta.mode must be mock');
 });
 
 test('GET /scores/:targetId returns latest', async () => {
   const r = await call('GET', `/api/v1/store/m1/scores/${seedExistingT1.id}`);
   assert.equal(r.status, 200);
   assert.ok(r.body.total_score >= 0);
+  // Provenance surfaced on read path too.
+  assert.equal(r.body.isMock, true, 'read path must surface isMock');
+  assert.ok(r.body.sourceMeta && r.body.sourceMeta.provider === 'synthetic_demo', 'read path sourceMeta synthetic_demo');
+});
+
+test('score row provenance: persisted is_mock=1 and source_meta non-empty (seed + trigger)', async () => {
+  // Trigger a fresh score to exercise the trigger path INSERT.
+  await call('POST', '/api/v1/store/m1/scores/trigger', { targetId: seedExistingT1.id });
+  const rows = db.prepare(
+    'SELECT is_mock, source_meta FROM m1_listing_scores WHERE user_id = ? AND store_id = ?'
+  ).all(userId, storeId);
+  assert.ok(rows.length > 0, 'expected at least one persisted score row');
+  for (const row of rows) {
+    assert.equal(row.is_mock, 1, 'every synthetic score row must persist is_mock=1');
+    assert.ok(row.source_meta && row.source_meta.length > 0, 'source_meta must be non-empty');
+    const meta = JSON.parse(row.source_meta);
+    assert.equal(meta.provider, 'synthetic_demo', "source_meta.provider must be 'synthetic_demo'");
+  }
 });
 
 test('GET /scores/:targetId unknown -> 404', async () => {
@@ -331,9 +355,9 @@ test('POST /runs: missing targetId -> 400', async () => {
   assert.equal(r.status, 400);
 });
 
-test('POST /runs: external asin cannot optimize -> 400', async () => {
+test('POST /runs: external asin cannot optimize -> 422 (unified read-only gate)', async () => {
   const r = await call('POST', '/api/v1/store/m1/runs', { targetId: seedExternalT3.id });
-  assert.equal(r.status, 400);
+  assert.equal(r.status, 422);
   assert.equal(r.body.error, 'external_asin_cannot_optimize');
 });
 
@@ -607,9 +631,10 @@ test('GET /ab returns seeded ab tests', async () => {
   assert.ok(Array.isArray(r.body.items));
 });
 
-test('POST /ab: missing fields -> 400', async () => {
+test('POST /ab: missing fields -> 422 validation_failed (unified createAbTest validation)', async () => {
   const r = await call('POST', '/api/v1/store/m1/ab', { targetId: runTargetId });
-  assert.equal(r.status, 400);
+  assert.equal(r.status, 422);
+  assert.equal(r.body.error, 'validation_failed');
 });
 
 test('POST /ab: unknown target -> 404', async () => {
@@ -633,27 +658,33 @@ test('POST /ab: title type auto path -> 201 draft', async () => {
   abAutoId = r.body.id;
 });
 
-test('POST /ab: bullets type manual_required -> 422 with guidance', async () => {
+test('POST /ab: manual type -> 201 manualRequired:true, count +1 (M1-008)', async () => {
   const v1 = db.prepare('SELECT id FROM m1_listing_versions WHERE target_id = ? AND round_no = 1').get(runTargetId);
   const v2 = db.prepare('SELECT id FROM m1_listing_versions WHERE target_id = ? AND round_no = 2').get(runTargetId);
+  const before = await call('GET', '/api/v1/store/m1/ab');
+  const beforeN = before.body.items.length;
   const r = await call('POST', '/api/v1/store/m1/ab', {
     targetId: runTargetId, testType: 'bullets',
     controlVersionId: v1.id, treatmentVersionId: v2.id,
   });
-  assert.equal(r.status, 422);
-  assert.equal(r.body.error, 'manual_required');
+  assert.equal(r.status, 201);
+  assert.equal(r.body.manualRequired, true);
+  assert.equal(r.body.status, 'manual_required');
   assert.ok(r.body.manualGuidance && r.body.manualGuidance.length > 10);
+  const after = await call('GET', '/api/v1/store/m1/ab');
+  assert.equal(after.body.items.length, beforeN + 1);
   abManualId = r.body.id;
 });
 
-test('POST /ab: price type also manual_required -> 422', async () => {
+test('POST /ab: price manual type also -> 201 manual_required', async () => {
   const v1 = db.prepare('SELECT id FROM m1_listing_versions WHERE target_id = ? AND round_no = 1').get(runTargetId);
   const v2 = db.prepare('SELECT id FROM m1_listing_versions WHERE target_id = ? AND round_no = 2').get(runTargetId);
   const r = await call('POST', '/api/v1/store/m1/ab', {
     targetId: runTargetId, testType: 'price',
     controlVersionId: v1.id, treatmentVersionId: v2.id,
   });
-  assert.equal(r.status, 422);
+  assert.equal(r.status, 201);
+  assert.equal(r.body.status, 'manual_required');
 });
 
 test('GET /ab/:id happy', async () => {
@@ -700,17 +731,59 @@ test('GET /ab/:id/metrics unknown -> 404', async () => {
   assert.equal(r.status, 404);
 });
 
-test('POST /ab/:id/adopt-winner marks treatment version uploaded', async () => {
+test('POST /ab/:id/adopt-winner before finalize -> 409 not_finalized', async () => {
   const r = await call('POST', `/api/v1/store/m1/ab/${abAutoId}/adopt-winner`);
+  assert.equal(r.status, 409);
+  assert.equal(r.body.error, 'not_finalized');
+});
+
+test('POST /ab/:id/finalize completes running test (winner not null)', async () => {
+  const r = await call('POST', `/api/v1/store/m1/ab/${abAutoId}/finalize`);
   assert.equal(r.status, 200);
   assert.equal(r.body.status, 'completed');
-  // Winner version should be flagged uploaded_to_amazon
+  assert.ok(r.body.winner != null);
+});
+
+test('GET /ab/:id/metrics is idempotent (status unchanged before/after)', async () => {
+  // Start + finalize a fresh test so we can probe a *running* state idempotently.
+  const v1 = db.prepare('SELECT id FROM m1_listing_versions WHERE target_id = ? AND round_no = 1').get(runTargetId);
+  const v2 = db.prepare('SELECT id FROM m1_listing_versions WHERE target_id = ? AND round_no = 2').get(runTargetId);
+  const created = await call('POST', '/api/v1/store/m1/ab', {
+    targetId: runTargetId, testType: 'title', controlVersionId: v1.id, treatmentVersionId: v2.id,
+  });
+  const id = created.body.id;
+  await call('POST', `/api/v1/store/m1/ab/${id}/start`);
+  const m1 = await call('GET', `/api/v1/store/m1/ab/${id}/metrics`);
+  const m2 = await call('GET', `/api/v1/store/m1/ab/${id}/metrics`);
+  assert.equal(m1.body.test.status, 'running');
+  assert.equal(m2.body.test.status, 'running', 'GET metrics must not固化 (read/write separation)');
+});
+
+test('POST /ab/:id/adopt-winner prepares manual publish without Amazon upload flag', async () => {
+  const r = await call('POST', `/api/v1/store/m1/ab/${abAutoId}/adopt-winner`);
+  assert.equal(r.status, 200);
+  assert.equal(r.body.status, 'ready_for_manual_publish');
+  assert.ok(r.body.manual_guidance.includes('SP-API publish adapter required'));
+  assert.ok(r.body.audit_id);
+
+  // Adopting a winner is not a real SP-API publish and must not flip upload flags.
   const winnerVid = r.body.winner === 'treatment' ? r.body.treatment_version_id
     : r.body.winner === 'control' ? r.body.control_version_id : null;
   if (winnerVid) {
-    const v = db.prepare('SELECT uploaded_to_amazon FROM m1_listing_versions WHERE id = ?').get(winnerVid);
-    assert.equal(v.uploaded_to_amazon, 1);
+    const v = db.prepare('SELECT uploaded_to_amazon, uploaded_at FROM m1_listing_versions WHERE id = ?').get(winnerVid);
+    assert.equal(v.uploaded_to_amazon, 0);
+    assert.equal(v.uploaded_at, null);
   }
+
+  const audit = db.prepare(`SELECT payload FROM audit_logs
+    WHERE id = ? AND action_type = 'M1_AB_ADOPT_WINNER'`).get(r.body.audit_id);
+  assert.ok(audit, 'adopt winner audit log should be retained');
+  const payload = JSON.parse(audit.payload);
+  assert.equal(payload.publishState, 'ready_for_manual_publish');
+  assert.equal(payload.manualPublishRequired, true);
+  assert.equal(payload.publishAdapterRequired, 'SP-API');
+  assert.equal(payload.uploadedToAmazon, false);
+  assert.equal(payload.amazonReceiptId, null);
 });
 
 test('POST /ab/:id/adopt-winner unknown -> 404', async () => {

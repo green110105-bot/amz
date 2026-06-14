@@ -105,6 +105,9 @@ test('POST /credentials/spapi success path persists encrypted token', async () =
   assert.ok(row.refresh_token_enc.includes('.')); // AES-GCM packed format
   assert.notEqual(row.refresh_token_enc, 'Atzr|good-token');
   assert.equal(row.selling_partner_id, 'A123');
+  const audit = db.prepare(`SELECT payload FROM audit_logs WHERE user_id=? AND store_id=? AND action_type='AMAZON_SPAPI_CREDENTIALS_SAVED' ORDER BY executed_at DESC LIMIT 1`).get(userId, storeId);
+  assert.ok(audit, 'manual SP-API credential save must be audited');
+  assert.doesNotMatch(audit.payload, /Atzr\|good-token/);
 });
 
 test('POST /credentials/ads success', async () => {
@@ -115,6 +118,53 @@ test('POST /credentials/ads success', async () => {
   }));
   assert.equal(res.status, 200);
   assert.equal((await res.json()).provider, 'ads');
+  const audit = db.prepare(`SELECT payload FROM audit_logs WHERE user_id=? AND store_id=? AND action_type='AMAZON_ADS_CREDENTIALS_SAVED' ORDER BY executed_at DESC LIMIT 1`).get(userId, storeId);
+  assert.ok(audit, 'manual Ads credential save must be audited');
+  assert.doesNotMatch(audit.payload, /Atzr\|ads-token/);
+});
+
+test('POST /credentials/ads/profile requires profileId', async () => {
+  const res = await handleSyncRequest(mkRequest('POST', '/api/v1/integrations/credentials/ads/profile', {}));
+  assert.equal(res.status, 400);
+  assert.equal((await res.json()).error, 'profile_id_required');
+});
+
+test('POST /credentials/ads/profile rejects stores without Ads refresh token', async () => {
+  const reg2 = registerUser({ email: 'sr-no-ads@local', password: 'pw1234', name: 'SR No Ads' });
+  const token2 = authenticate('sr-no-ads@local', 'pw1234').token;
+  const store2 = db.prepare(`SELECT id FROM user_stores WHERE user_id=? LIMIT 1`).get(reg2.user.id).id;
+  const req = new Request('http://localhost/api/v1/integrations/credentials/ads/profile', {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer ' + token2,
+      'x-store-id': store2,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ profileId: '99999' }),
+  });
+  const res = await handleSyncRequest(req);
+  assert.equal(res.status, 404);
+  assert.equal((await res.json()).error, 'ads_credentials_missing');
+});
+
+test('POST /credentials/ads/profile updates existing Ads row and status exposes profileId', async () => {
+  const res = await handleSyncRequest(mkRequest('POST', '/api/v1/integrations/credentials/ads/profile', {
+    profileId: '67890',
+  }));
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.profileId, '67890');
+
+  const row = db.prepare(`SELECT profile_id FROM store_credentials WHERE user_id=? AND store_id=? AND provider='ads'`).get(userId, storeId);
+  assert.equal(row.profile_id, '67890');
+
+  const statusRes = await handleSyncRequest(mkRequest('GET', '/api/v1/integrations/status'));
+  const statusBody = await statusRes.json();
+  const ads = statusBody.providers.find((p) => p.provider === 'ads');
+  assert.equal(ads.profileId, '67890');
+  const audit = db.prepare(`SELECT payload FROM audit_logs WHERE user_id=? AND store_id=? AND action_type='AMAZON_ADS_PROFILE_SAVED' ORDER BY executed_at DESC LIMIT 1`).get(userId, storeId);
+  assert.ok(audit, 'manual Ads profile save must be audited');
 });
 
 test('POST /spapi/sync/orders → ok envelope (sync may succeed or fail; envelope must be valid)', async () => {
@@ -202,6 +252,62 @@ test('bad JSON body → 400', async () => {
   const res = await handleSyncRequest(req);
   assert.equal(res.status, 400);
   assert.equal((await res.json()).error, 'bad_json');
+});
+
+test('AUTH-06: DELETE /credentials/spapi revokes and audits previousSellingPartnerId', async () => {
+  // Ensure an active spapi credential with a known selling partner id exists.
+  await handleSyncRequest(mkRequest('POST', '/api/v1/integrations/credentials/spapi', {
+    refreshToken: 'Atzr|revoke-token',
+    sellingPartnerId: 'A-REVOKE-SP',
+    region: 'NA',
+    marketplaceIds: ['ATVPDKIKX0DER'],
+  }));
+
+  const res = await handleSyncRequest(mkRequest('DELETE', '/api/v1/integrations/credentials/spapi'));
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.provider, 'spapi');
+  assert.equal(body.status, 'revoked');
+
+  // GET /status now shows the provider revoked.
+  const statusRes = await handleSyncRequest(mkRequest('GET', '/api/v1/integrations/status'));
+  const statusBody = await statusRes.json();
+  const sp = statusBody.providers.find((p) => p.provider === 'spapi');
+  assert.equal(sp.status, 'revoked');
+
+  // Audit row records the REVOKED action with previousSellingPartnerId.
+  const audit = db.prepare(
+    `SELECT payload FROM audit_logs WHERE user_id=? AND store_id=? AND action_type='AMAZON_SPAPI_CREDENTIALS_REVOKED' ORDER BY executed_at DESC LIMIT 1`
+  ).get(userId, storeId);
+  assert.ok(audit, 'revoke must be audited');
+  // appendAuditLog stores the caller log under a nested `payload` key.
+  const payload = JSON.parse(audit.payload).payload;
+  assert.equal(payload.previousSellingPartnerId, 'A-REVOKE-SP');
+  assert.doesNotMatch(audit.payload, /Atzr\|revoke-token/);
+});
+
+test('AUTH-06: DELETE /credentials/ads revokes and audits previousProfileId', async () => {
+  await handleSyncRequest(mkRequest('POST', '/api/v1/integrations/credentials/ads', {
+    refreshToken: 'Atzr|ads-revoke-token',
+    profileId: '424242',
+    region: 'NA',
+  }));
+
+  const res = await handleSyncRequest(mkRequest('DELETE', '/api/v1/integrations/credentials/ads'));
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.status, 'revoked');
+
+  const statusRes = await handleSyncRequest(mkRequest('GET', '/api/v1/integrations/status'));
+  const ads = (await statusRes.json()).providers.find((p) => p.provider === 'ads');
+  assert.equal(ads.status, 'revoked');
+
+  const audit = db.prepare(
+    `SELECT payload FROM audit_logs WHERE user_id=? AND store_id=? AND action_type='AMAZON_ADS_CREDENTIALS_REVOKED' ORDER BY executed_at DESC LIMIT 1`
+  ).get(userId, storeId);
+  assert.ok(audit, 'ads revoke must be audited');
+  assert.equal(JSON.parse(audit.payload).payload.previousProfileId, '424242');
 });
 
 // Restore fetch at process exit (defensive)

@@ -13,9 +13,12 @@ process.env.SPAPI_LWA_CLIENT_SECRET = 'tsec';
 
 const { getDbInstance } = await import('../../apps/api/src/data-store.mjs');
 const { upsertSpApiCredentials, revokeSpApiCredentials } = await import('../../apps/api/src/integrations/sp-api/credentials.mjs');
+const providerModeMod = await import('../../apps/api/src/integrations/provider-mode.mjs');
 const {
   providerMode, isMockMode, isRealMode, isHybridMode, shouldSeedMock, listProviderStatus,
-} = await import('../../apps/api/src/integrations/provider-mode.mjs');
+  getRealWriteGateState,
+} = providerModeMod;
+const dataStoreMod = await import('../../apps/api/src/data-store.mjs');
 
 // Setup baseline user/store fixture
 const db = getDbInstance();
@@ -73,6 +76,72 @@ test('shouldSeedMock=false when active credentials exist (hybrid)', () => {
 test('shouldSeedMock=true again after credentials revoked', () => {
   revokeSpApiCredentials('u-pm', 's-pm');
   assert.equal(shouldSeedMock('u-pm', 's-pm'), true);
+});
+
+test('X-P1-06: shouldSeedMock fails CLOSED (false) when the credential DB query throws', () => {
+  process.env.DATA_PROVIDER_MODE = 'hybrid'; // not real, so the DB path is exercised
+  const orig = dataStoreMod.getDbInstance;
+  // Stub getDbInstance so the prepared statement throws — simulates a DB hiccup.
+  const realPrepare = orig().prepare.bind(orig());
+  const stubDb = { prepare() { throw new Error('db_unavailable'); } };
+  // Monkeypatch via property on the live db instance: easier to throw from prepare.
+  const liveDb = orig();
+  const savedPrepare = liveDb.prepare;
+  liveDb.prepare = () => { throw new Error('db_unavailable'); };
+  try {
+    assert.equal(shouldSeedMock('u-pm', 's-pm'), false, 'must NOT fail-open to seeding mock on DB error');
+  } finally {
+    liveDb.prepare = savedPrepare;
+    void realPrepare; void stubDb;
+  }
+});
+
+test('AUTH-04: getRealWriteGateState truth table — armed only when env+!mock+allowlist', () => {
+  const save = {
+    enabled: process.env.ADS_REAL_WRITES_ENABLED,
+    legacy: process.env.REAL_WRITES_ENABLED,
+    mock: process.env.ADS_API_MOCK,
+    allow: process.env.ADS_REAL_WRITES_STORE_ALLOWLIST,
+  };
+  try {
+    // All off → disabled.
+    delete process.env.ADS_REAL_WRITES_ENABLED;
+    delete process.env.REAL_WRITES_ENABLED;
+    delete process.env.ADS_API_MOCK;
+    delete process.env.ADS_REAL_WRITES_STORE_ALLOWLIST;
+    let g = getRealWriteGateState();
+    assert.equal(g.realWriteEnabled, false);
+    assert.equal(g.envGate, false);
+    assert.equal(g.mockExclusive, true);
+    assert.equal(g.allowlistConfigured, false);
+
+    // env on but no allowlist → still disabled.
+    process.env.ADS_REAL_WRITES_ENABLED = 'true';
+    g = getRealWriteGateState();
+    assert.equal(g.envGate, true);
+    assert.equal(g.allowlistConfigured, false);
+    assert.equal(g.realWriteEnabled, false);
+
+    // env on + allowlist but mock on → mockExclusive false → disabled.
+    process.env.ADS_REAL_WRITES_STORE_ALLOWLIST = '*';
+    process.env.ADS_API_MOCK = 'true';
+    g = getRealWriteGateState();
+    assert.equal(g.mockExclusive, false);
+    assert.equal(g.realWriteEnabled, false);
+
+    // env on + allowlist + !mock → ARMED.
+    process.env.ADS_API_MOCK = 'false';
+    g = getRealWriteGateState();
+    assert.equal(g.envGate, true);
+    assert.equal(g.mockExclusive, true);
+    assert.equal(g.allowlistConfigured, true);
+    assert.equal(g.realWriteEnabled, true);
+  } finally {
+    if (save.enabled === undefined) delete process.env.ADS_REAL_WRITES_ENABLED; else process.env.ADS_REAL_WRITES_ENABLED = save.enabled;
+    if (save.legacy === undefined) delete process.env.REAL_WRITES_ENABLED; else process.env.REAL_WRITES_ENABLED = save.legacy;
+    if (save.mock === undefined) delete process.env.ADS_API_MOCK; else process.env.ADS_API_MOCK = save.mock;
+    if (save.allow === undefined) delete process.env.ADS_REAL_WRITES_STORE_ALLOWLIST; else process.env.ADS_REAL_WRITES_STORE_ALLOWLIST = save.allow;
+  }
 });
 
 test('listProviderStatus shape: mode + providers + recentSyncs', () => {

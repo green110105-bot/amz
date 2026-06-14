@@ -190,8 +190,9 @@ test('release, rollback, backup/restore, and safety docs exist', async () => {
 });
 
 function serviceBlock(compose, service) {
+  const normalized = compose.replace(/\r\n/g, '\n');
   const pattern = new RegExp(`^  ${service}:\\n([\\s\\S]*?)(?=^  [a-z][a-z0-9-]*:\\n|^volumes:|(?![\\s\\S]))`, 'm');
-  const match = compose.match(pattern);
+  const match = normalized.match(pattern);
   assert.ok(match, `${service} service must exist in compose`);
   return match[0];
 }

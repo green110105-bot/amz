@@ -25,6 +25,7 @@ const {
   appendAuditLog, listAuditLogs, revertAuditLog,
 } = await import('../../apps/api/src/data-store.mjs');
 const { syncAdsHierarchy } = await import('../../apps/api/src/integrations/ads-api/sync/campaigns-sync.mjs');
+const { createTargeting: dbCreateTargeting, settleObservations } = await import('../../apps/api/src/data-store-ads.mjs');
 
 // -----------------------------------------------------------------------------
 // Test scaffold — use the auto-seeded demo user (the only user that gets the
@@ -1354,4 +1355,281 @@ test('M3-neg-x-09: SQP take-action on unknown queryId returns 404', async () => 
 test('M3-neg-x-10: copy non-existent source campaign → 404', async () => {
   const r = await callAds('POST', '/api/v1/store/ads/lx/campaigns/cmp-no/copy', { body: {} });
   assert.equal(r.status, 404);
+});
+
+// =============================================================================
+// 24. X-P0-05 — real-write revert is BLOCKED (must not flip reverted=1)
+//
+// The existing M3-revert-* cases (and M3-audit-07 / M3-cross-03) all assert
+// dispatchedInverse===true. That is CORRECT — those are *local* (in-DB) reversible
+// actions (ADD_NEGATIVE_KEYWORD, bid updates, toggles). None touch a real
+// Amazon/领星 account, so an automatic inverse genuinely reverses them.
+//
+// Safety invariant 4: a *real-store* write must NEVER be auto-reverted by merely
+// flipping a DB flag. revertAuditLog() classifies a row via isRealWriteAuditRow()
+// (action_type ACTION_QUEUE_REAL_WRITE / origin 'ads-real-write' / payload markers)
+// and, when no genuine inverse dispatched, must return dispatchedInverse===false,
+// needsManualReversal===true, status==='revert_failed' and leave reverted=0.
+// These tests lock that contract so a future change cannot silently regress it to an
+// unconditional `UPDATE audit_logs SET reverted=1`.
+// =============================================================================
+
+// Append a real-write audit row through the canonical appendAuditLog() writer, then
+// resolve its id through lastLog() (the same reader the passing revert tests use).
+async function appendRealWriteAudit({ actionType, resourceType, resourceId, previousValues, newValues }) {
+  appendAuditLog(USER_ID, STORE_ID, {
+    sourceModule: 'M3',
+    actionType, resourceType, resourceId,
+    status: 'applied',
+    previousValues, newValues,
+  });
+  const log = await lastLog(actionType);
+  assert.ok(log && log.resourceId === resourceId, 'appended real-write audit row is readable via lastLog');
+  return log;
+}
+
+function rawReverted(auditId) {
+  const row = getDbInstance().prepare('SELECT reverted FROM audit_logs WHERE id=?').get(auditId);
+  return row ? row.reverted : null;
+}
+
+test('X-P0-05-01: ACTION_QUEUE_REAL_WRITE revert is blocked — reverted stays 0, manual reversal required', async () => {
+  const log = await appendRealWriteAudit({
+    actionType: 'ACTION_QUEUE_REAL_WRITE',
+    resourceType: 'REAL_STORE_WRITE',
+    resourceId: 'tgt-real-1-' + randomBytes(4).toString('hex'),
+    previousValues: { bid: 1.0 },
+    newValues: { bid: 2.5 },
+  });
+  assert.equal(rawReverted(log.id), 0, 'precondition: new audit row is not reverted');
+
+  const rv = revertAuditLog(USER_ID, STORE_ID, log.id);
+  assert.ok(rv, 'revert returns a result object for an existing row');
+  assert.equal(rv.dispatchedInverse, false, 'must NOT dispatch an inverse for a real write');
+  assert.equal(rv.needsManualReversal, true, 'must require human manual reversal');
+  assert.equal(rv.status, 'revert_failed', 'blocked real-write revert is surfaced as revert_failed');
+  assert.equal(rawReverted(log.id), 0, 'DB reverted column must remain 0 after a blocked revert');
+});
+
+test('X-P0-05-02: ads-real-write origin row is blocked from revert', async () => {
+  // A row whose origin is the real-write executor must also be blocked even though
+  // its action_type is the generic dry/real wrapper. We assert via the canonical
+  // ACTION_QUEUE_REAL_WRITE type which deriveAuditOrigin() maps to 'ads-real-write'.
+  const log = await appendRealWriteAudit({
+    actionType: 'ACTION_QUEUE_REAL_WRITE',
+    resourceType: 'lx_targeting',
+    resourceId: 'tgt-real-2-' + randomBytes(4).toString('hex'),
+    previousValues: { bid: 0.8 },
+    newValues: { bid: 1.6 },
+  });
+  const rv = revertAuditLog(USER_ID, STORE_ID, log.id);
+  assert.equal(rv.dispatchedInverse, false);
+  assert.equal(rv.needsManualReversal, true);
+  assert.equal(rawReverted(log.id), 0, 'real-write row must keep reverted=0');
+});
+
+test('X-P0-05-03: local-reversible action STILL auto-reverts (dispatchedInverse===true) — contract not over-broadened', async () => {
+  // Regression guard: blocking real writes must not accidentally block legitimate
+  // local reversals. A STRATEGY_TOGGLE is a purely local, in-DB reversible action
+  // (no real Amazon write), so its revert must still dispatch a genuine inverse and
+  // flip reverted=1 — proving the real-write block did NOT over-broaden.
+  const s = await callAds('POST', '/api/v1/store/ads/strategies', { body: { name: 'qa-xp005-toggle', category: 'bid' } });
+  const sid = s.body.id;
+  const before = s.body.enabled;
+  await callAds('POST', '/api/v1/store/ads/strategies/' + sid + '/toggle', { body: { enabled: !before } });
+  const log = await lastLog('STRATEGY_TOGGLE');
+  assert.ok(log && log.resourceId === sid, 'audit row for the toggle must exist');
+
+  const rv = revertAuditLog(USER_ID, STORE_ID, log.id);
+  assert.equal(rv.dispatchedInverse, true, 'local reversible action must still auto-revert');
+  assert.equal(rv.needsManualReversal, false, 'local revert is NOT a manual-reversal case');
+  assert.equal(rawReverted(log.id), 1, 'local reversible row is marked reverted=1');
+  const fresh = await callAds('GET', '/api/v1/store/ads/strategies/' + sid);
+  assert.equal(fresh.body.enabled, before, 'inverse actually restored the prior enabled state');
+});
+
+test('X-P0-05-04: real_write bid change only returns to previousValue when dispatchedInverse===true', async () => {
+  // Data regression for a real lx_targetings.bid write record. Because the revert is
+  // blocked (dispatchedInverse===false), the live value must NOT roll back.
+  const t = dbCreateTargeting(getDbInstance(), USER_ID, STORE_ID, {
+    campaignId: globalThis.__qaCmpId, adGroupId: globalThis.__qaAgId,
+    type: 'keyword', term: 'qa-xp005-realbid', matchType: 'exact', bid: 4.2,
+  });
+  const log = await appendRealWriteAudit({
+    actionType: 'ACTION_QUEUE_REAL_WRITE',
+    resourceType: 'REAL_STORE_WRITE',
+    resourceId: t.id,
+    previousValues: { bid: 1.0 },
+    newValues: { bid: 4.2 },
+  });
+  const rv = revertAuditLog(USER_ID, STORE_ID, log.id);
+  assert.equal(rv.dispatchedInverse, false);
+  const fresh = await callAds('GET', '/api/v1/store/ads/lx/targetings/' + t.id);
+  assert.equal(fresh.body.bid, 4.2, 'blocked real-write revert must not roll the bid back to previousValue');
+});
+
+// M3-P0-05: BudgetAllocator/Dayparting enqueue route must actually land a queued,
+// needs_review, dryRun=1 ad_action_queue row (not a 404). This closes the fake-green gap
+// where the route was missing and the only coverage was a static source grep.
+test('M3-P0-05: POST /action-queue/enqueue lands a needs_review dryRun=1 queued row', async () => {
+  const uniqueId = 'qa-enqueue-' + Math.random().toString(16).slice(2, 8);
+  const res = await callAds('POST', '/api/v1/store/ads/action-queue/enqueue', {
+    body: {
+      sourceStrategyName: 'budget_allocator',
+      entity: { kind: 'campaign', id: uniqueId, name: 'QA enqueue camp' },
+      typedAction: {
+        actionPrimitive: 'ADJUST_BUDGET', sourceSurface: 'budget_allocator',
+        entityKind: 'campaign', resourceId: uniqueId,
+        currentValue: { dailyBudget: 10 }, recommendedValue: { dailyBudget: 20 },
+        dryRun: true, auditRequired: true,
+      },
+      guardrail: { status: 'passed' }, // forged client guardrail — must be ignored
+    },
+  });
+  assert.equal(res.status, 201, 'enqueue returns 201, not 404');
+  assert.equal(res.body.queued, true);
+  // server-side authority: forged guardrail.status=passed must be overridden to needs_review
+  assert.equal(res.body.guardrail?.status, 'needs_review');
+  assert.equal(res.body.dryRun, true);
+  // verify the row really exists in ad_action_queue
+  const row = getDbInstance().prepare(
+    `SELECT dry_run, audit_required, guardrail, state FROM ad_action_queue WHERE id=?`
+  ).get(res.body.id);
+  assert.ok(row, 'ad_action_queue row persisted');
+  assert.equal(row.dry_run, 1);
+  assert.equal(row.audit_required, 1);
+  assert.equal(row.state, 'queued');
+  assert.match(row.guardrail, /needs_review/);
+
+  // GET /active returns this queued action for the entity (pending badge contract)
+  const active = await callAds('GET', `/api/v1/store/ads/action-queue/active?entityKind=campaign&entityId=${uniqueId}`);
+  assert.equal(active.status, 200);
+  assert.equal(active.body?.id, res.body.id);
+
+  // dedupe: a second identical enqueue returns duplicate (queued:false), no second row
+  const dup = await callAds('POST', '/api/v1/store/ads/action-queue/enqueue', {
+    body: {
+      sourceStrategyName: 'budget_allocator',
+      entity: { kind: 'campaign', id: uniqueId },
+      typedAction: { actionPrimitive: 'ADJUST_BUDGET', entityKind: 'campaign', resourceId: uniqueId, dryRun: true, auditRequired: true },
+    },
+  });
+  assert.equal(dup.body.queued, false, 'duplicate enqueue is not a fresh write');
+});
+
+// =============================================================================
+// N5-m3-observation-settle: explicit observation settlement (non-cron)
+// observing → succeeded/failed once the observation window elapsed, honestly
+// flagged sourceMeta.simulated=true; never touches real Amazon.
+// =============================================================================
+function insertObservingSuggestion(db, { id, nextEligibleAt, confidence, historicalSuccessRate }) {
+  const now = new Date().toISOString();
+  db.prepare(`INSERT INTO ad_suggestions(
+    id, user_id, store_id, time_bucket, severity, action_type, cross_module,
+    source_strategy_id, source_strategy_name, entity, title, summary, detail,
+    confidence, historical_success_rate, impact, evidence, lifecycle, category,
+    strategic_tags, alternatives, state, cooldown_hours, observation_window_hours,
+    accepted_at, next_eligible_at, created_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    id, USER_ID, STORE_ID, now, JSON.stringify('high'),
+    JSON.stringify({ actionPrimitive: 'ADJUST_BID' }), null,
+    null, 'qa-settle-strategy', JSON.stringify({ kind: 'targeting', id: 'tg-settle' }),
+    'qa settle', 'qa settle summary', 'detail',
+    confidence, historicalSuccessRate, JSON.stringify(null), JSON.stringify([]),
+    'active', 'bid', JSON.stringify([]), JSON.stringify([]),
+    'observing', 6, 72, now, nextEligibleAt, now
+  );
+}
+
+test('N5-settle-01: window elapsed → high score settles to succeeded with simulated=true', async () => {
+  const db = getDbInstance();
+  const id = 'qa-settle-ok-' + randomBytes(3).toString('hex');
+  // Window already passed (1h ago); confidence/hist high → score 0.9 ⇒ succeeded
+  insertObservingSuggestion(db, {
+    id, nextEligibleAt: new Date(Date.now() - 3600_000).toISOString(),
+    confidence: 0.9, historicalSuccessRate: 0.9,
+  });
+  const res = await callAds('POST', '/api/v1/store/ads/observations/settle');
+  assert.equal(res.status, 200);
+  assert.equal(res.body.simulated, true);
+  assert.equal(res.body.realEffectMeasured, false);
+  const fresh = await callAds('GET', '/api/v1/store/ads/suggestions/' + id);
+  assert.equal(fresh.body.state, 'succeeded');
+  assert.equal(fresh.body.settlementOutcome, 'succeeded');
+  assert.equal(fresh.body.settlementMeta?.simulated, true, 'settlement must be honestly flagged simulated');
+  assert.equal(fresh.body.settlementMeta?.realEffectMeasured, false, 'no real effect measured');
+  assert.ok(fresh.body.settledAt, 'settledAt persisted');
+  // audit row written, no real store side-effect
+  const logs = listAuditLogs(USER_ID, STORE_ID, { actionType: 'TIMELINE_SETTLE', limit: 20 });
+  const target = logs.find((l) => l.resourceId === id);
+  assert.ok(target, 'TIMELINE_SETTLE audit row must exist');
+});
+
+test('N5-settle-02: window elapsed → low score settles to failed', async () => {
+  const db = getDbInstance();
+  const id = 'qa-settle-fail-' + randomBytes(3).toString('hex');
+  insertObservingSuggestion(db, {
+    id, nextEligibleAt: new Date(Date.now() - 3600_000).toISOString(),
+    confidence: 0.1, historicalSuccessRate: 0.1,
+  });
+  await callAds('POST', '/api/v1/store/ads/observations/settle');
+  const fresh = await callAds('GET', '/api/v1/store/ads/suggestions/' + id);
+  assert.equal(fresh.body.state, 'failed');
+  assert.equal(fresh.body.settlementOutcome, 'failed');
+  assert.equal(fresh.body.settlementMeta?.simulated, true);
+});
+
+test('N5-settle-03: window NOT elapsed → suggestion stays observing (not settled)', async () => {
+  const db = getDbInstance();
+  const id = 'qa-settle-future-' + randomBytes(3).toString('hex');
+  // Window still in the future → must NOT settle
+  insertObservingSuggestion(db, {
+    id, nextEligibleAt: new Date(Date.now() + 24 * 3600_000).toISOString(),
+    confidence: 0.9, historicalSuccessRate: 0.9,
+  });
+  await callAds('POST', '/api/v1/store/ads/observations/settle');
+  const fresh = await callAds('GET', '/api/v1/store/ads/suggestions/' + id);
+  assert.equal(fresh.body.state, 'observing', 'in-window suggestion must remain observing');
+  assert.equal(fresh.body.settledAt, null, 'no settlement timestamp while in window');
+});
+
+test('N5-settle-04: settle is idempotent — re-running does not re-settle already settled', async () => {
+  const db = getDbInstance();
+  const id = 'qa-settle-idem-' + randomBytes(3).toString('hex');
+  insertObservingSuggestion(db, {
+    id, nextEligibleAt: new Date(Date.now() - 3600_000).toISOString(),
+    confidence: 0.9, historicalSuccessRate: 0.9,
+  });
+  const first = await callAds('POST', '/api/v1/store/ads/observations/settle');
+  const firstHit = first.body.items.some((it) => it.id === id);
+  assert.ok(firstHit, 'first settle includes our suggestion');
+  const second = await callAds('POST', '/api/v1/store/ads/observations/settle');
+  const secondHit = second.body.items.some((it) => it.id === id);
+  assert.equal(secondHit, false, 'already-settled suggestion not re-settled');
+});
+
+test('N5-settle-05: cross-store scoping — settle does not touch another tenant', async () => {
+  // Another user's observing suggestion must be invisible to this store's settle.
+  const db = getDbInstance();
+  const otherUserId = otherReg.user.id;
+  const id = 'qa-settle-xstore-' + randomBytes(3).toString('hex');
+  const now = new Date().toISOString();
+  db.prepare(`INSERT INTO ad_suggestions(
+    id, user_id, store_id, time_bucket, entity, state, cooldown_hours,
+    observation_window_hours, accepted_at, next_eligible_at, created_at,
+    confidence, historical_success_rate)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    id, otherUserId, OTHER_STORE, now, JSON.stringify({ kind: 'targeting' }),
+    'observing', 6, 72, now, new Date(Date.now() - 3600_000).toISOString(), now, 0.9, 0.9
+  );
+  // Settle as the demo user/store — must not settle the other tenant's row.
+  await callAds('POST', '/api/v1/store/ads/observations/settle');
+  const row = db.prepare('SELECT state FROM ad_suggestions WHERE id=?').get(id);
+  assert.equal(row.state, 'observing', 'other tenant row untouched by this store settle');
+});
+
+test('N5-settle-06: unauthenticated settle → 401', async () => {
+  const req = new Request('http://localhost/api/v1/store/ads/observations/settle', { method: 'POST' });
+  const res = await handleAdsRequest(req);
+  assert.equal(res.status, 401);
 });

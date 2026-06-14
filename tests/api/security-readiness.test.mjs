@@ -30,28 +30,45 @@ test('API security can require tenant header without breaking local default mode
   }
 });
 
-test('API security rejects cross-tenant and least-privilege violations', async () => {
-  const crossTenant = await handleExtendedRequest(new Request('http://localhost/api/v1/dashboard', {
+test('X-P1-05: self-reported x-resource-tenant-id no longer escalates; least-privilege still enforced', async () => {
+  // The spoofable header-RBAC contract is dismantled: resource tenant is derived
+  // from the actor, never from a self-reported x-resource-tenant-id header. A
+  // read request that previously relied on header mismatch is now simply allowed
+  // (cross-tenant isolation is enforced at the route layer via resolveStoreScope).
+  const headerSpoof = await handleExtendedRequest(new Request('http://localhost/api/v1/dashboard', {
     headers: {
       'x-tenant-id': 'tenant-a',
       'x-resource-tenant-id': 'tenant-b',
     },
   }));
-  assert.equal(crossTenant.status, 403);
-  assert.equal((await crossTenant.json()).reason, 'tenant_boundary_violation');
+  assert.notEqual(headerSpoof.status, 403); // header self-report does not gate access anymore
 
+  // Least-privilege is still enforced: an execute action without the matching
+  // permission is denied regardless of any self-reported x-role header.
   const noPermission = await handleExtendedRequest(new Request('http://localhost/api/v1/ads/suggestions/sug-1/execute', {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
       'x-tenant-id': 'tenant-a',
-      'x-role': 'operator',
+      'x-role': 'admin', // spoofed admin role must NOT grant admin
       'x-permissions': 'read',
     },
     body: JSON.stringify({}),
   }));
   assert.equal(noPermission.status, 403);
   assert.equal((await noPermission.json()).reason, 'least_privilege_violation');
+});
+
+test('X-P1-05: security error JSON does not leak sourceMode', async () => {
+  const denied = await handleExtendedRequest(new Request('http://localhost/api/v1/ads/suggestions/sug-1/execute', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-permissions': 'read' },
+    body: JSON.stringify({}),
+  }));
+  assert.equal(denied.status, 403);
+  const body = await denied.json();
+  assert.equal(body.sourceMode, undefined);
+  assert.equal(body.securityMode, 'enforced');
 });
 
 test('API security applies local rate limit and CORS preflight', async () => {

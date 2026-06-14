@@ -125,11 +125,14 @@ test('M2 profit overview: returns aggregate revenue + topSkus + trend', async ()
   assert.ok(Array.isArray(r.body.trend));
 });
 
-test('M2 profit recompute: POST writes snapshots + returns same overview', async () => {
+test('M2 profit recompute: POST writes snapshots + returns same overview (M2-P1-02)', async () => {
   const r = await call('POST', '/api/v1/store/m2/profit/recompute', { range: 30 });
   assert.equal(r.status, 200);
-  assert.ok(r.body.queued);
-  assert.ok(r.body.jobId);
+  // 不再伪装异步：返回 {recomputed,count}，不得含 queued/jobId/etaSeconds
+  assert.equal(r.body.recomputed, true);
+  assert.equal(typeof r.body.count, 'number');
+  assert.ok(!('queued' in r.body), 'recompute response must not contain queued');
+  assert.ok(!('jobId' in r.body), 'recompute response must not contain jobId');
   assert.ok(r.body.overview);
 });
 
@@ -385,13 +388,34 @@ test('M2 transfers list', async () => {
   assert.ok(Array.isArray(r.body.transfers));
 });
 
-test('M2 transfer approve: recommended -> approved', async () => {
+test('M2 transfer approve: recommended -> in_transit + real inventory move (M2-P1-05)', async () => {
   const list = await call('GET', '/api/v1/store/m2/inventory/transfers?status=recommended');
-  const id = list.body.transfers[0].id;
+  const t = list.body.transfers[0];
+  const id = t.id;
+  const db = getDbInstance();
+  // ensure both warehouses have a snapshot so we can observe the move
+  function ensureSnap(wh, onHand) {
+    let s = db.prepare(`SELECT * FROM m2_inventory_snapshots WHERE user_id=? AND store_id=? AND sku=? AND warehouse=?`)
+      .get(USER_ID, STORE_ID, t.sku, wh);
+    if (!s) {
+      db.prepare(`INSERT INTO m2_inventory_snapshots(id,user_id,store_id,sku,warehouse,on_hand,snapshot_at)
+        VALUES (?,?,?,?,?,?,?)`).run('inv-test-' + wh, USER_ID, STORE_ID, t.sku, wh, onHand, new Date().toISOString());
+      s = db.prepare(`SELECT * FROM m2_inventory_snapshots WHERE id=?`).get('inv-test-' + wh);
+    }
+    return s;
+  }
+  const fromBefore = ensureSnap(t.fromWarehouse, 1000).on_hand;
+  const toBefore = ensureSnap(t.toWarehouse, 100).on_hand;
   const r = await call('POST', `/api/v1/store/m2/inventory/transfers/${id}/approve`);
   assert.equal(r.status, 200);
-  assert.equal(r.body.status, 'approved');
-  // Re-approve -> 400
+  assert.equal(r.body.status, 'in_transit');
+  const fromAfter = db.prepare(`SELECT on_hand FROM m2_inventory_snapshots WHERE user_id=? AND store_id=? AND sku=? AND warehouse=?`)
+    .get(USER_ID, STORE_ID, t.sku, t.fromWarehouse).on_hand;
+  const toAfter = db.prepare(`SELECT on_hand FROM m2_inventory_snapshots WHERE user_id=? AND store_id=? AND sku=? AND warehouse=?`)
+    .get(USER_ID, STORE_ID, t.sku, t.toWarehouse).on_hand;
+  assert.equal(fromAfter, Math.max(0, fromBefore - t.transferQty), 'from warehouse on_hand reduced');
+  assert.equal(toAfter, toBefore + t.transferQty, 'to warehouse on_hand increased');
+  // Re-approve -> 400 (no longer in recommended state)
   const r2 = await call('POST', `/api/v1/store/m2/inventory/transfers/${id}/approve`);
   assert.equal(r2.status, 400);
 });
@@ -626,7 +650,10 @@ test('M2 repricing trigger + apply: M2->M1 listing version row', async () => {
   const trig = await call('POST', '/api/v1/store/m2/repricing/trigger', { sku: 'CASE-001', manual: true });
   assert.equal(trig.status, 201);
   const id = trig.body.id;
-  const apply = await call('POST', `/api/v1/store/m2/repricing/${id}/apply`, { price: 21.50 });
+  // M2-P0-04: apply a price at/above break-even (recommendation carries breakEvenPrice)
+  const breakEven = trig.body.breakEvenPrice ?? trig.body.break_even_price ?? 0;
+  const safePrice = Math.max(21.50, Math.round((breakEven + 0.5) * 100) / 100);
+  const apply = await call('POST', `/api/v1/store/m2/repricing/${id}/apply`, { price: safePrice });
   assert.equal(apply.status, 200);
   assert.equal(apply.body.status, 'applied');
   // M1 listing version row should exist (source=m2_reprice)
@@ -639,8 +666,10 @@ test('M2 repricing trigger + apply: M2->M1 listing version row', async () => {
 test('M2 repricing apply: already-applied -> 400', async () => {
   const trig = await call('POST', '/api/v1/store/m2/repricing/trigger', { sku: 'CABLE-002' });
   const id = trig.body.id;
-  await call('POST', `/api/v1/store/m2/repricing/${id}/apply`, { price: 11 });
-  const r2 = await call('POST', `/api/v1/store/m2/repricing/${id}/apply`, { price: 11 });
+  const safe = Math.round(((trig.body.breakEvenPrice || 0) + 1) * 100) / 100;
+  const first = await call('POST', `/api/v1/store/m2/repricing/${id}/apply`, { price: safe });
+  assert.equal(first.status, 200);
+  const r2 = await call('POST', `/api/v1/store/m2/repricing/${id}/apply`, { price: safe });
   assert.equal(r2.status, 400);
 });
 
@@ -784,21 +813,97 @@ test('M2 alert rule create: missing name -> 400', async () => {
   assert.equal(r.status, 400);
 });
 
-test('M2 alert scan: triggers events from enabled rules + writes M4 notification', async () => {
-  // Make sure at least one enabled rule exists.
-  const created = await call('POST', '/api/v1/store/m2/alerts/rules', {
-    name: 'QA Threshold Trigger',
-    conditions: [{ field: 'cashflow.balance', op: '<', value: 1 }],
+test('M2 alert scan: conditions evaluated against real metrics (M2-P0-07)', async () => {
+  // 不匹配条件：cashflow.balance < 1（种子余额 ~350000）→ 不写事件
+  const noMatch = await call('POST', '/api/v1/store/m2/alerts/rules', {
+    name: 'QA NoMatch', conditions: [{ field: 'cashflow.balance', op: '<', value: 1 }],
     severity: 'P0', notifyChannels: ['in_app'],
   });
-  assert.equal(created.status, 201);
+  assert.equal(noMatch.status, 201);
+  const scanNoMatch = await call('POST', '/api/v1/store/m2/alerts/scan', { ruleId: noMatch.body.id });
+  assert.equal(scanNoMatch.status, 200);
+  assert.equal(scanNoMatch.body.created, 0, 'non-matching condition must create 0 events');
+
+  // 匹配条件：cashflow.balance > 0 → 写事件，且 matched_value 为真实值（非 simulated_trigger）
+  const match = await call('POST', '/api/v1/store/m2/alerts/rules', {
+    name: 'QA Match', conditions: [{ field: 'cashflow.balance', op: '>', value: 0 }],
+    severity: 'P1', notifyChannels: ['in_app'], cooldownHours: 6,
+  });
+  assert.equal(match.status, 201);
+  const scan1 = await call('POST', '/api/v1/store/m2/alerts/scan', { ruleId: match.body.id });
+  assert.equal(scan1.body.created, 1, 'matching condition creates 1 event');
+  assert.notEqual(scan1.body.events[0].matchedValue, 'simulated_trigger');
+  assert.equal(typeof scan1.body.events[0].matchedValue, 'number');
+  // N1-scanAlerts-real: 事件带 sourceMeta，且指向真实 cashflow 行
+  const ev0 = scan1.body.events[0];
+  assert.ok(Array.isArray(ev0.sourceMeta), 'event carries sourceMeta array');
+  assert.equal(ev0.sourceMeta[0].table, 'm2_cashflow_events', 'sourceMeta points to real cashflow table');
+  assert.ok(ev0.sourceMeta[0].rowId, 'sourceMeta carries real DB rowId');
+  assert.equal(ev0.isSimulated, false, 'real cashflow-derived event is not simulated');
+
+  // cooldown 内二次 scan → created 0
+  const scan2 = await call('POST', '/api/v1/store/m2/alerts/scan', { ruleId: match.body.id });
+  assert.equal(scan2.body.created, 0, 'within cooldown second scan creates 0');
+});
+
+test('M2-N1 alert scan: real m2_leaks match yields sourceMeta(m2_leaks) + isSimulated=false', async () => {
+  // 真实 leak 数据（种子里 monthly_impact 最高 18000）。规则 monthly_impact > 100 必命中真实 leak 行。
+  const rule = await call('POST', '/api/v1/store/m2/alerts/rules', {
+    name: 'QA Leak Impact',
+    conditions: [{ field: 'leak.monthly_impact', op: '>', value: 100 }],
+    severity: 'P0', notifyChannels: ['in_app'], cooldownHours: 0,
+  });
+  assert.equal(rule.status, 201);
+  const scan = await call('POST', '/api/v1/store/m2/alerts/scan', { ruleId: rule.body.id });
+  assert.equal(scan.body.created, 1, 'real leak match creates exactly 1 event');
+  const ev = scan.body.events[0];
+  // 事件来源必须是真实 DB 行（m2_leaks），不是 isSimulated 恒 true 的假事件
+  assert.equal(ev.isSimulated, false, 'event derived from real m2_leaks row must NOT be simulated');
+  assert.ok(Array.isArray(ev.sourceMeta) && ev.sourceMeta.length >= 1, 'sourceMeta present');
+  const meta = ev.sourceMeta[0];
+  assert.equal(meta.table, 'm2_leaks', 'sourceMeta.table is the real leak table');
+  assert.match(meta.rowId, /^leak-/, 'sourceMeta.rowId references a real seeded leak row');
+  assert.equal(meta.field, 'monthly_impact', 'sourceMeta records the matched field');
+  assert.equal(typeof meta.fieldValue, 'number', 'sourceMeta carries the real field value');
+  assert.ok(meta.fieldValue > 100, 'fieldValue actually satisfies the condition');
+
+  // 验证持久化的事件行 matched_value 内嵌真实 sourceMeta（端到端落库，非仅返回值）
+  const events = await call('GET', `/api/v1/store/m2/alerts/events?ruleId=${rule.body.id}`);
+  const persisted = events.body.events.find((e) => e.matchedValue && e.matchedValue.sourceMeta);
+  assert.ok(persisted, 'persisted event row stores sourceMeta in matched_value');
+  assert.equal(persisted.matchedValue.dataReal, true, 'persisted event flagged dataReal=true');
+  assert.equal(persisted.isSimulated, false, 'persisted event isSimulated=false');
+});
+
+test('M2-N1 alert scan: no real match yields created=0 and writes NO fake event', async () => {
+  // 不可能命中的条件：leak.monthly_impact > 1e12（远超任何真实 leak）→ 空态。
+  const rule = await call('POST', '/api/v1/store/m2/alerts/rules', {
+    name: 'QA Leak Impossible',
+    conditions: [{ field: 'leak.monthly_impact', op: '>', value: 1e12 }],
+    severity: 'P0', notifyChannels: ['in_app'], cooldownHours: 0,
+  });
+  assert.equal(rule.status, 201);
+  const scan = await call('POST', '/api/v1/store/m2/alerts/scan', { ruleId: rule.body.id });
+  assert.equal(scan.body.created, 0, 'non-matching real data must create 0 events (no fabrication)');
+  assert.equal(scan.body.events.length, 0, 'empty events array on no match');
+  // 断言确实没有为该 rule 写入任何事件（绝不写死假 simulated_trigger 事件）
+  const events = await call('GET', `/api/v1/store/m2/alerts/events?ruleId=${rule.body.id}`);
+  assert.equal(events.body.events.length, 0, 'no alert event row persisted for non-matching rule');
+});
+
+test('M2-N1 alert scan: no isSimulated-always-true fake events across all real-data rules', async () => {
+  // 扫描全部启用规则；对每条产生的事件，凡 sourceMeta 指向真实表的，isSimulated 必为 false。
+  // 断言不存在“数据来自真实 DB 查询却被标 isSimulated=true”的假事件。
   const scan = await call('POST', '/api/v1/store/m2/alerts/scan', {});
   assert.equal(scan.status, 200);
-  assert.ok(scan.body.created >= 1, 'expected at least one event');
-  // List events
-  const ev = await call('GET', '/api/v1/store/m2/alerts/events');
-  assert.equal(ev.status, 200);
-  assert.ok(ev.body.events.length >= 1);
+  for (const ev of scan.body.events) {
+    if (!Array.isArray(ev.sourceMeta)) continue;
+    const allRealRows = ev.sourceMeta.every((m) => m && m.table && m.rowId && !m.synthetic);
+    if (allRealRows) {
+      assert.equal(ev.isSimulated, false,
+        `event ${ev.eventId} sources from real DB rows but was wrongly flagged isSimulated=true`);
+    }
+  }
 });
 
 test('M2 alert ack event', async () => {
@@ -864,7 +969,7 @@ test('M2 inventory-link events list', async () => {
   assert.ok(Array.isArray(r.body.events));
 });
 
-test('M2 inventory-link execute: pauses M3 campaign (ADS_API_MOCK)', async () => {
+test('M2 inventory-link execute: queues M3 campaign pause (ADS_API_MOCK)', async () => {
   // Ensure there is a campaign whose name matches the LAMP-003 SKU (seed event uses LAMP-003).
   const db = getDbInstance();
   let camp = db.prepare(`SELECT * FROM lx_campaigns WHERE user_id=? AND store_id=? AND name LIKE ?`)
@@ -880,14 +985,23 @@ test('M2 inventory-link execute: pauses M3 campaign (ADS_API_MOCK)', async () =>
   assert.ok(evt, 'seed pending stop_all event missing');
   const r = await call('POST', `/api/v1/store/m2/inventory-link/events/${evt.id}/execute`);
   assert.equal(r.status, 200);
-  assert.equal(r.body.status, 'auto_executed');
-  // Campaign should now be disabled.
+  // M2-P0-06: 不再伪装"已执行"，落库 queued_pending_review
+  assert.equal(r.body.status, 'queued_pending_review');
+  assert.equal(r.body.needsManualReview, true);
+  // Campaign must stay unchanged until the M3 action queue is reviewed/executed.
   const after = db.prepare('SELECT enabled FROM lx_campaigns WHERE id=?').get(camp.id);
-  assert.equal(after.enabled, 0, 'campaign should be paused via toggleCampaign');
+  assert.equal(after.enabled, 1, 'campaign should not be paused directly');
+  const queue = db.prepare(`SELECT * FROM ad_action_queue WHERE user_id=? AND store_id=? AND typed_action LIKE '%M2_PAUSE_CAMPAIGN_FOR_INVENTORY%' ORDER BY created_at DESC LIMIT 1`).get(USER_ID, STORE_ID);
+  assert.ok(queue, 'inventory-link must create an M3 action-queue item');
+  // 安全不变量回归锁定：dryRun=true 且 guardrail.status='needs_review'，不得误改成真写
+  const ta = JSON.parse(queue.typed_action);
+  assert.equal(ta.dryRun, true, 'inventory-link M3 enqueue must remain dryRun=true');
+  const gr = JSON.parse(queue.guardrail);
+  assert.equal(gr.status, 'needs_review', 'inventory-link M3 enqueue must be needs_review');
 });
 
 test('M2 inventory-link execute: re-execute already executed -> 400', async () => {
-  const list = await call('GET', '/api/v1/store/m2/inventory-link/events?status=auto_executed');
+  const list = await call('GET', '/api/v1/store/m2/inventory-link/events?status=queued_pending_review');
   if (list.body.events.length === 0) return;
   const evt = list.body.events[0];
   const r = await call('POST', `/api/v1/store/m2/inventory-link/events/${evt.id}/execute`);
@@ -1118,6 +1232,184 @@ test('SP-API syncInventory -> /m2/inventory/reorder reflects new SKU', async () 
   ).get(USER_ID, STORE_ID);
   assert.ok(row, 'inventory snapshot row not found');
   assert.equal(row.on_hand, 10);
+});
+
+// =====================================================================
+// 18b. Deep-review fixes (W1 batch B3-be-profit)
+// =====================================================================
+
+// M2-P0-04: applyRepricing price guards
+test('M2-P0-04 applyRepricing: price=0 -> 400 (no silent recommended_price)', async () => {
+  const trig = await call('POST', '/api/v1/store/m2/repricing/trigger', { sku: 'CASE-001', manual: true });
+  const r = await call('POST', `/api/v1/store/m2/repricing/${trig.body.id}/apply`, { price: 0 });
+  assert.equal(r.status, 400);
+});
+test('M2-P0-04 applyRepricing: below break-even -> 400 unless confirmBelowBreakeven', async () => {
+  const trig = await call('POST', '/api/v1/store/m2/repricing/trigger', { sku: 'CASE-001', manual: true });
+  const be = trig.body.breakEvenPrice;
+  const below = Math.round((be - 1) * 100) / 100;
+  const r1 = await call('POST', `/api/v1/store/m2/repricing/${trig.body.id}/apply`, { price: below });
+  assert.equal(r1.status, 400);
+  const trig2 = await call('POST', '/api/v1/store/m2/repricing/trigger', { sku: 'CASE-001', manual: true });
+  const r2 = await call('POST', `/api/v1/store/m2/repricing/${trig2.body.id}/apply`, { price: below, confirmBelowBreakeven: true });
+  assert.equal(r2.status, 200);
+});
+
+// M2-P0-05: slow-moving option A newPrice >= break_even (no confirm)
+test('M2-P0-05 slow-moving option A: newPrice >= break_even + oldPrice is listing price', async () => {
+  const list = await call('GET', '/api/v1/store/m2/inventory/slow-moving?status=pending');
+  if (!list.body.items.length) return;
+  const item = list.body.items[0];
+  const prev = await call('POST', `/api/v1/store/m2/inventory/slow-moving/${item.id}/preview`, { option: 'A' });
+  assert.equal(prev.status, 200);
+  assert.ok(prev.body.newPrice >= prev.body.breakEven, 'newPrice must not drop below break-even without confirm');
+  // execute uses same compute → pricing returned, draft pending (not "已执行" real)
+  const ex = await call('POST', `/api/v1/store/m2/inventory/slow-moving/${item.id}/execute`, { option: 'A' });
+  assert.equal(ex.status, 200);
+  assert.ok(ex.body.pricing.newPrice >= ex.body.pricing.breakEven);
+  assert.equal(ex.body.draftStatus, 'm1_price_draft_pending_upload');
+});
+
+// M2-P0-02 / M2-P0-03: payPO single source + idempotency + real balance
+test('M2-P0-02 payPO: single po_deposit row + idempotent already_paid', async () => {
+  const create = await call('POST', '/api/v1/store/m2/purchase-orders', {
+    items: [{ sku: 'CASE-001', qty: 100, unitCost: 8 }],
+  });
+  const id = create.body.id;
+  await call('POST', `/api/v1/store/m2/purchase-orders/${id}/transition`, { to: 'ordered' });
+  const pay1 = await call('POST', `/api/v1/store/m2/purchase-orders/${id}/payment`, { phase: 'deposit' });
+  assert.equal(pay1.status, 200);
+  const db = getDbInstance();
+  const cnt = db.prepare(`SELECT COUNT(*) AS c FROM m2_cashflow_events WHERE user_id=? AND store_id=? AND source='po_deposit' AND ref_id=?`)
+    .get(USER_ID, STORE_ID, id).c;
+  assert.equal(cnt, 1, 'exactly one po_deposit cashflow row');
+  // repeat deposit payment -> already_paid, count stays 1
+  const pay2 = await call('POST', `/api/v1/store/m2/purchase-orders/${id}/payment`, { phase: 'deposit' });
+  assert.equal(pay2.status, 400);
+  assert.equal(pay2.body.error, 'already_paid');
+  const cnt2 = db.prepare(`SELECT COUNT(*) AS c FROM m2_cashflow_events WHERE user_id=? AND store_id=? AND source='po_deposit' AND ref_id=?`)
+    .get(USER_ID, STORE_ID, id).c;
+  assert.equal(cnt2, 1, 'still exactly one po_deposit row after repeat');
+});
+test('M2-P0-02 transitionPO no longer writes cashflow on ordered/in_transit', async () => {
+  const create = await call('POST', '/api/v1/store/m2/purchase-orders', {
+    items: [{ sku: 'CASE-001', qty: 50, unitCost: 8 }],
+  });
+  const id = create.body.id;
+  await call('POST', `/api/v1/store/m2/purchase-orders/${id}/transition`, { to: 'ordered' });
+  await call('POST', `/api/v1/store/m2/purchase-orders/${id}/transition`, { to: 'in_transit' });
+  const db = getDbInstance();
+  const cnt = db.prepare(`SELECT COUNT(*) AS c FROM m2_cashflow_events WHERE user_id=? AND store_id=? AND ref_id=?`)
+    .get(USER_ID, STORE_ID, id).c;
+  assert.equal(cnt, 0, 'transitionPO must not write any cashflow rows');
+});
+
+// M2-P0-03: cashflow balance reflects outflow + back-fill
+test('M2-P0-03 cashflow: insert outflow lowers later balance + addCashflowEvent no 350000 magic', async () => {
+  const before = await call('GET', '/api/v1/store/m2/cashflow/timeline?days=180');
+  const lastBefore = before.body.points[before.body.points.length - 1].balance;
+  // insert an outflow=100 today
+  const add = await call('POST', '/api/v1/store/m2/cashflow/events', {
+    eventDate: new Date().toISOString().slice(0, 10), outflow: 100, label: 'QA outflow',
+  });
+  assert.equal(add.status, 201);
+  const after = await call('GET', '/api/v1/store/m2/cashflow/timeline?days=180');
+  const lastAfter = after.body.points[after.body.points.length - 1].balance;
+  assert.ok(lastAfter <= lastBefore - 99.99, `last balance should drop ~100: before=${lastBefore} after=${lastAfter}`);
+});
+
+// M2-P0-07 already covered above (real condition + cooldown). isSimulated default mode hybrid -> false.
+
+// M2-P1-02: lifecycle is recomputed (not all 'mature')
+test('M2-P1-02 recompute: snapshots carry recomputed lifecycle/days_cover', async () => {
+  await call('POST', '/api/v1/store/m2/profit/recompute', { range: 30 });
+  const db = getDbInstance();
+  const rows = db.prepare(`SELECT DISTINCT lifecycle FROM m2_sku_profit_snapshots WHERE user_id=? AND store_id=? AND range_days=30`)
+    .all(USER_ID, STORE_ID).map((r) => r.lifecycle);
+  // lifecycle field is populated (mature/growth/launch/declining), days_cover numeric
+  assert.ok(rows.length >= 1);
+  const dc = db.prepare(`SELECT days_cover FROM m2_sku_profit_snapshots WHERE user_id=? AND store_id=? AND range_days=30 LIMIT 1`)
+    .get(USER_ID, STORE_ID);
+  assert.equal(typeof dc.days_cover, 'number');
+});
+
+// M2-P1-01: preview/save unitProfit consistency + feasible flag
+test('M2-P1-01 previewScenario: respects passed unitCost (no price*0.45 fallback)', async () => {
+  const withCost = await call('POST', '/api/v1/store/m2/scenarios/preview', {
+    baseline: { price: 20, acos: 0.1, monthlyVolume: 100, returnRate: 0.05, unitCost: 5 },
+    variables: {},
+  });
+  const noCost = await call('POST', '/api/v1/store/m2/scenarios/preview', {
+    baseline: { price: 20, acos: 0.1, monthlyVolume: 100, returnRate: 0.05 },
+    variables: {},
+  });
+  // unitCost=5 vs fallback 20*0.45=9 → different unitProfit
+  assert.notEqual(withCost.body.simulated.unitProfit, noCost.body.simulated.unitProfit);
+  assert.ok('feasible' in withCost.body);
+});
+
+// M2-P1-06: payment channel monthly_cost computed server-side
+test('M2-P1-06 payment channel: monthly_cost = fee_pct*volume + fee_fixed*txCount', async () => {
+  const create = await call('POST', '/api/v1/store/m2/payment-channels', {
+    name: 'QA Cost', feePct: 0.01, feeFixedPerTx: 0.3, monthlyVolume: 10000, txCount: 100,
+  });
+  assert.equal(create.status, 201);
+  // 0.01*10000 + 0.3*100 = 100 + 30 = 130
+  assert.equal(create.body.monthlyCost, 130);
+});
+
+// M2-P2-03: inventory-link threshold monotonicity
+test('M2-P2-03 inventory-link: stopAt>=alertAt rejected with validation_error', async () => {
+  const r = await call('PATCH', '/api/v1/store/m2/inventory-link/config', {
+    thresholds: { stopAt: 21, reduce50At: 7, reduce20At: 14, alertAt: 3 },
+  });
+  assert.equal(r.status, 400);
+  assert.equal(r.body.error, 'validation_error');
+});
+test('M2-P2-03 inventory-link: enabled toggle persists', async () => {
+  await call('PATCH', '/api/v1/store/m2/inventory-link/config', { enabled: false });
+  const r = await call('GET', '/api/v1/store/m2/inventory-link/config');
+  assert.equal(r.body.enabled, false);
+  await call('PATCH', '/api/v1/store/m2/inventory-link/config', { enabled: true });
+});
+
+// M2-P2-04: PO numbering numeric (PO-999 -> PO-1000)
+test('M2-P2-04 PO numbering: PO-0999 yields PO-1000 (numeric not lexicographic)', async () => {
+  const db = getDbInstance();
+  db.prepare(`INSERT INTO m2_purchase_orders(id,user_id,store_id,po_number,status,total_landed,currency,deposit,balance,created_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?)`).run('po-seed-999', USER_ID, STORE_ID, 'PO-0999', 'draft', 100, 'USD', 30, 70, new Date().toISOString());
+  const create = await call('POST', '/api/v1/store/m2/purchase-orders', { items: [{ sku: 'CASE-001', qty: 1, unitCost: 1 }] });
+  assert.equal(create.status, 201);
+  const n = Number(create.body.poNumber.match(/PO-(\d+)/)[1]);
+  assert.equal(n, 1000, `expected 1000, got ${create.body.poNumber}`);
+});
+
+// M2-P2-06: repricing reject endpoint exists
+test('M2-P2-06 repricing reject: endpoint exists + filter returns rejected', async () => {
+  const trig = await call('POST', '/api/v1/store/m2/repricing/trigger', { sku: 'LAMP-003', manual: true });
+  const rej = await call('POST', `/api/v1/store/m2/repricing/${trig.body.id}/reject`, { reason: 'qa' });
+  assert.equal(rej.status, 200);
+  assert.equal(rej.body.status, 'rejected');
+  const list = await call('GET', '/api/v1/store/m2/repricing?status=rejected');
+  assert.ok(list.body.items.some((i) => i.id === trig.body.id));
+});
+
+// M2-P3-01: batch ack + boolean acknowledged + ackBy
+test('M2-P3-01 alerts: batch ack multiple events + acknowledged boolean', async () => {
+  // create matching rule + scan twice past cooldown to get >=2 events
+  const rule = await call('POST', '/api/v1/store/m2/alerts/rules', {
+    name: 'QA Batch', conditions: [{ field: 'cashflow.balance', op: '>', value: 0 }],
+    severity: 'P2', notifyChannels: ['in_app'], cooldownHours: 0,
+  });
+  await call('POST', '/api/v1/store/m2/alerts/scan', { ruleId: rule.body.id });
+  await call('POST', '/api/v1/store/m2/alerts/scan', { ruleId: rule.body.id });
+  const ev = await call('GET', `/api/v1/store/m2/alerts/events?ruleId=${rule.body.id}&acknowledged=false`);
+  const ids = ev.body.events.map((e) => e.id).slice(0, 2);
+  assert.ok(ids.length >= 1);
+  const ack = await call('POST', '/api/v1/store/m2/alerts/events/ack-batch', { ids, ackBy: 'qa-batch' });
+  assert.equal(ack.status, 200);
+  assert.equal(ack.body.acknowledged, ids.length);
+  for (const e of ack.body.events) assert.equal(e.acknowledged, true);
 });
 
 // =====================================================================

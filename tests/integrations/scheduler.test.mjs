@@ -22,7 +22,12 @@ globalThis.fetch = async () => { throw new Error('test_network_blocked'); };
 const { getDbInstance } = await import('../../apps/api/src/data-store.mjs');
 const { upsertSpApiCredentials, revokeSpApiCredentials } = await import('../../apps/api/src/integrations/sp-api/credentials.mjs');
 const { upsertAdsCredentials } = await import('../../apps/api/src/integrations/ads-api/credentials.mjs');
-const { runOnce, startScheduler, stopScheduler, isRunning, _resetForTests } = await import('../../apps/api/src/integrations/scheduler.mjs');
+const {
+  runOnce, startScheduler, stopScheduler, isRunning, _resetForTests, cleanupExpiredOAuthStates,
+  shouldRunDailyReport, runDailyReportJob, dailyReportTime,
+} = await import('../../apps/api/src/integrations/scheduler.mjs');
+// Importing oauth-flow ensures the integration_oauth_states table schema exists.
+await import('../../apps/api/src/integrations/oauth-flow.mjs');
 
 const db = getDbInstance();
 
@@ -153,6 +158,116 @@ test('stopScheduler is safe to call when no scheduler running', () => {
   stopScheduler();
   stopScheduler();
   assert.equal(isRunning(), false);
+});
+
+test('AUTH-13: cleanupExpiredOAuthStates deletes expired + consumed rows, keeps live unconsumed', () => {
+  db.exec(`CREATE TABLE IF NOT EXISTS integration_oauth_states (
+    state TEXT PRIMARY KEY, provider TEXT NOT NULL, user_id TEXT NOT NULL, store_id TEXT NOT NULL,
+    region TEXT, redirect_uri TEXT NOT NULL, return_to TEXT, started_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL, consumed_at TEXT, meta TEXT)`);
+  const past = new Date(Date.now() - 3600_000).toISOString();
+  const future = new Date(Date.now() + 3600_000).toISOString();
+  const ins = db.prepare(`INSERT OR REPLACE INTO integration_oauth_states
+    (state,provider,user_id,store_id,redirect_uri,started_at,expires_at,consumed_at)
+    VALUES (?,?,?,?,?,?,?,?)`);
+  ins.run('st-expired', 'spapi', 'u', 's', 'http://x', past, past, null);          // expired, unconsumed → delete
+  ins.run('st-consumed', 'spapi', 'u', 's', 'http://x', past, future, past);        // consumed → delete
+  ins.run('st-live', 'spapi', 'u', 's', 'http://x', past, future, null);            // live unconsumed → keep
+
+  const { removed } = cleanupExpiredOAuthStates(db);
+  assert.ok(removed >= 2, `expected >=2 removed, got ${removed}`);
+  assert.equal(db.prepare(`SELECT 1 FROM integration_oauth_states WHERE state='st-expired'`).get(), undefined);
+  assert.equal(db.prepare(`SELECT 1 FROM integration_oauth_states WHERE state='st-consumed'`).get(), undefined);
+  assert.ok(db.prepare(`SELECT 1 FROM integration_oauth_states WHERE state='st-live'`).get());
+});
+
+// ============================================================
+// B-6: dailyReport job — time-of-day trigger logic (injected time, NO real wait)
+// ============================================================
+test('B-6: dailyReportTime defaults to 09:30 and honors SYNC_DAILY_REPORT_AT', () => {
+  delete process.env.SYNC_DAILY_REPORT_AT;
+  assert.equal(dailyReportTime(), '09:30');
+  process.env.SYNC_DAILY_REPORT_AT = '14:00';
+  assert.equal(dailyReportTime(), '14:00');
+  process.env.SYNC_DAILY_REPORT_AT = 'garbage';
+  assert.equal(dailyReportTime(), '09:30'); // invalid → default
+  delete process.env.SYNC_DAILY_REPORT_AT;
+});
+
+test('B-6: shouldRunDailyReport fires at/after configured time, once per day', () => {
+  // Build a Date at local 09:31 — after 09:30.
+  const after = new Date(2026, 5, 10, 9, 31, 0);
+  const before = new Date(2026, 5, 10, 9, 29, 0);
+  const dayKey = after.toISOString().slice(0, 10);
+
+  // before configured time → no fire
+  assert.equal(shouldRunDailyReport({ now: before, at: '09:30', lastFiredDayKey: null }).fire, false);
+  // at/after configured time, not yet fired today → fire
+  const due = shouldRunDailyReport({ now: after, at: '09:30', lastFiredDayKey: null });
+  assert.equal(due.fire, true);
+  assert.equal(due.reason, 'due');
+  // already fired today → no re-fire
+  assert.equal(shouldRunDailyReport({ now: after, at: '09:30', lastFiredDayKey: due.dayKey }).fire, false);
+  assert.ok(typeof dayKey === 'string');
+});
+
+test('B-6: runDailyReportJob builds snapshot + emits M4 notification per active store', async () => {
+  // Re-activate s-sched-2 so we have active spapi creds again.
+  upsertSpApiCredentials({
+    userId: 'u-sched-1', storeId: 's-sched-1',
+    refreshToken: 'Atzr|s1-daily', marketplaceIds: ['ATVPDKIKX0DER'], region: 'NA',
+  });
+  const result = await runDailyReportJob({ db, date: '2026-06-10' });
+  assert.ok(result.total >= 1);
+  const ok = result.perStore.find((p) => p.userId === 'u-sched-1' && p.storeId === 's-sched-1');
+  assert.ok(ok, 'expected a per-store entry for u-sched-1/s-sched-1');
+  assert.equal(ok.status, 'ok');
+  assert.equal(ok.reportDate, '2026-06-10');
+  assert.ok(ok.notificationId, 'expected an emitted notification id');
+  // The notification row exists and is sourced from M4.
+  const notif = db.prepare('SELECT * FROM m4_notifications WHERE id=?').get(ok.notificationId);
+  assert.ok(notif);
+  assert.equal(notif.source_module, 'M4');
+  // B-5: the notification body carries the watermarked estimated/realized split, never a
+  // single ambiguous 已挽回¥X.
+  assert.match(notif.body, /已挽回/);
+  assert.match(notif.body, /模拟\/预估/);
+  assert.match(notif.body, /realized/);
+  assert.match(notif.body, /estimated/);
+});
+
+test('B-6: runOnce registers dailyReport job and fires by injected time', async () => {
+  _resetForTests();
+  // Inject a time after 09:30 → dailyReport fires.
+  const fireAt = new Date(2026, 5, 10, 9, 45, 0);
+  const r1 = await runOnce({ jobs: ['dailyReport'], now: fireAt });
+  assert.ok(r1.dailyReport, 'runOnce must return a dailyReport envelope');
+  assert.equal(r1.dailyReport.fired, true);
+  assert.equal(r1.dailyReport.at, '09:30');
+  // Second tick the same day must NOT re-fire (once-per-day guard).
+  const r2 = await runOnce({ jobs: ['dailyReport'], now: new Date(2026, 5, 10, 10, 0, 0) });
+  assert.equal(r2.dailyReport.fired, false);
+  assert.equal(r2.dailyReport.reason, 'already_fired_today');
+});
+
+test('B-6: runOnce does NOT fire dailyReport when job not requested (disabled-by-default safety)', async () => {
+  _resetForTests();
+  const r = await runOnce({ jobs: ['orders'], now: new Date(2026, 5, 10, 9, 45, 0) });
+  assert.equal(r.dailyReport, null);
+});
+
+test('B-6: runOnce dailyReport does not fire before configured time', async () => {
+  _resetForTests();
+  const r = await runOnce({ jobs: ['dailyReport'], now: new Date(2026, 5, 10, 8, 0, 0) });
+  assert.equal(r.dailyReport.fired, false);
+  assert.equal(r.dailyReport.reason, 'before_configured_time');
+});
+
+test('B-6: startScheduler default job set includes dailyReport (code-ready)', () => {
+  // The default `jobs` arg of startScheduler must include dailyReport so an ENABLED
+  // scheduler emits the daily snapshot. We assert via the exported default by reading
+  // the function source — cheap structural check, not a real timer wait.
+  assert.match(startScheduler.toString(), /dailyReport/);
 });
 
 process.on('exit', () => { globalThis.fetch = realFetch; });

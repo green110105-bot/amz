@@ -189,7 +189,7 @@ test.describe('M3 prod — lx (领星等价)', () => {
 test.describe('M3 prod — deep pages', () => {
   const DEEP_PAGES = [
     ['Playbook', '/ads/playbook'],
-    ['AdsActions', '/ads/actions'],
+    // W16: /ads/actions 已并入 Workbench 单一 Inbox（redirect→/workbench?filter=ad_suggestion）。
     ['Campaigns', '/ads/campaigns'],
     ['Keywords', '/ads/keywords'],
     ['Lifecycle', '/ads/lifecycle'],

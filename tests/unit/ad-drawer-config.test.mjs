@@ -32,8 +32,9 @@ test('TABS_BY_ENTITY: keyword has 5 tabs incl userSearchTerms', () => {
   assert.ok(tabs.includes('placement'));
 });
 
-test('TABS_BY_ENTITY: target has same 5 tabs as keyword (lingxing aligns them)', () => {
-  assert.deepEqual(TABS_BY_ENTITY.target, TABS_BY_ENTITY.keyword);
+test('TABS_BY_ENTITY: target has verified 4-tab Lingxing all_target drawer', () => {
+  assert.deepEqual(TABS_BY_ENTITY.target, ['daily', 'compare', 'hourly', 'placement']);
+  assert.equal(TABS_BY_ENTITY.target.includes('userSearchTerms'), false);
 });
 
 test('TABS_BY_ENTITY: adgroup / ad / placement all have 3 tabs (daily/compare/hourly)', () => {

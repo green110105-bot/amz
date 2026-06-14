@@ -75,6 +75,25 @@ async function call(method, path, { body, headers, noAuth, noStore } = {}) {
 
 function db() { return getDbInstance(); }
 
+function manualTestBuyBody(seed = 'qa') {
+  return {
+    manualOrderId: `TB-MANUAL-${seed}`,
+    submittedBy: 'QA operator',
+    manualSubmittedAt: '2026-05-29T09:30:00Z',
+    evidenceAttachment: `evidence://${seed}/test-buy.png`,
+  };
+}
+
+function manualExternalCaseBody(seed = 'qa') {
+  return {
+    amazonComplaintId: `CASE-${seed}`,
+    amazonCaseId: `CASE-${seed}`,
+    submittedBy: 'QA operator',
+    manualSubmittedAt: '2026-05-29T09:30:00Z',
+    evidenceAttachment: `evidence://${seed}/case.pdf`,
+  };
+}
+
 // ====================================================================================
 // 1. Auth guards (the route guard fires at the very front, so all paths share this)
 // ====================================================================================
@@ -376,7 +395,7 @@ test('HIJACK counterfeit -> M3 pause + first call NOT dedupped (asin path)', asy
     .run(hjId, USER_ID, STORE_ID, asin, 'BadSeller-1', now, 0, 'price_competition', 'pending_test_buy', now);
 
   // 3) start test buy -> in_transit
-  const r1 = await call('POST', `/api/v1/store/m4/hijacking/${hjId}/start-test-buy`, { body: {} });
+  const r1 = await call('POST', `/api/v1/store/m4/hijacking/${hjId}/start-test-buy`, { body: manualTestBuyBody('hj1') });
   assert.equal(r1.status, 200);
   assert.equal(r1.body.status, 'test_buy_in_transit');
 
@@ -388,15 +407,18 @@ test('HIJACK counterfeit -> M3 pause + first call NOT dedupped (asin path)', asy
   assert.equal(r2.body.m3AdsPaused, true);
   assert.ok(r2.body.m3PausedCampaignIds.includes(cid));
 
-  // verify lx_campaigns is enabled=0
+  // M4 must queue the M3 write-like pause; it must not mutate the shadow Ads table directly.
   const camp = d.prepare('SELECT enabled FROM lx_campaigns WHERE id=?').get(cid);
-  assert.equal(camp.enabled, 0);
+  assert.equal(camp.enabled, 1);
+  const pauseQueue = d.prepare(`SELECT * FROM ad_action_queue WHERE user_id=? AND store_id=? ORDER BY created_at DESC LIMIT 1`).get(USER_ID, STORE_ID);
+  assert.ok(pauseQueue, 'M4 pause must create an M3 action-queue item');
+  assert.match(pauseQueue.typed_action, /M4_PAUSE_ADS_FOR_ASIN/);
 
   // 5) Trigger a SECOND hijack on same asin/day to test 24h dedup
   const hjId2 = 'hj-qa2-' + Math.random().toString(36).slice(2, 8);
   d.prepare(`INSERT INTO m4_hijacking(id,user_id,store_id,asin,hijacker_seller,detected_at,duration_min,type,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`)
     .run(hjId2, USER_ID, STORE_ID, asin, 'BadSeller-2', now, 0, 'price_competition', 'pending_test_buy', now);
-  await call('POST', `/api/v1/store/m4/hijacking/${hjId2}/start-test-buy`, { body: {} });
+  await call('POST', `/api/v1/store/m4/hijacking/${hjId2}/start-test-buy`, { body: manualTestBuyBody('hj2') });
   const r3 = await call('POST', `/api/v1/store/m4/hijacking/${hjId2}/upload-proof`, {
     body: { type: 'counterfeit_confirmed', proofImages: [] },
   });
@@ -410,13 +432,15 @@ test('HIJACK counterfeit -> M3 pause + first call NOT dedupped (asin path)', asy
   });
   assert.equal(close.status, 200);
   const camp2 = d.prepare('SELECT enabled FROM lx_campaigns WHERE id=?').get(cid);
-  assert.equal(camp2.enabled, 1, 'campaign should be resumed after close');
+  assert.equal(camp2.enabled, 1, 'campaign remains unchanged until M3 action queue execution');
+  const resumeQueue = d.prepare(`SELECT * FROM ad_action_queue WHERE user_id=? AND store_id=? AND typed_action LIKE '%M4_RESUME_ADS_FOR_ASIN%' ORDER BY created_at DESC LIMIT 1`).get(USER_ID, STORE_ID);
+  assert.ok(resumeQueue, 'closeHijacking must queue the M3 resume intent');
 
   // 7) Genuine path: must not call M3 pause
   const hjId3 = 'hj-qa3-' + Math.random().toString(36).slice(2, 8);
   d.prepare(`INSERT INTO m4_hijacking(id,user_id,store_id,asin,hijacker_seller,detected_at,duration_min,type,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`)
     .run(hjId3, USER_ID, STORE_ID, asin, 'GoodSeller', now, 0, 'price_competition', 'pending_test_buy', now);
-  await call('POST', `/api/v1/store/m4/hijacking/${hjId3}/start-test-buy`, { body: {} });
+  await call('POST', `/api/v1/store/m4/hijacking/${hjId3}/start-test-buy`, { body: manualTestBuyBody('hj3') });
   const r4 = await call('POST', `/api/v1/store/m4/hijacking/${hjId3}/upload-proof`, {
     body: { type: 'genuine_authorized' },
   });
@@ -456,11 +480,13 @@ test('CROSS-MODULE M3 pause-from-M4 leaves an audit row that revert API accepts'
   const hjId = 'hjREV-' + Math.random().toString(36).slice(2, 8);
   d.prepare(`INSERT INTO m4_hijacking(id,user_id,store_id,asin,hijacker_seller,detected_at,duration_min,type,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`)
     .run(hjId, USER_ID, STORE_ID, asin, 'Bad', now, 0, 'price_competition', 'pending_test_buy', now);
-  await call('POST', `/api/v1/store/m4/hijacking/${hjId}/start-test-buy`, { body: {} });
+  await call('POST', `/api/v1/store/m4/hijacking/${hjId}/start-test-buy`, { body: manualTestBuyBody('hj1') });
   await call('POST', `/api/v1/store/m4/hijacking/${hjId}/upload-proof`, {
     body: { type: 'counterfeit_confirmed' },
   });
-  assert.equal(d.prepare('SELECT enabled FROM lx_campaigns WHERE id=?').get(cid).enabled, 0);
+  assert.equal(d.prepare('SELECT enabled FROM lx_campaigns WHERE id=?').get(cid).enabled, 1);
+  const pauseQueue = d.prepare(`SELECT id FROM ad_action_queue WHERE user_id=? AND store_id=? AND typed_action LIKE '%M4_PAUSE_ADS_FOR_ASIN%' ORDER BY created_at DESC LIMIT 1`).get(USER_ID, STORE_ID);
+  assert.ok(pauseQueue, 'M4 pause should be queued for M3 review');
 
   // find audit log for M3_PAUSE_ADS_FROM_M4
   const logs = listAuditLogs(USER_ID, STORE_ID, { sourceModule: 'M4', actionType: 'M3_PAUSE_ADS_FROM_M4' });
@@ -523,10 +549,10 @@ test('INFRINGEMENT 4-state happy path: investigating->draft->submitted->resolved
   assert.equal(rDup.status, 400);
   assert.equal(rDup.body.error, 'state_transition_forbidden');
 
-  const r2 = await call('POST', `/api/v1/store/m4/infringement/${id}/submit`, { body: {} });
+  const r2 = await call('POST', `/api/v1/store/m4/infringement/${id}/submit`, { body: manualExternalCaseBody(id) });
   assert.equal(r2.body.status, 'submitted');
   // can't submit twice
-  const rDup2 = await call('POST', `/api/v1/store/m4/infringement/${id}/submit`, { body: {} });
+  const rDup2 = await call('POST', `/api/v1/store/m4/infringement/${id}/submit`, { body: manualExternalCaseBody(id) });
   assert.equal(rDup2.status, 400);
 
   // resolve with invalid outcome
@@ -550,7 +576,7 @@ test('INFRINGEMENT resolve rejected / dismissed branches', async () => {
     await call('POST', `/api/v1/store/m4/infringement/${id}/draft`, {
       body: { legalDisclaimerAck: true },
     });
-    await call('POST', `/api/v1/store/m4/infringement/${id}/submit`, { body: {} });
+    await call('POST', `/api/v1/store/m4/infringement/${id}/submit`, { body: manualExternalCaseBody(id) });
     const r = await call('POST', `/api/v1/store/m4/infringement/${id}/resolve`, {
       body: { outcome },
     });
@@ -678,7 +704,7 @@ test('APPEAL state-machine + retry chain', async () => {
   assert.equal(c.status, 201);
   const id = c.body.id;
   // submit
-  const s = await call('POST', `/api/v1/store/m4/appeals/${id}/submit`, { body: {} });
+  const s = await call('POST', `/api/v1/store/m4/appeals/${id}/submit`, { body: manualExternalCaseBody(id) });
   assert.equal(s.body.status, 'submitted');
   // review (under_review)
   const rv = await call('POST', `/api/v1/store/m4/appeals/${id}/review`, {
@@ -698,14 +724,14 @@ test('APPEAL state-machine + retry chain', async () => {
   assert.equal(ry.body.parentAppealId, id, 'retry must chain via parentAppealId');
   assert.equal(ry.body.retryCount, 1);
   // submit + accept the retry
-  const s2 = await call('POST', `/api/v1/store/m4/appeals/${ry.body.id}/submit`, { body: {} });
+  const s2 = await call('POST', `/api/v1/store/m4/appeals/${ry.body.id}/submit`, { body: manualExternalCaseBody(ry.body.id) });
   assert.equal(s2.body.status, 'submitted');
   const ac = await call('POST', `/api/v1/store/m4/appeals/${ry.body.id}/review`, {
     body: { outcome: 'accepted' },
   });
   assert.equal(ac.body.status, 'accepted');
   // forbidden: trying to submit twice on accepted
-  const dup = await call('POST', `/api/v1/store/m4/appeals/${ry.body.id}/submit`, { body: {} });
+  const dup = await call('POST', `/api/v1/store/m4/appeals/${ry.body.id}/submit`, { body: manualExternalCaseBody(ry.body.id) });
   assert.equal(dup.status, 400);
 });
 
@@ -724,7 +750,7 @@ test('APPEAL review invalid outcome -> 400', async () => {
   const draft = await call('POST', '/api/v1/store/m4/appeals/draft', {
     body: { reviewId: rev.id, violationType: 'hateful' },
   });
-  await call('POST', `/api/v1/store/m4/appeals/${draft.body.id}/submit`, { body: {} });
+  await call('POST', `/api/v1/store/m4/appeals/${draft.body.id}/submit`, { body: manualExternalCaseBody(draft.body.id) });
   const r = await call('POST', `/api/v1/store/m4/appeals/${draft.body.id}/review`, {
     body: { outcome: 'maybe' },
   });
@@ -759,11 +785,18 @@ test('RECOVERY list + draft + send + reply + next-round chain', async () => {
   const g = await call('GET', '/api/v1/store/m4/recovery/' + id);
   assert.equal(g.status, 200);
 
-  // send happy
-  const s = await call('POST', `/api/v1/store/m4/recovery/${id}/send`, { body: {} });
-  assert.equal(s.body.status, 'sent');
-  // send again -> 400
-  const s2 = await call('POST', `/api/v1/store/m4/recovery/${id}/send`, { body: {} });
+  // M4-P1-03: send is a MANUAL ticket-board action. Without manual-evidence it 400s;
+  // with evidence it marks the recovery 'marked_sent' (never fakes a real 'sent').
+  const sNoEvidence = await call('POST', `/api/v1/store/m4/recovery/${id}/send`, { body: {} });
+  assert.equal(sNoEvidence.status, 400);
+  const s = await call('POST', `/api/v1/store/m4/recovery/${id}/send`, {
+    body: { channel: 'buyer_seller_messaging', sentBy: 'qa-op', sentAt: '2026-05-29T10:00:00Z' },
+  });
+  assert.equal(s.body.status, 'marked_sent');
+  // send again -> 400 (already marked_sent)
+  const s2 = await call('POST', `/api/v1/store/m4/recovery/${id}/send`, {
+    body: { channel: 'email', sentBy: 'qa-op', sentAt: '2026-05-29T10:05:00Z' },
+  });
   assert.equal(s2.status, 400);
 
   // record reply with new rating
@@ -862,6 +895,35 @@ test('BRAND-DEFENSE counter validation + happy', async () => {
   assert.ok(Array.isArray(ok.body.updatedTargetingIds));
 });
 
+// 安全不变量(1): counterBrand 不得直写 lx_targetings.bid, 必须改走 ad_action_queue
+test('BRAND-DEFENSE counter queues M4_BRAND_COUNTER_BID and does NOT write lx_targetings.bid', async () => {
+  const d = db();
+  const now = new Date().toISOString();
+  const tid = 'tg-brandcounter-' + Math.random().toString(16).slice(2, 8);
+  // seed one brand targeting with a known bid
+  d.prepare(`INSERT INTO lx_targetings(id, user_id, store_id, ad_group_id, term, match_type, state, bid, created_at, updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?)`)
+    .run(tid, USER_ID, STORE_ID, null, 'queuebrand-defense', 'exact', '启用', 1.0, now, now);
+
+  const res = await call('POST', '/api/v1/store/m4/brand-defense/counter', {
+    body: { term: 'queuebrand', bidIncrease: 0.5 },
+  });
+  assert.equal(res.status, 201);
+  // (a) bid must be UNCHANGED (no direct write)
+  const after = d.prepare('SELECT bid FROM lx_targetings WHERE id=?').get(tid);
+  assert.equal(after.bid, 1.0, 'lx_targetings.bid must not be directly written by counterBrand');
+  // (b) a queued intent must exist, dryRun=1, guardrail needs_review, audit_required
+  assert.ok(res.body.queuedActionId, 'response carries queuedActionId');
+  const q = d.prepare(`SELECT * FROM ad_action_queue WHERE id=?`).get(res.body.queuedActionId);
+  assert.ok(q, 'ad_action_queue row created');
+  assert.equal(q.dry_run, 1, 'queued intent is dryRun=1');
+  assert.equal(q.audit_required, 1, 'queued intent requires audit');
+  assert.match(q.typed_action, /M4_BRAND_COUNTER_BID/);
+  assert.match(q.guardrail, /needs_review/);
+  // (c) the affected targeting id is captured for later M3 execution
+  assert.ok(res.body.updatedTargetingIds.includes(tid));
+});
+
 // ====================================================================================
 // 16. Notifications (5) + 5min dedup
 // ====================================================================================
@@ -920,6 +982,108 @@ test('NOTIFICATIONS unread filter', async () => {
   const r = await call('GET', '/api/v1/store/m4/notifications?unread=true');
   assert.equal(r.status, 200);
   for (const n of r.body.items) assert.equal(n.readAt, null);
+});
+
+// ====================================================================================
+// 16b. N3-notif-store-isolation: read-state isolated per (user_id, store_id, notif_id)
+// ====================================================================================
+test('NOTIFICATIONS read-state isolated across stores (storeA read != storeB unread)', async () => {
+  setup();
+  // Provision a second store for the same user.
+  const storeB = dataStore.addUserStore(USER_ID, { name: 'QA Store B', region: 'US', currency: 'USD' });
+  assert.ok(storeB?.id && storeB.id !== STORE_ID, 'second store must be created');
+  const STORE_B = storeB.id;
+
+  const hdrB = { headers: { 'x-store-id': STORE_B } };
+
+  // Create one notification in each store.
+  const seed = Date.now();
+  const a = await call('POST', '/api/v1/store/m4/notifications', {
+    body: { title: 'A-' + seed, severity: 'P1', sourceModule: 'M4A' },
+  });
+  assert.equal(a.status, 201, 'create in storeA');
+  const notifA = a.body.id;
+
+  const b = await call('POST', '/api/v1/store/m4/notifications', {
+    ...hdrB,
+    body: { title: 'B-' + seed, severity: 'P1', sourceModule: 'M4A' },
+  });
+  assert.equal(b.status, 201, 'create in storeB');
+  const notifB = b.body.id;
+
+  // Baseline: each store has its own unread count, independent of the other.
+  const ucA0 = await call('GET', '/api/v1/store/m4/notifications/unread-count');
+  const ucB0 = await call('GET', '/api/v1/store/m4/notifications/unread-count', hdrB);
+  assert.ok(ucA0.body.unreadCount >= 1, 'storeA has unread');
+  assert.ok(ucB0.body.unreadCount >= 1, 'storeB has unread');
+
+  // Mark the storeB notif read IN storeB.
+  const roB = await call('POST', `/api/v1/store/m4/notifications/${notifB}/read`, { ...hdrB, body: {} });
+  assert.equal(roB.status, 200, 'mark read in storeB');
+
+  // storeA unread count must be UNCHANGED by storeB's read action.
+  const ucA1 = await call('GET', '/api/v1/store/m4/notifications/unread-count');
+  assert.equal(ucA1.body.unreadCount, ucA0.body.unreadCount, 'storeA unread unaffected by storeB read');
+
+  // storeB unread dropped by exactly one.
+  const ucB1 = await call('GET', '/api/v1/store/m4/notifications/unread-count', hdrB);
+  assert.equal(ucB1.body.unreadCount, ucB0.body.unreadCount - 1, 'storeB unread decremented');
+
+  // storeA's own notif still surfaces as unread in storeA's list.
+  const listA = await call('GET', '/api/v1/store/m4/notifications?unread=true');
+  assert.ok(listA.body.items.some((n) => n.id === notifA && n.readAt === null),
+    'storeA notif still unread in storeA list');
+
+  // The storeB read flag must NOT appear in storeA's list at all.
+  const listAall = await call('GET', '/api/v1/store/m4/notifications');
+  assert.ok(!listAall.body.items.some((n) => n.id === notifB),
+    'storeB notif must not appear in storeA list');
+});
+
+test('NOTIFICATIONS cross-store mark-read returns not_found (ownership guard)', async () => {
+  setup();
+  const storeB = dataStore.addUserStore(USER_ID, { name: 'QA Store C', region: 'US', currency: 'USD' });
+  const STORE_B = storeB.id;
+  const hdrB = { headers: { 'x-store-id': STORE_B } };
+
+  // Create a notif in storeA.
+  const a = await call('POST', '/api/v1/store/m4/notifications', {
+    body: { title: 'guard-' + Date.now(), severity: 'P2', sourceModule: 'M4A' },
+  });
+  assert.equal(a.status, 201);
+  const notifA = a.body.id;
+
+  // Attempt to mark storeA's notif read via storeB dimension → 404 not_found.
+  const cross = await call('POST', `/api/v1/store/m4/notifications/${notifA}/read`, { ...hdrB, body: {} });
+  assert.equal(cross.status, 404, 'cross-store mark-read must be not_found');
+
+  // And the read flag must NOT have been written under storeB: storeA notif stays unread in storeA.
+  const listA = await call('GET', '/api/v1/store/m4/notifications?unread=true');
+  assert.ok(listA.body.items.some((n) => n.id === notifA && n.readAt === null),
+    'storeA notif remains unread after rejected cross-store read');
+});
+
+test('NOTIFICATIONS read-all is store-scoped (does not clear other store)', async () => {
+  setup();
+  const storeB = dataStore.addUserStore(USER_ID, { name: 'QA Store D', region: 'US', currency: 'USD' });
+  const STORE_B = storeB.id;
+  const hdrB = { headers: { 'x-store-id': STORE_B } };
+
+  // Fresh unread in storeB.
+  await call('POST', '/api/v1/store/m4/notifications', {
+    ...hdrB,
+    body: { title: 'readall-B-' + Date.now(), severity: 'P1', sourceModule: 'M4A' },
+  });
+  const ucB0 = await call('GET', '/api/v1/store/m4/notifications/unread-count', hdrB);
+  assert.ok(ucB0.body.unreadCount >= 1);
+
+  // read-all in storeA.
+  const ra = await call('POST', '/api/v1/store/m4/notifications/read-all', { body: {} });
+  assert.equal(ra.status, 200);
+
+  // storeB still has its unread (read-all in A did not touch B).
+  const ucB1 = await call('GET', '/api/v1/store/m4/notifications/unread-count', hdrB);
+  assert.ok(ucB1.body.unreadCount >= 1, 'storeB unread preserved after storeA read-all');
 });
 
 // ====================================================================================
