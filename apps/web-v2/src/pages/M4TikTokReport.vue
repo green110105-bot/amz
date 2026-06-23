@@ -16,6 +16,27 @@ const isMock = computed(() => sourceMeta.value.mock === true);
 const days = computed(() => data.value?.days || []);
 const hasData = computed(() => days.value.some((d) => (d.stores || []).length > 0));
 
+// 把逐日 × 店铺拍平成单表行; 每天末尾加一行"当日小计"。日期单元格按天合并。
+const rows = computed(() => {
+  const out = [];
+  for (const d of days.value) {
+    const stores = (d.stores || []);
+    if (!stores.length) continue;
+    stores.forEach((s, i) => {
+      out.push({ date: d.date, span: i === 0 ? stores.length + 1 : 0, storeName: s.storeName, revenue: s.revenue, volume: s.volume, kind: 'store' });
+    });
+    out.push({ date: d.date, span: 0, storeName: '小计', revenue: d.totalRevenue, volume: d.totalVolume, kind: 'subtotal' });
+  }
+  return out;
+});
+
+// 合并日期列: 同一天的所有行共用一个日期单元格
+function spanMethod({ row, columnIndex }) {
+  if (columnIndex === 0) return row.span > 0 ? { rowspan: row.span, colspan: 1 } : { rowspan: 0, colspan: 0 };
+  return { rowspan: 1, colspan: 1 };
+}
+function rowClass({ row }) { return row.kind === 'subtotal' ? 'subtotal-row' : ''; }
+
 function money(v) { return formatCurrency(Number(v) || 0, data.value?.currency || 'USD', 2); }
 function n(v) { return formatNumber(Number(v) || 0); }
 
@@ -94,32 +115,29 @@ onMounted(() => { range.value = defaultRange(); load(); });
       <el-col :xs="12" :sm="6"><KpiCard label="日均销售额" :value="money((data?.rangeRevenue || 0) / Math.max(1, data?.dayCount || 1))" hint="均值" icon="TrendCharts" status="default" /></el-col>
     </el-row>
 
-    <!-- 逐日 -->
-    <div v-loading="loading">
+    <!-- 逐日明细 (单表; 日期按天合并, 每天末尾小计) -->
+    <el-card shadow="never" class="table-card" v-loading="loading">
       <EmptyState v-if="!hasData && !loading" title="该区间无有效销售数据" description="所选时间区间内没有任何店铺产生销量/销售额。" icon="DataLine" />
-
-      <el-card v-for="day in days" :key="day.date" shadow="never" class="day-card" v-show="(day.stores || []).length > 0">
-        <template #header>
-          <div class="day-header">
-            <span class="day-date">📅 {{ day.date }}</span>
-            <span class="day-summary">
-              <el-tag size="small" type="success" effect="plain">销售额 {{ money(day.totalRevenue) }}</el-tag>
-              <el-tag size="small" type="info" effect="plain">销量 {{ n(day.totalVolume) }}</el-tag>
-              <el-tag size="small" effect="plain">{{ day.storeCount }} 店</el-tag>
-            </span>
-          </div>
-        </template>
-        <el-table :data="day.stores" size="small" stripe>
-          <el-table-column prop="storeName" label="店铺" min-width="160" />
-          <el-table-column label="销售额" min-width="130" align="right">
-            <template #default="{ row }"><strong style="color:#10b981">{{ money(row.revenue) }}</strong></template>
-          </el-table-column>
-          <el-table-column label="销量" min-width="90" align="right">
-            <template #default="{ row }">{{ n(row.volume) }}</template>
-          </el-table-column>
-        </el-table>
-      </el-card>
-    </div>
+      <el-table
+        v-else :data="rows" size="small" border
+        :span-method="spanMethod" :row-class-name="rowClass"
+      >
+        <el-table-column prop="date" label="日期" min-width="120" />
+        <el-table-column prop="storeName" label="店铺" min-width="160">
+          <template #default="{ row }">
+            <span :class="{ 'subtotal-label': row.kind === 'subtotal' }">{{ row.storeName }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="销售额" min-width="130" align="right">
+          <template #default="{ row }">
+            <strong :style="{ color: row.kind === 'subtotal' ? '#0ea5e9' : '#10b981' }">{{ money(row.revenue) }}</strong>
+          </template>
+        </el-table-column>
+        <el-table-column label="销量" min-width="90" align="right">
+          <template #default="{ row }">{{ n(row.volume) }}</template>
+        </el-table-column>
+      </el-table>
+    </el-card>
   </div>
 </template>
 
@@ -127,8 +145,7 @@ onMounted(() => { range.value = defaultRange(); load(); });
 .tiktok-report { padding: 4px; }
 .kpi-row { margin-bottom: 16px; }
 .kpi-row .el-col { margin-bottom: 12px; }
-.day-card { border-radius: 10px; margin-bottom: 12px; }
-.day-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
-.day-date { font-weight: 600; }
-.day-summary { display: flex; gap: 6px; flex-wrap: wrap; }
+.table-card { border-radius: 10px; }
+:deep(.subtotal-row) { background: #f0f9ff !important; font-weight: 600; }
+.subtotal-label { color: #0ea5e9; font-weight: 600; }
 </style>
