@@ -74,9 +74,9 @@ function aggregateRealSales(orders) {
     let orderHadPaid = false;
     for (const it of (o.item_info || [])) {
       const unit = num(it.unit_price_amount);
-      const itemAmount = num(it.item_price_amount);
-      if (unit <= 0 || itemAmount <= 0) continue; // 零价赠品项剔除
-      const qty = Math.round(itemAmount / unit);
+      const itemAmount = num(it.item_price_amount); // 含费用的成交总额, 求和=saleStat 销售额
+      const qty = num(it.quantity);                 // 真实件数字段(不能用金额反算!)
+      if (unit <= 0 || itemAmount <= 0 || qty <= 0) continue; // 零价赠品项剔除
       cell.revenue += itemAmount;
       cell.volume += qty;
       orderHadPaid = true;
