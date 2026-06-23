@@ -24,6 +24,8 @@ export const tiktokDailyApi = {
   get: (params = {}) => http.get(`${BASE}/tiktok/daily`, { params }).then((r) => r.data),
   // 区间逐日: { startDate, endDate } -> { days: [{date, stores, totalRevenue, totalVolume}] }
   range: (params = {}) => http.get(`${BASE}/tiktok/range`, { params }).then((r) => r.data),
+  // 真实销售(按订单明细剔除样品订单+零价赠品后重算): 逐日×店铺 + 每日剔除样品数
+  realSales: (params = {}) => http.get(`${BASE}/tiktok/real-sales`, { params }).then((r) => r.data),
 };
 
 // ===== 1. anomaliesApi — 异常事件 =====

@@ -10,6 +10,7 @@ import { formatCurrency, formatNumber } from '../utils/format';
 const loading = ref(false);
 const data = ref(null);
 const range = ref([]); // [startDate, endDate] YYYY-MM-DD
+const mode = ref('real'); // 'real' = 真实销售(剔样品) | 'salestat' = saleStat 汇总
 
 const sourceMeta = computed(() => data.value?.sourceMeta || {});
 const isMock = computed(() => sourceMeta.value.mock === true);
@@ -52,17 +53,22 @@ function defaultRange() {
   return [start.toISOString().slice(0, 10), end.toISOString().slice(0, 10)];
 }
 
+const rangeSampleOrders = computed(() => data.value?.rangeSampleOrders || 0);
+
 async function load() {
   loading.value = true;
   try {
     const [startDate, endDate] = range.value?.length === 2 ? range.value : defaultRange();
-    data.value = await tiktokDailyApi.range({ startDate, endDate });
+    data.value = mode.value === 'real'
+      ? await tiktokDailyApi.realSales({ startDate, endDate })
+      : await tiktokDailyApi.range({ startDate, endDate });
   } catch (e) {
     ElMessage.error(`TikTok 日报加载失败：${e?.message || e}`);
   } finally {
     loading.value = false;
   }
 }
+function switchMode(m) { mode.value = m; load(); }
 
 // 快捷区间
 const shortcuts = [
@@ -83,9 +89,15 @@ onMounted(() => { range.value = defaultRange(); load(); });
   <div class="tiktok-report">
     <PageHeader
       title="🎵 TikTok 销售日报"
-      subtitle="数据来自领星 OpenAPI（platformStatisticsV2/saleStat）· 洛杉矶日界 · 按时间区间逐日展示销量 + 销售额"
+      :subtitle="mode === 'real'
+        ? '真实销售口径：按领星订单明细，剔除「样品订单」(送达人/联盟，$0)与零价赠品后重算 · 洛杉矶日界'
+        : 'saleStat 汇总口径：领星 platformStatisticsV2/saleStat（含样品订单，数字偏高）· 洛杉矶日界'"
     >
       <template #extra>
+        <el-radio-group v-model="mode" size="default" @change="(m) => switchMode(m)">
+          <el-radio-button label="real">真实销售（剔样品）</el-radio-button>
+          <el-radio-button label="salestat">saleStat 汇总</el-radio-button>
+        </el-radio-group>
         <el-date-picker
           v-model="range" type="daterange" value-format="YYYY-MM-DD" unlink-panels
           range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期"
@@ -114,10 +126,13 @@ onMounted(() => { range.value = defaultRange(); load(); });
 
     <!-- 区间汇总 -->
     <el-row :gutter="16" class="kpi-row">
-      <el-col :xs="12" :sm="6"><KpiCard label="区间天数" :value="data?.dayCount ?? 0" hint="LA 日界" icon="Calendar" status="info" /></el-col>
-      <el-col :xs="12" :sm="6"><KpiCard label="区间总销售额" :value="money(data?.rangeRevenue)" hint="GMV" icon="Money" status="success" /></el-col>
-      <el-col :xs="12" :sm="6"><KpiCard label="区间总销量" :value="n(data?.rangeVolume)" hint="单数" icon="Goods" status="default" /></el-col>
+      <el-col :xs="12" :sm="6"><KpiCard label="区间总销售额" :value="money(data?.rangeRevenue)" :hint="mode === 'real' ? '真实成交' : 'GMV'" icon="Money" status="success" /></el-col>
+      <el-col :xs="12" :sm="6"><KpiCard label="区间总销量" :value="n(data?.rangeVolume)" hint="件数" icon="Goods" status="default" /></el-col>
       <el-col :xs="12" :sm="6"><KpiCard label="日均销售额" :value="money((data?.rangeRevenue || 0) / Math.max(1, data?.dayCount || 1))" hint="均值" icon="TrendCharts" status="default" /></el-col>
+      <el-col :xs="12" :sm="6">
+        <KpiCard v-if="mode === 'real'" label="已剔除样品单" :value="n(rangeSampleOrders)" hint="送达人/联盟 $0" icon="Present" status="warning" />
+        <KpiCard v-else label="区间天数" :value="data?.dayCount ?? 0" hint="LA 日界" icon="Calendar" status="info" />
+      </el-col>
     </el-row>
 
     <!-- 透视表: 行=日期, 列=各店铺(列头); 每店铺含销售额/销量两子列; 末尾合计列 -->

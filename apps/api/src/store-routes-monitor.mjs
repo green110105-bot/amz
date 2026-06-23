@@ -6,6 +6,7 @@ import { securityHeaders } from './security.mjs';
 import { whoAmI, defaultStoreIdFor, getDbInstance, resolveStoreScope } from './data-store.mjs';
 import { providerMode, realWritesEnabled } from './integrations/provider-mode.mjs';
 import { getTikTokDashboard, getTikTokRangeDashboard } from './integrations/lingxing/tiktok-sync.mjs';
+import { getTikTokRealSalesDashboard } from './integrations/lingxing/tiktok-orders.mjs';
 
 // X-P0-04 / M4-P0-05: the server alone decides whether a real store write is requested
 // for an M4 -> Ads linked action. When real writes are not enabled the flag is hard-
@@ -361,6 +362,15 @@ async function _impl(request) {
   // TikTok 日报看板 — 区间逐日 (startDate/endDate; 一次区间请求拿每天数据)
   if (path === '/api/v1/store/m4/tiktok/range' && method === 'GET') {
     const data = await getTikTokRangeDashboard(db, userId, storeId, {
+      startDate: params.get('startDate') || params.get('start') || undefined,
+      endDate: params.get('endDate') || params.get('end') || undefined,
+    });
+    return json(data);
+  }
+
+  // TikTok 真实销售 — 按订单明细剔除样品订单(4-79)+零价赠品后重算, 逐日×店铺
+  if (path === '/api/v1/store/m4/tiktok/real-sales' && method === 'GET') {
+    const data = await getTikTokRealSalesDashboard(db, userId, storeId, {
       startDate: params.get('startDate') || params.get('start') || undefined,
       endDate: params.get('endDate') || params.get('end') || undefined,
     });
