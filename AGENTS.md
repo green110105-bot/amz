@@ -3,6 +3,7 @@
 This repository follows the PRD-driven, multi-role workflow described in `PRD.md`.
 
 > **必读且强制：开发/修复/验证任何能力前，先读并遵守 [`CODEX.md`](CODEX.md) 的七步工作法。**
+> 🚫 **第 0 铁律（最高优先级）：新功能一律接真实数据源，绝对不可以再用 mock 数据充数。** 接不了真实源就先别做、把阻塞交给用户，绝不用 mock/随机数/写死示例假装做完。详见 CODEX.md 开头第 0 铁律。
 > 核心铁律：测试绿 ≠ 可交付——必须叠加独立对抗式核验 + 全量重跑（`npm.cmd run check` EXIT=0）+ 真实探针，且不得为变绿而削弱安全不变量断言。安全不变量基线见 `codex22claude.md`。
 
 ## Default Mode
