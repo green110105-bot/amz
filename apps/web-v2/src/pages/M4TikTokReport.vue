@@ -16,26 +16,31 @@ const isMock = computed(() => sourceMeta.value.mock === true);
 const days = computed(() => data.value?.days || []);
 const hasData = computed(() => days.value.some((d) => (d.stores || []).length > 0));
 
-// 把逐日 × 店铺拍平成单表行; 每天末尾加一行"当日小计"。日期单元格按天合并。
-const rows = computed(() => {
-  const out = [];
+// 透视表: 行=日期, 列=各店铺(放到列头)。先取区间内出现过的全部店铺作为列。
+const storeColumns = computed(() => {
+  const seen = new Map(); // storeId -> storeName, 保持首次出现顺序
   for (const d of days.value) {
-    const stores = (d.stores || []);
-    if (!stores.length) continue;
-    stores.forEach((s, i) => {
-      out.push({ date: d.date, span: i === 0 ? stores.length + 1 : 0, storeName: s.storeName, revenue: s.revenue, volume: s.volume, kind: 'store' });
-    });
-    out.push({ date: d.date, span: 0, storeName: '小计', revenue: d.totalRevenue, volume: d.totalVolume, kind: 'subtotal' });
+    for (const s of (d.stores || [])) {
+      if (!seen.has(s.storeId)) seen.set(s.storeId, s.storeName);
+    }
   }
-  return out;
+  return [...seen.entries()].map(([storeId, storeName]) => ({ storeId, storeName }));
 });
 
-// 合并日期列: 同一天的所有行共用一个日期单元格
-function spanMethod({ row, columnIndex }) {
-  if (columnIndex === 0) return row.span > 0 ? { rowspan: row.span, colspan: 1 } : { rowspan: 0, colspan: 0 };
-  return { rowspan: 1, colspan: 1 };
-}
-function rowClass({ row }) { return row.kind === 'subtotal' ? 'subtotal-row' : ''; }
+// 每行 = 一天; 行内每个店铺一对 {rev_<id>, vol_<id>}; 末尾合计。
+const rows = computed(() => {
+  return days.value.map((d) => {
+    const row = { date: d.date, _totalRev: d.totalRevenue, _totalVol: d.totalVolume };
+    const byId = {};
+    for (const s of (d.stores || [])) byId[s.storeId] = s;
+    for (const col of storeColumns.value) {
+      const s = byId[col.storeId];
+      row[`rev_${col.storeId}`] = s ? s.revenue : 0;
+      row[`vol_${col.storeId}`] = s ? s.volume : 0;
+    }
+    return row;
+  });
+});
 
 function money(v) { return formatCurrency(Number(v) || 0, data.value?.currency || 'USD', 2); }
 function n(v) { return formatNumber(Number(v) || 0); }
@@ -115,26 +120,32 @@ onMounted(() => { range.value = defaultRange(); load(); });
       <el-col :xs="12" :sm="6"><KpiCard label="日均销售额" :value="money((data?.rangeRevenue || 0) / Math.max(1, data?.dayCount || 1))" hint="均值" icon="TrendCharts" status="default" /></el-col>
     </el-row>
 
-    <!-- 逐日明细 (单表; 日期按天合并, 每天末尾小计) -->
+    <!-- 透视表: 行=日期, 列=各店铺(列头); 每店铺含销售额/销量两子列; 末尾合计列 -->
     <el-card shadow="never" class="table-card" v-loading="loading">
       <EmptyState v-if="!hasData && !loading" title="该区间无有效销售数据" description="所选时间区间内没有任何店铺产生销量/销售额。" icon="DataLine" />
-      <el-table
-        v-else :data="rows" size="small" border
-        :span-method="spanMethod" :row-class-name="rowClass"
-      >
-        <el-table-column prop="date" label="日期" min-width="120" />
-        <el-table-column prop="storeName" label="店铺" min-width="160">
-          <template #default="{ row }">
-            <span :class="{ 'subtotal-label': row.kind === 'subtotal' }">{{ row.storeName }}</span>
-          </template>
+      <el-table v-else :data="rows" size="small" border>
+        <el-table-column prop="date" label="日期" fixed min-width="110" />
+        <!-- 每个店铺一个多级表头 -->
+        <el-table-column v-for="col in storeColumns" :key="col.storeId" :label="col.storeName" align="center">
+          <el-table-column :label="'销售额'" align="right" min-width="120">
+            <template #default="{ row }">
+              <span :style="{ color: row[`rev_${col.storeId}`] ? '#10b981' : '#cbd5e1' }">{{ money(row[`rev_${col.storeId}`]) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column :label="'销量'" align="right" min-width="80">
+            <template #default="{ row }">
+              <span :style="{ color: row[`vol_${col.storeId}`] ? '#334155' : '#cbd5e1' }">{{ n(row[`vol_${col.storeId}`]) }}</span>
+            </template>
+          </el-table-column>
         </el-table-column>
-        <el-table-column label="销售额" min-width="130" align="right">
-          <template #default="{ row }">
-            <strong :style="{ color: row.kind === 'subtotal' ? '#0ea5e9' : '#10b981' }">{{ money(row.revenue) }}</strong>
-          </template>
-        </el-table-column>
-        <el-table-column label="销量" min-width="90" align="right">
-          <template #default="{ row }">{{ n(row.volume) }}</template>
+        <!-- 当日合计 -->
+        <el-table-column label="当日合计" align="center" class-name="total-col">
+          <el-table-column label="销售额" align="right" min-width="120">
+            <template #default="{ row }"><strong style="color:#0ea5e9">{{ money(row._totalRev) }}</strong></template>
+          </el-table-column>
+          <el-table-column label="销量" align="right" min-width="80">
+            <template #default="{ row }"><strong>{{ n(row._totalVol) }}</strong></template>
+          </el-table-column>
         </el-table-column>
       </el-table>
     </el-card>
@@ -146,6 +157,6 @@ onMounted(() => { range.value = defaultRange(); load(); });
 .kpi-row { margin-bottom: 16px; }
 .kpi-row .el-col { margin-bottom: 12px; }
 .table-card { border-radius: 10px; }
-:deep(.subtotal-row) { background: #f0f9ff !important; font-weight: 600; }
-.subtotal-label { color: #0ea5e9; font-weight: 600; }
+:deep(.total-col) { background: #f0f9ff; }
+:deep(.el-table th.el-table__cell) { background: #f8fafc; }
 </style>
