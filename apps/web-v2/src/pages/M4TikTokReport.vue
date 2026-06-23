@@ -92,24 +92,29 @@ onMounted(() => { range.value = defaultRange(); load(); });
   <div class="tiktok-report">
     <PageHeader
       title="🎵 TikTok 销售日报"
-      :subtitle="mode === 'real'
-        ? '真实销售口径：按领星订单明细，剔除「样品订单」(送达人/联盟，$0)与零价赠品后重算 · 洛杉矶日界'
-        : 'saleStat 汇总口径：领星 platformStatisticsV2/saleStat（含样品订单，数字偏高）· 洛杉矶日界'"
-    >
-      <template #extra>
-        <el-radio-group v-model="mode" size="default" @change="(m) => switchMode(m)">
-          <el-radio-button label="real">真实销售（剔样品）</el-radio-button>
-          <el-radio-button label="salestat">saleStat 汇总</el-radio-button>
-        </el-radio-group>
+      :subtitle="isMobile
+        ? (mode === 'real' ? '真实销售：剔除样品订单后 · 洛杉矶日界' : 'saleStat 汇总：含样品 · 洛杉矶日界')
+        : (mode === 'real'
+          ? '真实销售口径：按领星订单明细，剔除「样品订单」(送达人/联盟，$0)与零价赠品后重算 · 洛杉矶日界'
+          : 'saleStat 汇总口径：领星 platformStatisticsV2/saleStat（含样品订单，数字偏高）· 洛杉矶日界')"
+    />
+
+    <!-- 工具条: 口径切换 + 日期 + 刷新; 移动端自动竖排铺满 -->
+    <div class="toolbar" :class="{ 'is-mobile': isMobile }">
+      <el-radio-group v-model="mode" :size="isMobile ? 'default' : 'default'" class="tb-mode" @change="(m) => switchMode(m)">
+        <el-radio-button label="real">真实销售（剔样品）</el-radio-button>
+        <el-radio-button label="salestat">saleStat 汇总</el-radio-button>
+      </el-radio-group>
+      <div class="tb-right">
         <el-date-picker
           v-model="range" type="daterange" value-format="YYYY-MM-DD" unlink-panels
           range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期"
-          :shortcuts="shortcuts" size="default" style="width: 280px"
+          :shortcuts="shortcuts" size="default" class="tb-date"
           @change="load"
         />
-        <el-button :icon="'Refresh'" :loading="loading" @click="load">刷新</el-button>
-      </template>
-    </PageHeader>
+        <el-button :icon="'Refresh'" :loading="loading" class="tb-refresh" @click="load">刷新</el-button>
+      </div>
+    </div>
 
     <!-- 真实/示例 来源横幅 (诚实标注, 不伪装 real) -->
     <el-alert
@@ -123,8 +128,8 @@ onMounted(() => { range.value = defaultRange(); load(); });
       v-else
       type="success" :closable="false" show-icon
       :title="`真实数据 · 领星 TikTok · ${data?.startDate || ''} ~ ${data?.endDate || ''}`"
-      :description="`抓取时间：${sourceMeta.fetchedAt || '-'}`"
-      style="margin-bottom: 16px"
+      :description="isMobile ? '' : `抓取时间：${sourceMeta.fetchedAt || '-'}`"
+      class="src-alert"
     />
 
     <!-- 区间汇总 -->
@@ -138,85 +143,63 @@ onMounted(() => { range.value = defaultRange(); load(); });
       </el-col>
     </el-row>
 
-    <EmptyState v-if="!hasData && !loading" title="该区间无有效销售数据" description="所选时间区间内没有任何店铺产生销量/销售额。" icon="DataLine" />
-
-    <!-- 桌面: 透视表 (行=日期, 列=各店铺) -->
-    <el-card v-if="!isMobile && hasData" shadow="never" class="table-card" v-loading="loading">
-      <el-table :data="rows" size="small" border>
-        <el-table-column prop="date" label="日期" fixed min-width="110" />
+    <!-- 透视表 (行=日期, 列=各店铺) — 移动端字体缩小 + 可横向滚动, 结构与 PC 一致 -->
+    <el-card shadow="never" class="table-card" :class="{ 'is-mobile': isMobile }" v-loading="loading">
+      <EmptyState v-if="!hasData && !loading" title="该区间无有效销售数据" description="所选时间区间内没有任何店铺产生销量/销售额。" icon="DataLine" />
+      <el-table v-else :data="rows" :size="isMobile ? 'small' : 'small'" border>
+        <el-table-column prop="date" label="日期" fixed :min-width="isMobile ? 84 : 110" />
         <el-table-column v-for="col in storeColumns" :key="col.storeId" :label="col.storeName" align="center">
-          <el-table-column :label="'销售额'" align="right" min-width="120">
+          <el-table-column label="销售额" align="right" :min-width="isMobile ? 92 : 120">
             <template #default="{ row }">
               <span :style="{ color: row[`rev_${col.storeId}`] ? '#10b981' : '#cbd5e1' }">{{ money(row[`rev_${col.storeId}`]) }}</span>
             </template>
           </el-table-column>
-          <el-table-column :label="'销量'" align="right" min-width="80">
+          <el-table-column label="销量" align="right" :min-width="isMobile ? 56 : 80">
             <template #default="{ row }">
               <span :style="{ color: row[`vol_${col.storeId}`] ? '#334155' : '#cbd5e1' }">{{ n(row[`vol_${col.storeId}`]) }}</span>
             </template>
           </el-table-column>
         </el-table-column>
         <el-table-column label="当日合计" align="center" class-name="total-col">
-          <el-table-column label="销售额" align="right" min-width="120">
+          <el-table-column label="销售额" align="right" :min-width="isMobile ? 92 : 120">
             <template #default="{ row }"><strong style="color:#0ea5e9">{{ money(row._totalRev) }}</strong></template>
           </el-table-column>
-          <el-table-column label="销量" align="right" min-width="80">
+          <el-table-column label="销量" align="right" :min-width="isMobile ? 56 : 80">
             <template #default="{ row }"><strong>{{ n(row._totalVol) }}</strong></template>
           </el-table-column>
         </el-table-column>
       </el-table>
     </el-card>
-
-    <!-- 移动: 逐日卡片 (每天一张, 内含各店铺) -->
-    <div v-else-if="isMobile && hasData" v-loading="loading" class="mobile-days">
-      <el-card v-for="day in days" :key="day.date" shadow="never" class="m-day-card" v-show="(day.stores || []).length > 0">
-        <div class="m-day-head">
-          <span class="m-day-date">📅 {{ day.date }}</span>
-          <span class="m-day-tot">
-            <strong style="color:#0ea5e9">{{ money(day.totalRevenue) }}</strong>
-            <span class="m-vol">{{ n(day.totalVolume) }} 件</span>
-          </span>
-        </div>
-        <div v-for="s in day.stores" :key="s.storeId" class="m-store-row">
-          <span class="m-store-name">{{ s.storeName }}</span>
-          <span class="m-store-val">
-            <strong style="color:#10b981">{{ money(s.revenue) }}</strong>
-            <span class="m-store-vol">{{ n(s.volume) }} 件<em v-if="s.sampleOrders"> · 剔{{ s.sampleOrders }}样</em></span>
-          </span>
-        </div>
-      </el-card>
-    </div>
   </div>
 </template>
 
 <style scoped>
 .tiktok-report { padding: 4px; }
-.kpi-row { margin-bottom: 16px; }
+
+/* 工具条 */
+.toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 8px 0 14px; flex-wrap: wrap; }
+.tb-right { display: flex; align-items: center; gap: 8px; }
+.tb-date { width: 280px; }
+.src-alert { margin-bottom: 14px; }
+.kpi-row { margin-bottom: 14px; }
 .kpi-row .el-col { margin-bottom: 12px; }
 .table-card { border-radius: 10px; }
 :deep(.total-col) { background: #f0f9ff; }
 :deep(.el-table th.el-table__cell) { background: #f8fafc; }
 
-/* 移动逐日卡片 */
-.mobile-days { display: flex; flex-direction: column; gap: 10px; }
-.m-day-card { border-radius: 10px; }
-.m-day-card :deep(.el-card__body) { padding: 12px; }
-.m-day-head { display: flex; justify-content: space-between; align-items: baseline; padding-bottom: 8px; border-bottom: 1px solid #eef2f7; margin-bottom: 8px; }
-.m-day-date { font-weight: 600; font-size: 14px; }
-.m-day-tot { text-align: right; }
-.m-day-tot strong { font-size: 15px; }
-.m-vol { display: block; font-size: 11px; color: #94a3b8; }
-.m-store-row { display: flex; justify-content: space-between; align-items: baseline; padding: 6px 0; }
-.m-store-name { font-size: 13px; color: #334155; }
-.m-store-val { text-align: right; }
-.m-store-vol { display: block; font-size: 11px; color: #94a3b8; }
-.m-store-vol em { color: #f59e0b; font-style: normal; }
-
-/* 移动端: 顶部控件换行不挤 */
+/* 移动端: 工具条竖排铺满, 表格缩小可横向滚动 */
 @media (max-width: 767px) {
-  :deep(.page-header-extra), .tiktok-report :deep(.el-date-editor) { width: 100% !important; }
-  .tiktok-report :deep(.el-radio-group) { width: 100%; display: flex; }
-  .tiktok-report :deep(.el-radio-button) { flex: 1; }
-  .tiktok-report :deep(.el-radio-button__inner) { width: 100%; }
+  .toolbar { flex-direction: column; align-items: stretch; gap: 8px; }
+  .tb-mode { display: flex; width: 100%; }
+  .tb-mode :deep(.el-radio-button) { flex: 1; }
+  .tb-mode :deep(.el-radio-button__inner) { width: 100%; padding-left: 6px; padding-right: 6px; }
+  .tb-right { width: 100%; }
+  .tb-date { flex: 1; width: auto; }
+  /* 表格整体缩小, 数字紧凑, 头部高度收紧 */
+  .table-card.is-mobile :deep(.el-card__body) { padding: 8px; }
+  .table-card.is-mobile :deep(.el-table) { font-size: 11px; }
+  .table-card.is-mobile :deep(.el-table .cell) { padding: 0 4px; line-height: 1.4; }
+  .table-card.is-mobile :deep(.el-table th.el-table__cell) { padding: 2px 0; }
+  .table-card.is-mobile :deep(.el-table td.el-table__cell) { padding: 3px 0; }
 }
 </style>
