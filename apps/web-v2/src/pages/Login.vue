@@ -22,7 +22,8 @@ async function login() {
   loginLoading.value = false;
   if (!res.ok) return;
   ElMessage.success('登录成功');
-  router.push(route.query.redirect || '/m4/reports/tiktok');
+  // 强制首页为 TikTok 日报 — 不跟随 redirect query(否则会被登录前访问过的页面覆盖)。
+  router.push('/m4/reports/tiktok');
 }
 
 // === 注册 ===
