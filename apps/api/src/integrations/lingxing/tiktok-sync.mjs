@@ -27,13 +27,13 @@ function firstNonEmpty(v, def = '') {
 }
 function num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
 
-// 拉单个 result_type 的全部行 (分页)
-async function fetchSaleStat({ date, resultType, sids }) {
+// 拉一个日期区间的全部行 (分页)。date_unit='4' => 按天, 返回行的 date_collect 为 {日期:值}。
+async function fetchSaleStatRange({ startDate, endDate, resultType, sids }) {
   const rows = [];
   let offset = 0;
   for (let guard = 0; guard < 50; guard++) {
     const body = {
-      start_date: date, end_date: date,
+      start_date: startDate, end_date: endDate,
       result_type: String(resultType), date_unit: '4', data_type: '6',
       offset, length: PAGE_SIZE, sids,
     };
@@ -47,6 +47,11 @@ async function fetchSaleStat({ date, resultType, sids }) {
     offset += PAGE_SIZE;
   }
   return rows;
+}
+
+// 单天: 复用区间函数 (start=end)
+async function fetchSaleStat({ date, resultType, sids }) {
+  return fetchSaleStatRange({ startDate: date, endDate: date, resultType, sids });
 }
 
 // 把行聚合成 { storeName: metricValue }
@@ -92,6 +97,106 @@ export async function fetchTikTokDaily({ date } = {}) {
 }
 
 function round2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
+
+// 枚举区间内每一天 YYYY-MM-DD (含端点)
+function enumerateDays(startDate, endDate) {
+  const out = [];
+  const s = new Date(startDate + 'T00:00:00Z');
+  const e = new Date(endDate + 'T00:00:00Z');
+  for (let d = s; d <= e; d = new Date(d.getTime() + 86400000)) out.push(d.toISOString().slice(0, 10));
+  return out;
+}
+
+// 把区间行的 date_collect({日期:值}) 聚合成 { date: { storeName: value } }
+function aggregateByDay(rows) {
+  const byDay = {}; // date -> storeName -> value
+  for (const row of rows) {
+    const storeName = firstNonEmpty(row.store_name);
+    if (!storeName) continue;
+    const dc = row.date_collect && typeof row.date_collect === 'object' ? row.date_collect : null;
+    if (dc) {
+      for (const [day, val] of Object.entries(dc)) {
+        (byDay[day] = byDay[day] || {});
+        byDay[day][storeName] = (byDay[day][storeName] || 0) + num(val);
+      }
+    }
+  }
+  return byDay;
+}
+
+// 真实拉取区间, 返回逐日看板结构 (mock=false)
+export async function fetchTikTokRange({ startDate, endDate } = {}) {
+  const end = endDate || laYesterday();
+  const start = startDate || end;
+  const sids = TIKTOK_STORES.map((s) => s.storeId);
+  const volumeRows = await fetchSaleStatRange({ startDate: start, endDate: end, resultType: 1, sids });
+  const revenueRows = await fetchSaleStatRange({ startDate: start, endDate: end, resultType: 3, sids });
+  const volByDay = aggregateByDay(volumeRows);
+  const revByDay = aggregateByDay(revenueRows);
+
+  let rangeRevenue = 0;
+  let rangeVolume = 0;
+  const days = enumerateDays(start, end).map((day) => {
+    const vMap = volByDay[day] || {};
+    const rMap = revByDay[day] || {};
+    let dayRevenue = 0;
+    let dayVolume = 0;
+    const stores = TIKTOK_STORES.map((s) => {
+      const revenue = rMap[s.storeName] || 0;
+      const volume = vMap[s.storeName] || 0;
+      dayRevenue += revenue;
+      dayVolume += volume;
+      return { storeId: s.storeId, storeName: s.storeName, revenue: round2(revenue), volume };
+    }).filter((s) => s.revenue > 0 || s.volume > 0);
+    rangeRevenue += dayRevenue;
+    rangeVolume += dayVolume;
+    return { date: day, storeCount: stores.length, totalRevenue: round2(dayRevenue), totalVolume: dayVolume, stores };
+  });
+  // 最新日期在前 (看板更直观)
+  days.reverse();
+
+  return {
+    startDate: start,
+    endDate: end,
+    timezone: 'America/Los_Angeles',
+    currency: 'USD',
+    dayCount: days.length,
+    rangeRevenue: round2(rangeRevenue),
+    rangeVolume,
+    days,
+    sourceMeta: { source: 'lingxing-openapi', platform: 'TikTok', mock: false, fetchedAt: new Date().toISOString() },
+  };
+}
+
+// 区间示例数据 (无凭证/失败兜底, 结构与真实一致, 标 mock)
+export function mockTikTokRange({ startDate, endDate } = {}) {
+  const end = endDate || laYesterday();
+  const start = startDate || enumerateDays(end, end)[0];
+  const sampleStores = [
+    { storeId: '110573514571226624', storeName: 'TK Slushie 2' },
+    { storeId: '110539253792477696', storeName: 'TK Slushie 1' },
+  ];
+  let rangeRevenue = 0;
+  let rangeVolume = 0;
+  const allDays = enumerateDays(start, end);
+  const days = allDays.map((day, i) => {
+    const stores = sampleStores.map((s, j) => {
+      const volume = ((i + 1) * (j + 2)) % 13 + 1;
+      const revenue = round2(volume * (180 + j * 40));
+      return { ...s, revenue, volume };
+    });
+    const dRev = round2(stores.reduce((a, s) => a + s.revenue, 0));
+    const dVol = stores.reduce((a, s) => a + s.volume, 0);
+    rangeRevenue += dRev; rangeVolume += dVol;
+    return { date: day, storeCount: stores.length, totalRevenue: dRev, totalVolume: dVol, stores };
+  });
+  days.reverse();
+  return {
+    startDate: start, endDate: end, timezone: 'America/Los_Angeles', currency: 'USD',
+    dayCount: days.length, rangeRevenue: round2(rangeRevenue), rangeVolume, days,
+    sourceMeta: { source: 'lingxing-openapi', platform: 'TikTok', mock: true, reason: 'lingxing_credentials_missing', fetchedAt: new Date().toISOString() },
+  };
+}
 
 // 示例数据 (无凭证/未配置时返回, 结构与真实一致, 明确标 mock)
 export function mockTikTokDaily({ date } = {}) {
@@ -140,7 +245,7 @@ export function getStoredTikTokDaily(db, userId, storeId, date) {
   return row ? JSON.parse(row.payload) : null;
 }
 
-// 看板入口: 配置了凭证就真实拉取并落库, 否则返回 mock。失败时降级到已存快照或 mock, 并诚实标注。
+// 单天看板入口 (向后兼容)。配置凭证就真实拉取并落库, 否则 mock。失败降级到快照或 mock。
 export async function getTikTokDashboard(db, userId, storeId, { date, refresh = false } = {}) {
   const day = date || laYesterday();
   if (!isLingxingConfigured()) {
@@ -158,6 +263,38 @@ export async function getTikTokDashboard(db, userId, storeId, { date, refresh = 
     const cached = getStoredTikTokDaily(db, userId, storeId, day);
     if (cached) return { ...cached, sourceMeta: { ...cached.sourceMeta, stale: true, error: String(err.message || err) } };
     const mock = mockTikTokDaily({ date: day });
+    mock.sourceMeta.error = String(err.message || err);
+    return mock;
+  }
+}
+
+const MAX_RANGE_DAYS = 92; // 上限保护(领星区间不宜过大)
+
+// 区间看板入口: 拉区间逐日数据 + 把每天单独落库(幂等)。无凭证/失败 -> 诚实 mock。
+export async function getTikTokRangeDashboard(db, userId, storeId, { startDate, endDate } = {}) {
+  const end = endDate || laYesterday();
+  let start = startDate || end;
+  // clamp: start<=end, 区间不超过 MAX_RANGE_DAYS
+  if (start > end) start = end;
+  const days = enumerateDays(start, end);
+  if (days.length > MAX_RANGE_DAYS) start = days[days.length - MAX_RANGE_DAYS];
+
+  if (!isLingxingConfigured()) {
+    return mockTikTokRange({ startDate: start, endDate: end });
+  }
+  try {
+    const range = await fetchTikTokRange({ startDate: start, endDate: end });
+    // 每天单独落库一份单天快照(便于其它入口/缓存复用)
+    for (const d of range.days) {
+      saveTikTokDaily(db, userId, storeId, {
+        date: d.date, timezone: range.timezone, currency: range.currency,
+        storeCount: d.storeCount, totalRevenue: d.totalRevenue, totalVolume: d.totalVolume,
+        stores: d.stores, sourceMeta: { ...range.sourceMeta },
+      });
+    }
+    return range;
+  } catch (err) {
+    const mock = mockTikTokRange({ startDate: start, endDate: end });
     mock.sourceMeta.error = String(err.message || err);
     return mock;
   }

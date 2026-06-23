@@ -5,7 +5,7 @@
 import { securityHeaders } from './security.mjs';
 import { whoAmI, defaultStoreIdFor, getDbInstance, resolveStoreScope } from './data-store.mjs';
 import { providerMode, realWritesEnabled } from './integrations/provider-mode.mjs';
-import { getTikTokDashboard } from './integrations/lingxing/tiktok-sync.mjs';
+import { getTikTokDashboard, getTikTokRangeDashboard } from './integrations/lingxing/tiktok-sync.mjs';
 
 // X-P0-04 / M4-P0-05: the server alone decides whether a real store write is requested
 // for an M4 -> Ads linked action. When real writes are not enabled the flag is hard-
@@ -349,11 +349,20 @@ async function _impl(request) {
     }));
   }
 
-  // TikTok 日报看板 (领星 OpenAPI; 无凭证时返回 mock 并诚实标注)
+  // TikTok 日报看板 — 单天 (领星 OpenAPI; 无凭证时返回 mock 并诚实标注)
   if (path === '/api/v1/store/m4/tiktok/daily' && method === 'GET') {
     const data = await getTikTokDashboard(db, userId, storeId, {
       date: params.get('date') || undefined,
       refresh: params.get('refresh') === '1' || params.get('refresh') === 'true',
+    });
+    return json(data);
+  }
+
+  // TikTok 日报看板 — 区间逐日 (startDate/endDate; 一次区间请求拿每天数据)
+  if (path === '/api/v1/store/m4/tiktok/range' && method === 'GET') {
+    const data = await getTikTokRangeDashboard(db, userId, storeId, {
+      startDate: params.get('startDate') || params.get('start') || undefined,
+      endDate: params.get('endDate') || params.get('end') || undefined,
     });
     return json(data);
   }

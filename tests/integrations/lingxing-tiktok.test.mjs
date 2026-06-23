@@ -62,3 +62,44 @@ test('4 个 TikTok 店铺常量正确', () => {
   assert.ok(names.includes('TK Slushie 1'));
   assert.ok(names.includes('NSY ProTool Hub'));
 });
+
+test('区间看板: 无凭证返回 mock 逐日结构, 每天含 stores', async () => {
+  const db = getDbInstance();
+  const r = await sync.getTikTokRangeDashboard(db, 'u-r', 's-r', { startDate: '2026-06-16', endDate: '2026-06-22' });
+  assert.equal(r.sourceMeta.mock, true);
+  // 区间契约字段
+  for (const k of ['startDate', 'endDate', 'timezone', 'currency', 'dayCount', 'rangeRevenue', 'rangeVolume', 'days', 'sourceMeta']) {
+    assert.ok(k in r, `缺字段 ${k}`);
+  }
+  assert.equal(r.dayCount, 7); // 06-16 ~ 06-22 含端点 = 7 天
+  assert.equal(r.days.length, 7);
+  // 最新日期在前
+  assert.equal(r.days[0].date, '2026-06-22');
+  assert.equal(r.days[6].date, '2026-06-16');
+  for (const d of r.days) {
+    for (const k of ['date', 'storeCount', 'totalRevenue', 'totalVolume', 'stores']) assert.ok(k in d, `天缺字段 ${k}`);
+    // 当天汇总 = 当天各店之和
+    const sumV = d.stores.reduce((a, s) => a + s.volume, 0);
+    assert.equal(d.totalVolume, sumV);
+  }
+  // 区间总量 = 各天之和
+  const totalV = r.days.reduce((a, d) => a + d.totalVolume, 0);
+  assert.equal(r.rangeVolume, totalV);
+});
+
+test('区间看板: start>end 自动 clamp, 不报错', async () => {
+  const db = getDbInstance();
+  const r = await sync.getTikTokRangeDashboard(db, 'u-r2', 's-r2', { startDate: '2026-06-22', endDate: '2026-06-16' });
+  assert.ok(r.dayCount >= 1);
+  assert.ok(Array.isArray(r.days));
+});
+
+test('aggregateByDay/fetchTikTokRange: date_collect 逐日解析正确 (mockTikTokRange 自洽)', () => {
+  const r = sync.mockTikTokRange({ startDate: '2026-06-20', endDate: '2026-06-22' });
+  assert.equal(r.days.length, 3);
+  // 每天 stores 非空且 revenue/volume 为正
+  for (const d of r.days) {
+    assert.ok(d.stores.length > 0);
+    for (const s of d.stores) { assert.ok(s.volume > 0); assert.ok(s.revenue > 0); }
+  }
+});

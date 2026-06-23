@@ -22,6 +22,8 @@ export const dailyReportsApi = {
 // ===== 0b. tiktokDailyApi — TikTok 日报看板 (领星 OpenAPI) =====
 export const tiktokDailyApi = {
   get: (params = {}) => http.get(`${BASE}/tiktok/daily`, { params }).then((r) => r.data),
+  // 区间逐日: { startDate, endDate } -> { days: [{date, stores, totalRevenue, totalVolume}] }
+  range: (params = {}) => http.get(`${BASE}/tiktok/range`, { params }).then((r) => r.data),
 };
 
 // ===== 1. anomaliesApi — 异常事件 =====
