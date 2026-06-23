@@ -394,6 +394,7 @@ function migrateFromLegacyJson(db) {
 // ===== Auth =====
 export function authenticate(email, password) {
   const db = getDb();
+  // email 字段按原样精确匹配 —— 既支持邮箱(demo@amz.local), 也支持纯账号名(ssg / zl)。
   const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
   if (!user) return null;
   if (user.password_hash !== hashPassword(password)) return null;

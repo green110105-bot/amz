@@ -1,7 +1,7 @@
 import { createRouter, createWebHashHistory } from 'vue-router';
 
 const routes = [
-  { path: '/', redirect: '/workbench' },
+  { path: '/', redirect: '/m4/reports/tiktok' },
 
   { path: '/workbench', name: 'Workbench', component: () => import('../pages/Workbench.vue'), meta: { title: '工作台', icon: 'Monitor', group: 'main' } },
 

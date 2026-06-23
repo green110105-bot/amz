@@ -22,7 +22,7 @@ async function login() {
   loginLoading.value = false;
   if (!res.ok) return;
   ElMessage.success('登录成功');
-  router.push(route.query.redirect || '/workbench');
+  router.push(route.query.redirect || '/m4/reports/tiktok');
 }
 
 // === 注册 ===
@@ -40,7 +40,7 @@ async function register() {
     ElMessage.success('注册成功，正在登录...');
     const res = await store.login({ email: f.email, password: f.password });
     if (res.ok) {
-      router.push('/workbench');
+      router.push('/m4/reports/tiktok');
     } else {
       tab.value = 'login';
       loginForm.value = { email: f.email, password: '' };
