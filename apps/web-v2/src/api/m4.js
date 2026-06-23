@@ -19,6 +19,11 @@ export const dailyReportsApi = {
   get: (params = {}) => http.get(`${BASE}/reports/daily`, { params }).then((r) => r.data),
 };
 
+// ===== 0b. tiktokDailyApi — TikTok 日报看板 (领星 OpenAPI) =====
+export const tiktokDailyApi = {
+  get: (params = {}) => http.get(`${BASE}/tiktok/daily`, { params }).then((r) => r.data),
+};
+
 // ===== 1. anomaliesApi — 异常事件 =====
 export const anomaliesApi = {
   list: (params = {}) => http.get(`${BASE}/anomalies`, { params }).then(unwrapList),

@@ -104,6 +104,7 @@ const routes = [
   { path: '/m4', redirect: '/m4/workbench' },
   { path: '/m4/daily-report', redirect: '/m4/reports/daily' },
   { path: '/m4/reports/daily', name: 'M4DailyReport', component: () => import('../pages/M4DailyReport.vue'), meta: { title: '每日监控日报', group: 'm4-main', icon: 'DataAnalysis' } },
+  { path: '/m4/reports/tiktok', name: 'M4TikTokReport', component: () => import('../pages/M4TikTokReport.vue'), meta: { title: 'TikTok 日报', group: 'm4-main', icon: 'VideoCamera' } },
   { path: '/m4/workbench', name: 'M4OpsWorkbench', component: () => import('../pages/M4OpsWorkbench.vue'), meta: { title: '运营风险工作台', group: 'm4-main', icon: 'WarningFilled' } },
   // M4 监控
   { path: '/monitor/anomalies', name: 'MonitorAnomalies', component: () => import('../pages/MonitorAnomalies.vue'), meta: { title: '异常列表', group: 'm4-monitor', icon: 'WarningFilled' } },
