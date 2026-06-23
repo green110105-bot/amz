@@ -5,7 +5,10 @@ import PageHeader from '../components/PageHeader.vue';
 import KpiCard from '../components/KpiCard.vue';
 import EmptyState from '../components/EmptyState.vue';
 import { tiktokDailyApi } from '../api/m4';
+import { useViewport } from '../composables/useViewport';
 import { formatCurrency, formatNumber } from '../utils/format';
+
+const { isMobile } = useViewport();
 
 const loading = ref(false);
 const data = ref(null);
@@ -135,12 +138,12 @@ onMounted(() => { range.value = defaultRange(); load(); });
       </el-col>
     </el-row>
 
-    <!-- 透视表: 行=日期, 列=各店铺(列头); 每店铺含销售额/销量两子列; 末尾合计列 -->
-    <el-card shadow="never" class="table-card" v-loading="loading">
-      <EmptyState v-if="!hasData && !loading" title="该区间无有效销售数据" description="所选时间区间内没有任何店铺产生销量/销售额。" icon="DataLine" />
-      <el-table v-else :data="rows" size="small" border>
+    <EmptyState v-if="!hasData && !loading" title="该区间无有效销售数据" description="所选时间区间内没有任何店铺产生销量/销售额。" icon="DataLine" />
+
+    <!-- 桌面: 透视表 (行=日期, 列=各店铺) -->
+    <el-card v-if="!isMobile && hasData" shadow="never" class="table-card" v-loading="loading">
+      <el-table :data="rows" size="small" border>
         <el-table-column prop="date" label="日期" fixed min-width="110" />
-        <!-- 每个店铺一个多级表头 -->
         <el-table-column v-for="col in storeColumns" :key="col.storeId" :label="col.storeName" align="center">
           <el-table-column :label="'销售额'" align="right" min-width="120">
             <template #default="{ row }">
@@ -153,7 +156,6 @@ onMounted(() => { range.value = defaultRange(); load(); });
             </template>
           </el-table-column>
         </el-table-column>
-        <!-- 当日合计 -->
         <el-table-column label="当日合计" align="center" class-name="total-col">
           <el-table-column label="销售额" align="right" min-width="120">
             <template #default="{ row }"><strong style="color:#0ea5e9">{{ money(row._totalRev) }}</strong></template>
@@ -164,6 +166,26 @@ onMounted(() => { range.value = defaultRange(); load(); });
         </el-table-column>
       </el-table>
     </el-card>
+
+    <!-- 移动: 逐日卡片 (每天一张, 内含各店铺) -->
+    <div v-else-if="isMobile && hasData" v-loading="loading" class="mobile-days">
+      <el-card v-for="day in days" :key="day.date" shadow="never" class="m-day-card" v-show="(day.stores || []).length > 0">
+        <div class="m-day-head">
+          <span class="m-day-date">📅 {{ day.date }}</span>
+          <span class="m-day-tot">
+            <strong style="color:#0ea5e9">{{ money(day.totalRevenue) }}</strong>
+            <span class="m-vol">{{ n(day.totalVolume) }} 件</span>
+          </span>
+        </div>
+        <div v-for="s in day.stores" :key="s.storeId" class="m-store-row">
+          <span class="m-store-name">{{ s.storeName }}</span>
+          <span class="m-store-val">
+            <strong style="color:#10b981">{{ money(s.revenue) }}</strong>
+            <span class="m-store-vol">{{ n(s.volume) }} 件<em v-if="s.sampleOrders"> · 剔{{ s.sampleOrders }}样</em></span>
+          </span>
+        </div>
+      </el-card>
+    </div>
   </div>
 </template>
 
@@ -174,4 +196,27 @@ onMounted(() => { range.value = defaultRange(); load(); });
 .table-card { border-radius: 10px; }
 :deep(.total-col) { background: #f0f9ff; }
 :deep(.el-table th.el-table__cell) { background: #f8fafc; }
+
+/* 移动逐日卡片 */
+.mobile-days { display: flex; flex-direction: column; gap: 10px; }
+.m-day-card { border-radius: 10px; }
+.m-day-card :deep(.el-card__body) { padding: 12px; }
+.m-day-head { display: flex; justify-content: space-between; align-items: baseline; padding-bottom: 8px; border-bottom: 1px solid #eef2f7; margin-bottom: 8px; }
+.m-day-date { font-weight: 600; font-size: 14px; }
+.m-day-tot { text-align: right; }
+.m-day-tot strong { font-size: 15px; }
+.m-vol { display: block; font-size: 11px; color: #94a3b8; }
+.m-store-row { display: flex; justify-content: space-between; align-items: baseline; padding: 6px 0; }
+.m-store-name { font-size: 13px; color: #334155; }
+.m-store-val { text-align: right; }
+.m-store-vol { display: block; font-size: 11px; color: #94a3b8; }
+.m-store-vol em { color: #f59e0b; font-style: normal; }
+
+/* 移动端: 顶部控件换行不挤 */
+@media (max-width: 767px) {
+  :deep(.page-header-extra), .tiktok-report :deep(.el-date-editor) { width: 100% !important; }
+  .tiktok-report :deep(.el-radio-group) { width: 100%; display: flex; }
+  .tiktok-report :deep(.el-radio-button) { flex: 1; }
+  .tiktok-report :deep(.el-radio-button__inner) { width: 100%; }
+}
 </style>

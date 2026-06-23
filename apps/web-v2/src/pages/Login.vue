@@ -12,7 +12,7 @@ const store = useLocalStore();
 const tab = ref('login');
 
 // === 登录 ===
-const loginForm = ref({ email: 'demo@amz.local', password: 'demo' });
+const loginForm = ref({ email: 'ssg', password: 'ssg123' });
 const loginLoading = ref(false);
 
 async function login() {
@@ -105,11 +105,11 @@ async function doReset() {
   }
 }
 
-function loginAs(role) {
-  loginForm.value.email = role === 'admin' ? 'admin@amz.local' : `${role}@amz.local`;
-  loginForm.value.password = 'demo';
-  // admin/operator/finance 用户首次需要通过注册创建；这里直接尝试登录失败则给提示
-  ElMessage.info('演示快捷：admin/operator/finance 默认未注册，请先去"注册"页创建');
+// 一键填充账号(并可直接登录)
+function fillAccount(email, password, autoLogin = true) {
+  loginForm.value.email = email;
+  loginForm.value.password = password;
+  if (autoLogin) login();
 }
 </script>
 
@@ -125,10 +125,10 @@ function loginAs(role) {
       <el-tabs v-model="tab" class="auth-tabs">
         <!-- ===== 登录 ===== -->
         <el-tab-pane label="登录" name="login">
-          <p class="subtitle">演示账号 demo@amz.local / demo</p>
+          <p class="subtitle">默认账号 ssg / ssg123（已自动填好，直接点登录）</p>
           <el-form @submit.prevent="login" label-position="top">
-            <el-form-item label="邮箱">
-              <el-input v-model="loginForm.email" :prefix-icon="'Message'" placeholder="email@example.com" size="large" />
+            <el-form-item label="账号">
+              <el-input v-model="loginForm.email" :prefix-icon="'User'" placeholder="账号或邮箱" size="large" />
             </el-form-item>
             <el-form-item label="密码">
               <el-input v-model="loginForm.password" type="password" :prefix-icon="'Lock'" placeholder="密码" size="large" show-password />
@@ -138,10 +138,9 @@ function loginAs(role) {
             </el-form-item>
           </el-form>
           <div class="quick-login">
-            <span class="text-muted">快速演示：</span>
-            <el-button size="small" link type="primary" @click="loginAs('admin')">管理员</el-button>
-            <el-button size="small" link type="primary" @click="loginAs('operator')">运营</el-button>
-            <el-button size="small" link type="primary" @click="loginAs('finance')">财务</el-button>
+            <span class="text-muted">一键登录：</span>
+            <el-button size="small" type="primary" plain @click="fillAccount('ssg', 'ssg123')">ssg</el-button>
+            <el-button size="small" type="primary" plain @click="fillAccount('zl', 'zl123')">zl</el-button>
           </div>
         </el-tab-pane>
 
