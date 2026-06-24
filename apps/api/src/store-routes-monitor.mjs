@@ -386,9 +386,11 @@ async function _impl(request) {
     const sidsParam = params.get('sids');
     const wantRefresh = params.get('refresh') === '1' || params.get('refresh') === 'true';
     const severity = params.get('severity') || undefined;
-    // 默认读本地快照(秒开); refresh=1 才实时拉领星。
+    const reqStart = params.get('startDate') || params.get('start') || undefined;
+    const reqEnd = params.get('endDate') || params.get('end') || undefined;
+    // 默认读本地快照(秒开, 按请求区间逐日聚合); refresh=1 才实时拉领星。
     const snap = wantRefresh ? null : await withSnapshot(db, ({ startDate, endDate }) =>
-      getAmazonRiskBoard(db, userId, storeId, { startDate, endDate, severity }));
+      getAmazonRiskBoard(db, userId, storeId, { startDate, endDate, severity }), { startDate: reqStart, endDate: reqEnd });
     const data = snap || await getAmazonRiskBoard(db, userId, storeId, {
       startDate: params.get('startDate') || params.get('start') || undefined,
       endDate: params.get('endDate') || params.get('end') || undefined,
@@ -403,8 +405,11 @@ async function _impl(request) {
   if (path === '/api/v1/store/m4/amazon/daily-report' && method === 'GET') {
     const wantRefresh = params.get('refresh') === '1' || params.get('refresh') === 'true';
     const dimension = params.get('dimension') || 'store';
+    const reqStart = params.get('startDate') || params.get('date') || undefined;
+    const reqEnd = params.get('endDate') || params.get('date') || undefined;
+    // 默认读快照(秒开, 按请求区间逐日聚合 — 单日就只算那天, 不再显示30天累计)。
     const snap = wantRefresh ? null : await withSnapshot(db, ({ startDate, endDate }) =>
-      buildAmazonDailyReport(db, userId, storeId, { sids: 'all', startDate, endDate, dimension, refresh: true }));
+      buildAmazonDailyReport(db, userId, storeId, { sids: 'all', startDate, endDate, dimension, refresh: true }), { startDate: reqStart, endDate: reqEnd });
     const data = snap || await buildAmazonDailyReport(db, userId, storeId, {
       sids: params.get('sids') || 'all',
       startDate: params.get('startDate') || params.get('date') || undefined,

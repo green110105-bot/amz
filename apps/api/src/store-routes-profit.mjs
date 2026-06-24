@@ -43,7 +43,7 @@ import {
   getInvLinkConfig, updateInvLinkConfig, listInvLinkEvents, executeInvLinkEvent,
 } from './data-store-profit.mjs';
 // Amazon 真实利润看板(领星基座) — 仅本模块新增, 不动他人路由
-import { getAmazonProfitDashboard } from './integrations/lingxing/amazon-profit.mjs';
+import { getAmazonProfitDashboard, resolveDateRange } from './integrations/lingxing/amazon-profit.mjs';
 import { withSnapshot } from './integrations/lingxing/amazon-store.mjs';
 
 function getDb() { return getDbInstance(); }
@@ -575,9 +575,12 @@ async function _impl(request) {
     if (thNum('highTacos') !== undefined) thresholds.highTacos = thNum('highTacos');
     const th = Object.keys(thresholds).length ? thresholds : undefined;
     const wantRefresh = params.get('refresh') === '1' || params.get('refresh') === 'true';
-    // 默认读本地快照(秒开, 快照为近30天口径); refresh=1 才实时拉领星。
+    const range = params.get('range') || '30d';
+    const dr = resolveDateRange(range);
+    // 默认读快照(秒开, 按所选 range 逐日聚合); refresh=1 才实时拉领星。
     const snap = wantRefresh ? null : await withSnapshot(db, () =>
-      getAmazonProfitDashboard(db, userId, storeId, { range: '30d', sid: null, thresholds: th }));
+      getAmazonProfitDashboard(db, userId, storeId, { range, sid: null, thresholds: th }),
+      { startDate: dr.startDate, endDate: dr.endDate });
     const data = snap || await getAmazonProfitDashboard(db, userId, storeId, {
       range: params.get('range') || '30d',
       sid: params.get('sid') || null,

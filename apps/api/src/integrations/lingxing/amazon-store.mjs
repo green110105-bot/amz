@@ -54,50 +54,72 @@ function saveStoreRows(db, { sid, storeName, currencyCode, startDate, endDate, r
   tx(rows);
 }
 
-// ---- 同步: 拉美国店近 N 天, 落库。被 cron / 启动时调用。----
+// ---- 同步: 拉美国店近 N 天, 【逐日】落库(每天 start=end=day 一份)。被 cron 调用。----
+// productPerformance 是"区间聚合"接口: 给单日即得该日真实值。逐日存才能让页面按任意区间正确聚合。
 export async function syncAmazonSnapshots(db, { days = 30 } = {}) {
   ensureAmazonSchema(db);
   const end = laToday();
-  const start = shiftDay(end, -(days - 1));
   const sellers = await fetchActiveAmazonSellers(); // 默认仅美国 status=1
   const syncedAt = new Date().toISOString();
-  let storesOk = 0;
+  const dayList = [];
+  for (let i = 0; i < days; i++) dayList.push(shiftDay(end, -i));
+  let cells = 0;
   const errors = [];
   for (const s of sellers) {
-    try {
-      // 存原始 API 行(不 map), 供 fetchProductPerformance 快照模式透明返回, 三模块逻辑零改动。
-      const raw = await fetchProductPerformance({ sid: s.sid, startDate: start, endDate: end, summaryField: 'asin' });
-      saveStoreRows(db, { sid: s.sid, storeName: s.name, currencyCode: s.currencyCode, startDate: start, endDate: end, rows: raw, syncedAt });
-      storesOk += 1;
-    } catch (err) {
-      errors.push({ sid: s.sid, error: String(err.message || err) });
+    for (const day of dayList) {
+      try {
+        const raw = await fetchProductPerformance({ sid: s.sid, startDate: day, endDate: day, summaryField: 'asin' });
+        saveStoreRows(db, { sid: s.sid, storeName: s.name, currencyCode: s.currencyCode, startDate: day, endDate: day, rows: raw, syncedAt });
+        cells += 1;
+      } catch (err) {
+        errors.push({ sid: s.sid, day, error: String(err.message || err) });
+      }
     }
   }
+  // 清理超出窗口的旧逐日数据(只保留最近 days+7 天)
+  const cutoff = shiftDay(end, -(days + 7));
+  db.prepare(`DELETE FROM amazon_perf_snapshot WHERE end_date < ?`).run(cutoff);
   setMeta(db, 'last_sync_at', syncedAt);
-  setMeta(db, 'last_sync_range', `${start}~${end}`);
-  setMeta(db, 'last_sync_stores', `${storesOk}/${sellers.length}`);
-  return { syncedAt, startDate: start, endDate: end, storesOk, sellerCount: sellers.length, errors };
+  setMeta(db, 'last_sync_range', `${dayList[dayList.length - 1]}~${end}`);
+  setMeta(db, 'last_sync_cells', `${cells}/${sellers.length * days}`);
+  return { syncedAt, startDate: dayList[dayList.length - 1], endDate: end, days, cells, sellerCount: sellers.length, errors };
 }
 
-// ---- 读: 取最新同步快照的原始 API 行, 按 sid 分组(供 fetchProductPerformance 快照模式)。----
-// 同步存的是近30天大区间; 取最新一份快照区间的全部行。
-export function readLatestSnapshot(db) {
-  ensureAmazonSchema(db);
-  const range = db.prepare(`SELECT start_date, end_date FROM amazon_perf_snapshot ORDER BY synced_at DESC LIMIT 1`).get();
-  if (!range) return null;
-  const dbRows = db.prepare(`SELECT sid, payload, synced_at FROM amazon_perf_snapshot
-    WHERE start_date=? AND end_date=?`).all(range.start_date, range.end_date);
-  const bySid = {};
-  for (const r of dbRows) {
-    const row = JSON.parse(r.payload);
-    (bySid[r.sid] = bySid[r.sid] || []).push(row);
+// 数值字段(逐日相加得区间总值)。其余字段(评分/排名/库存/标题等)取区间内最新一天的值。
+const SUM_FIELDS = ['volume', 'amount', 'net_amount', 'order_items', 'b2b_volume', 'spend',
+  'ad_sales_amount', 'gross_profit', 'sessions', 'sessions_total', 'page_views', 'page_views_total',
+  'return_count', 'ad_order_quantity', 'ad_direct_order_quantity', 'impressions', 'clicks'];
+
+// 把某店在 [startDate..endDate] 的逐日行, 按 ASIN 聚合成"区间总值"行(数值相加, 快照模式透明返回)。
+function aggregateRangeRowsForStore(db, sid, startDate, endDate) {
+  const dayRows = db.prepare(`SELECT start_date, payload FROM amazon_perf_snapshot
+    WHERE sid=? AND start_date>=? AND end_date<=? ORDER BY start_date ASC`).all(sid, startDate, endDate);
+  const byAsin = new Map(); // asin -> 合并行
+  for (const r of dayRows) {
+    let row; try { row = JSON.parse(r.payload); } catch { continue; }
+    const asin = row?.asins?.[0]?.asin || row?.asin || `__row`;
+    if (!byAsin.has(asin)) {
+      byAsin.set(asin, JSON.parse(JSON.stringify(row))); // 以首日为底(保留非数值字段)
+      // 数值字段清零后重加, 避免首日值被算两次
+      const base = byAsin.get(asin);
+      for (const f of SUM_FIELDS) if (f in base) base[f] = 0;
+    }
+    const acc = byAsin.get(asin);
+    for (const f of SUM_FIELDS) if (f in row || f in acc) acc[f] = (Number(acc[f]) || 0) + (Number(row[f]) || 0);
+    // 非数值快照字段(评分/排名/库存)用最新一天覆盖(dayRows 已按日期升序, 最后覆盖=最新)
+    for (const f of ['avg_star', 'cate_rank', 'small_cate_rank', 'available_inventory', 'available_days', 'reviews_count', 'currency_code', 'item_name']) {
+      if (row[f] != null) acc[f] = row[f];
+    }
   }
-  return {
-    startDate: range.start_date,
-    endDate: range.end_date,
-    bySid,
-    syncedAt: dbRows[0]?.synced_at || getLastSyncAt(db),
-  };
+  return [...byAsin.values()];
+}
+
+// 取最新同步日(用于判断有无快照 + 新鲜度)
+export function readLatestSnapshotMeta(db) {
+  ensureAmazonSchema(db);
+  const any = db.prepare(`SELECT MAX(end_date) AS maxd, MAX(synced_at) AS s FROM amazon_perf_snapshot`).get();
+  if (!any || !any.maxd) return null;
+  return { latestDay: any.maxd, syncedAt: any.s };
 }
 
 export function hasSnapshot(db) {
@@ -107,19 +129,26 @@ export function hasSnapshot(db) {
 
 import { setSnapshotServer, clearSnapshotServer } from './amazon.mjs';
 
-// 用最新快照"喂"一个看板 builder(秒开, 不打领星)。builder 收到的 startDate/endDate 被强制为快照区间,
-// 这样区间口径一致。fn(range) 返回 dashboard 对象, 自动附上 fromSnapshot/syncedAt。
-// 无快照 -> 返回 null(调用方回退实时拉取)。
-export async function withSnapshot(db, fn) {
-  const snap = readLatestSnapshot(db);
-  if (!snap) return null;
-  setSnapshotServer(snap.bySid);
+// 从逐日快照按【请求区间】聚合喂 builder(秒开, 不打领星)。
+// requested = {startDate, endDate}: 页面真正想看的区间; 缺省=最新可用日单日。
+// fn 收到的就是请求区间, 快照服务返回该区间内逐日相加的总值行 — 单日/7天/30天都正确。
+export async function withSnapshot(db, fn, requested = {}) {
+  const meta = readLatestSnapshotMeta(db);
+  if (!meta) return null;
+  const endDate = requested.endDate || meta.latestDay;
+  const startDate = requested.startDate || endDate; // 缺省 = 单日(最新)
+  // 为每个有快照的 sid 预计算区间聚合行
+  const sids = db.prepare(`SELECT DISTINCT sid FROM amazon_perf_snapshot WHERE start_date>=? AND end_date<=?`).all(startDate, endDate).map((r) => r.sid);
+  const bySid = {};
+  for (const sid of sids) bySid[sid] = aggregateRangeRowsForStore(db, sid, startDate, endDate);
+  if (sids.length === 0) return null; // 该区间无快照, 回退实时
+  setSnapshotServer(bySid);
   try {
-    const data = await fn({ startDate: snap.startDate, endDate: snap.endDate });
+    const data = await fn({ startDate, endDate });
     if (data && typeof data === 'object') {
       data.fromSnapshot = true;
-      data.snapshotSyncedAt = snap.syncedAt;
-      data.snapshotRange = { startDate: snap.startDate, endDate: snap.endDate };
+      data.snapshotSyncedAt = meta.syncedAt;
+      data.snapshotRange = { startDate, endDate };
     }
     return data;
   } finally {

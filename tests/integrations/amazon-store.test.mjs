@@ -1,4 +1,4 @@
-// Amazon 快照落库 + 快照服务模式测试(无需领星, 纯本地 DB)。
+// Amazon 逐日快照落库 + 按区间聚合服务测试(无需领星, 纯本地 DB)。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
@@ -12,69 +12,67 @@ const db = new Database(dbPath);
 const store = await import('../../apps/api/src/integrations/lingxing/amazon-store.mjs');
 const base = await import('../../apps/api/src/integrations/lingxing/amazon.mjs');
 
-test('ensureAmazonSchema 建表 + hasSnapshot 初始为空', () => {
+// 直接插逐日行(模拟同步): C店 sid=13056 三天, B001 每天不同 volume/amount
+function seedDay(sid, day, asin, volume, amount) {
+  store.ensureAmazonSchema(db);
+  const now = new Date().toISOString();
+  const payload = JSON.stringify({ asins: [{ asin }], volume, amount: String(amount), spend: '0', avg_star: 4.2, item_name: 'X' });
+  db.prepare(`INSERT OR REPLACE INTO amazon_perf_snapshot(sid,store_name,currency_code,start_date,end_date,asin,payload,synced_at)
+    VALUES (?,?,?,?,?,?,?,?)`).run(sid, 'C店-US', 'USD', day, day, asin, payload, now);
+}
+
+test('逐日落库 + hasSnapshot', () => {
   store.ensureAmazonSchema(db);
   assert.equal(store.hasSnapshot(db), false);
-  assert.equal(store.getLastSyncAt(db), null);
-});
-
-test('saveStoreRows 落库原始行 + readLatestSnapshot 按 sid 分组', () => {
-  store.ensureAmazonSchema(db);
-  // 模拟领星原始 API 行(asins[0].asin)
-  const rawRows = [
-    { asins: [{ asin: 'B001' }], volume: 10, amount: '100.00' },
-    { asins: [{ asin: 'B002' }], volume: 5, amount: '50.00' },
-  ];
-  // 直接调内部 save 经 syncAmazonSnapshots 不便(要领星); 用 DB upsert via ensure + 手工插
-  const up = db.prepare(`INSERT INTO amazon_perf_snapshot(sid,store_name,currency_code,start_date,end_date,asin,payload,synced_at) VALUES (?,?,?,?,?,?,?,?)`);
-  const now = new Date().toISOString();
-  up.run('17512', 'F店-US', 'USD', '2026-05-25', '2026-06-23', 'B001', JSON.stringify(rawRows[0]), now);
-  up.run('17512', 'F店-US', 'USD', '2026-05-25', '2026-06-23', 'B002', JSON.stringify(rawRows[1]), now);
-  up.run('13056', 'C店-US', 'USD', '2026-05-25', '2026-06-23', 'B003', JSON.stringify({ asins: [{ asin: 'B003' }], volume: 3, amount: '30.00' }), now);
-
+  seedDay('13056', '2026-06-22', 'B001', 107, 15888.90);
+  seedDay('13056', '2026-06-23', 'B001', 254, 38673.11);
+  seedDay('13056', '2026-06-24', 'B001', 79, 11916.49);
   assert.equal(store.hasSnapshot(db), true);
-  const snap = store.readLatestSnapshot(db);
-  assert.equal(snap.startDate, '2026-05-25');
-  assert.equal(snap.endDate, '2026-06-23');
-  assert.equal(snap.bySid['17512'].length, 2);
-  assert.equal(snap.bySid['13056'].length, 1);
-  assert.equal(snap.bySid['17512'][0].asins[0].asin, 'B001');
+  const meta = store.readLatestSnapshotMeta(db);
+  assert.equal(meta.latestDay, '2026-06-24');
 });
 
-test('快照服务模式: setSnapshotServer 后 fetchProductPerformance 返回快照行不打网络', async () => {
-  const snap = store.readLatestSnapshot(db);
-  base.setSnapshotServer(snap.bySid);
-  try {
-    const rows = await base.fetchProductPerformance({ sid: '17512', startDate: 'x', endDate: 'y' });
-    assert.equal(rows.length, 2);
-    assert.equal(rows[0].asins[0].asin, 'B001');
-    // 未知 sid 返回空数组(不报错)
-    const none = await base.fetchProductPerformance({ sid: '99999', startDate: 'x', endDate: 'y' });
-    assert.deepEqual(none, []);
-  } finally {
-    base.clearSnapshotServer();
-  }
-  assert.equal(base.isSnapshotServing(), false);
-});
-
-test('withSnapshot: 喂 builder + 自动附 fromSnapshot/syncedAt', async () => {
+test('withSnapshot 单日: 只算那一天(不再30天累计)', async () => {
+  let served;
   const out = await store.withSnapshot(db, async ({ startDate, endDate }) => {
-    // builder 收到快照区间
-    assert.equal(startDate, '2026-05-25');
-    assert.equal(endDate, '2026-06-23');
-    // builder 内部可调 fetchProductPerformance 拿快照行
-    const rows = await base.fetchProductPerformance({ sid: '13056' });
-    return { ok: true, rowCount: rows.length };
-  });
-  assert.equal(out.ok, true);
-  assert.equal(out.rowCount, 1);
+    assert.equal(startDate, '2026-06-24');
+    assert.equal(endDate, '2026-06-24');
+    served = await base.fetchProductPerformance({ sid: '13056' });
+    return { ok: true };
+  }, { startDate: '2026-06-24', endDate: '2026-06-24' });
+  // 单日 06-24: volume=79(不是 107+254+79=440)
+  assert.equal(served.length, 1);
+  assert.equal(served[0].volume, 79);
   assert.equal(out.fromSnapshot, true);
-  assert.ok(out.snapshotSyncedAt);
-  assert.deepEqual(out.snapshotRange, { startDate: '2026-05-25', endDate: '2026-06-23' });
+  assert.deepEqual(out.snapshotRange, { startDate: '2026-06-24', endDate: '2026-06-24' });
 });
 
-test('withSnapshot 无快照返回 null(调用方回退实时)', async () => {
+test('withSnapshot 区间: 逐日相加得区间总值', async () => {
+  let served;
+  await store.withSnapshot(db, async () => { served = await base.fetchProductPerformance({ sid: '13056' }); return {}; },
+    { startDate: '2026-06-22', endDate: '2026-06-24' });
+  // 3天合计 volume = 107+254+79 = 440; amount = 15888.90+38673.11+11916.49 = 66478.50
+  assert.equal(served.length, 1);
+  assert.equal(served[0].volume, 440);
+  assert.equal(Math.round(Number(served[0].amount) * 100) / 100, 66478.50);
+  // 非数值字段(评分)取最新一天的值
+  assert.equal(served[0].avg_star, 4.2);
+});
+
+test('withSnapshot 缺省区间 = 最新单日', async () => {
+  let served;
+  const out = await store.withSnapshot(db, async () => { served = await base.fetchProductPerformance({ sid: '13056' }); return {}; });
+  // 缺省 -> 最新日 06-24 单日
+  assert.equal(out.snapshotRange.endDate, '2026-06-24');
+  assert.equal(served[0].volume, 79);
+});
+
+test('withSnapshot 无快照返回 null', async () => {
   const empty = new Database(join(mkdtempSync(join(tmpdir(), 'amz-empty-')), 'e.db'));
-  const out = await store.withSnapshot(empty, async () => ({ ok: true }));
+  const out = await store.withSnapshot(empty, async () => ({ ok: true }), { startDate: '2026-06-24', endDate: '2026-06-24' });
   assert.equal(out, null);
+});
+
+test('快照服务后清理: isSnapshotServing=false', () => {
+  assert.equal(base.isSnapshotServing(), false);
 });
