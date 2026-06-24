@@ -9,6 +9,7 @@ import { getTikTokDashboard, getTikTokRangeDashboard } from './integrations/ling
 import { getTikTokRealSalesDashboard } from './integrations/lingxing/tiktok-orders.mjs';
 import { getAmazonRiskBoard } from './integrations/lingxing/amazon-risk.mjs';
 import { buildAmazonDailyReport } from './integrations/lingxing/amazon-daily.mjs';
+import { withSnapshot } from './integrations/lingxing/amazon-store.mjs';
 
 // X-P0-04 / M4-P0-05: the server alone decides whether a real store write is requested
 // for an M4 -> Ads linked action. When real writes are not enabled the flag is hard-
@@ -383,24 +384,33 @@ async function _impl(request) {
   // 无凭证/拉取失败时返回 200 + source.mock=true + 空看板(诚实降级, 不抛 500)。只读, 无 audit 副作用。
   if (path === '/api/v1/store/m4/amazon/risk-board' && method === 'GET') {
     const sidsParam = params.get('sids');
-    const data = await getAmazonRiskBoard(db, userId, storeId, {
+    const wantRefresh = params.get('refresh') === '1' || params.get('refresh') === 'true';
+    const severity = params.get('severity') || undefined;
+    // 默认读本地快照(秒开); refresh=1 才实时拉领星。
+    const snap = wantRefresh ? null : await withSnapshot(db, ({ startDate, endDate }) =>
+      getAmazonRiskBoard(db, userId, storeId, { startDate, endDate, severity }));
+    const data = snap || await getAmazonRiskBoard(db, userId, storeId, {
       startDate: params.get('startDate') || params.get('start') || undefined,
       endDate: params.get('endDate') || params.get('end') || undefined,
       sids: sidsParam ? sidsParam.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
-      severity: params.get('severity') || undefined,
+      severity,
     });
     return json(data);
   }
 
-  // Amazon 每日监控日报 — 领星 productPerformance 真实拉取 -> 多店逐日/区间 KPI + 环比 + 排行 + 风险。
+  // Amazon 每日监控日报 — 默认读本地快照(秒开), refresh=1 实时拉领星。
   // 只读, 无 audit 副作用。无凭证/失败时返回 200 + configured:false + sourceMeta.mock:true(诚实降级)。
   if (path === '/api/v1/store/m4/amazon/daily-report' && method === 'GET') {
-    const data = await buildAmazonDailyReport(db, userId, storeId, {
+    const wantRefresh = params.get('refresh') === '1' || params.get('refresh') === 'true';
+    const dimension = params.get('dimension') || 'store';
+    const snap = wantRefresh ? null : await withSnapshot(db, ({ startDate, endDate }) =>
+      buildAmazonDailyReport(db, userId, storeId, { sids: 'all', startDate, endDate, dimension, refresh: true }));
+    const data = snap || await buildAmazonDailyReport(db, userId, storeId, {
       sids: params.get('sids') || 'all',
       startDate: params.get('startDate') || params.get('date') || undefined,
       endDate: params.get('endDate') || params.get('date') || undefined,
-      dimension: params.get('dimension') || 'store',
-      refresh: params.get('refresh') === '1' || params.get('refresh') === 'true',
+      dimension,
+      refresh: true,
     });
     return json(data);
   }

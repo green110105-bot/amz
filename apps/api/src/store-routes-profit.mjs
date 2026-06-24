@@ -44,6 +44,7 @@ import {
 } from './data-store-profit.mjs';
 // Amazon 真实利润看板(领星基座) — 仅本模块新增, 不动他人路由
 import { getAmazonProfitDashboard } from './integrations/lingxing/amazon-profit.mjs';
+import { withSnapshot } from './integrations/lingxing/amazon-store.mjs';
 
 function getDb() { return getDbInstance(); }
 
@@ -572,10 +573,15 @@ async function _impl(request) {
     const thresholds = {};
     if (thNum('lossMargin') !== undefined) thresholds.lossMargin = thNum('lossMargin');
     if (thNum('highTacos') !== undefined) thresholds.highTacos = thNum('highTacos');
-    const data = await getAmazonProfitDashboard(db, userId, storeId, {
+    const th = Object.keys(thresholds).length ? thresholds : undefined;
+    const wantRefresh = params.get('refresh') === '1' || params.get('refresh') === 'true';
+    // 默认读本地快照(秒开, 快照为近30天口径); refresh=1 才实时拉领星。
+    const snap = wantRefresh ? null : await withSnapshot(db, () =>
+      getAmazonProfitDashboard(db, userId, storeId, { range: '30d', sid: null, thresholds: th }));
+    const data = snap || await getAmazonProfitDashboard(db, userId, storeId, {
       range: params.get('range') || '30d',
       sid: params.get('sid') || null,
-      thresholds: Object.keys(thresholds).length ? thresholds : undefined,
+      thresholds: th,
     });
     return json(data);
   }

@@ -65,8 +65,17 @@ export async function fetchActiveAmazonSellers({ includeAll = false, usOnly = tr
   return list;
 }
 
+// 快照服务模式: 设置后, fetchProductPerformance 直接返回本地快照行, 不打领星接口(页面秒开)。
+// 由路由层在调用三模块前 setSnapshotServer(rowsBySid), 调用后 clearSnapshotServer()。
+let _snapshotBySid = null;
+export function setSnapshotServer(bySid) { _snapshotBySid = bySid || null; }
+export function clearSnapshotServer() { _snapshotBySid = null; }
+export function isSnapshotServing() { return _snapshotBySid != null; }
+
 // 拉单店 productPerformance(区间, asin 维度, 分页全量) -> 原始行数组
 export async function fetchProductPerformance({ sid, startDate, endDate, summaryField = 'asin' }) {
+  // 快照模式: 直接返回该 sid 的快照行(区间由快照决定, 模块照常 mapPerformanceRow)。
+  if (_snapshotBySid) return _snapshotBySid[String(sid)] || [];
   const rows = [];
   let offset = 0;
   for (let guard = 0; guard < 100; guard++) {
