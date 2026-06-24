@@ -14,6 +14,7 @@ import {
   imageDiffsApi,
   resolutionApi,
   postmortemsApi,
+  amazonRiskApi,
 } from '../api/m4';
 
 const loading = ref(false);
@@ -22,6 +23,68 @@ const activeLane = ref('inbox');
 const sourceFilter = ref('all');
 const selected = ref(null);
 const drawerOpen = ref(false);
+
+// ===== Amazon 真实风险看板 (领星 productPerformance) =====
+const amzLoading = ref(false);
+const amzError = ref('');
+const amzRiskFilter = ref('all');
+const amzSelected = ref(null);
+const amzDrawerOpen = ref(false);
+const amzBoard = ref(null);
+
+const RISK_TYPE_LABELS = {
+  acos_high: 'ACOS 过高',
+  ad_overspend: '广告超支',
+  rating_low: '评分过低',
+  return_high: '退货率高',
+  stockout_risk: '断货风险',
+  sales_drop: '销量骤降',
+};
+
+function fmtMetric(metric) {
+  if (!metric) return '-';
+  const v = num(metric.value);
+  const th = metric.threshold;
+  if (metric.unit === 'ratio') return `${(v * 100).toFixed(1)}% (阈值 ${(num(th) * 100).toFixed(0)}%)`;
+  if (metric.unit === 'star') return `${v.toFixed(2)}★ (阈值 ${th}★)`;
+  if (metric.unit === 'days') return `${v.toFixed(0)} 天 (阈值 ${th} 天)`;
+  return `${money(v)} (阈值 ${money(th)})`;
+}
+
+async function loadAmazonRisk() {
+  amzLoading.value = true;
+  amzError.value = '';
+  try {
+    // 拉全量, 风险类型筛选在前端完成(severity=all 让后端返回完整看板)。
+    amzBoard.value = await amazonRiskApi.board({ severity: 'all' });
+  } catch (e) {
+    amzError.value = e?.message || String(e);
+    amzBoard.value = null;
+  } finally {
+    amzLoading.value = false;
+  }
+}
+
+const amzKpis = computed(() => {
+  const k = amzBoard.value?.kpi || {};
+  return [
+    { label: '真实风险总数', value: num(k.totalRisks), hint: `P0 ${num(k.p0)} / P1 ${num(k.p1)}`, status: num(k.p0) ? 'danger' : (num(k.totalRisks) ? 'warning' : 'success') },
+    { label: '广告超支 ASIN', value: num(k.adOverspendCount), hint: `合计花费 ${money(k.adSpendTotal)}`, status: num(k.adOverspendCount) ? 'warning' : 'success' },
+    { label: '断货风险 ASIN', value: num(k.stockoutCount), hint: k.minAvailableDays != null ? `最紧急 ${num(k.minAvailableDays)} 天` : '无', status: num(k.stockoutCount) ? 'danger' : 'success' },
+    { label: '受影响销售额', value: money(k.impactedAmount), hint: k.currencyMixed ? '多币种合计(仅参考)' : 'P0+P1 ASIN 合计', status: num(k.impactedAmount) ? 'warning' : 'success' },
+  ];
+});
+
+const amzFilteredRisks = computed(() => {
+  const list = amzBoard.value?.risks || [];
+  if (amzRiskFilter.value === 'all') return list;
+  return list.filter((r) => r.riskType === amzRiskFilter.value);
+});
+
+function openAmzRisk(row) {
+  amzSelected.value = row;
+  amzDrawerOpen.value = true;
+}
 
 const state = ref({
   anomalies: [],
@@ -147,7 +210,7 @@ async function load() {
   }
 }
 
-onMounted(load);
+onMounted(() => { load(); loadAmazonRisk(); });
 
 const riskCards = computed(() => {
   const cards = [];
@@ -402,6 +465,141 @@ function openCard(card) {
           </router-link>
         </div>
       </el-tab-pane>
+
+      <el-tab-pane label="Amazon 真实风险" name="amazon">
+        <div v-loading="amzLoading">
+          <!-- (B) 数据来源水印条: 诚实标注 真实/示例 -->
+          <el-alert
+            :type="amzBoard?.source?.mock ? 'warning' : 'success'"
+            show-icon
+            :closable="false"
+            class="mt-16"
+          >
+            <template #title>
+              <span v-if="amzBoard?.source?.mock">
+                示例数据 (mock:true) · {{ amzBoard?.source?.reason || '领星未配置/拉取失败' }} — 凭证到位即自动切换真实拉取
+              </span>
+              <span v-else>
+                真实数据 (mock:false) · 数据源 领星 productPerformance · 区间
+                {{ amzBoard?.period?.startDate }} ~ {{ amzBoard?.period?.endDate }} ·
+                {{ num(amzBoard?.source?.storeCount) }} 店 {{ num(amzBoard?.source?.asinCount) }} ASIN
+              </span>
+            </template>
+            <template #default>
+              <small>{{ amzBoard?.source?.disclaimer }}</small>
+              <small v-if="amzBoard?.generatedAt"> · 生成于 {{ new Date(amzBoard.generatedAt).toLocaleString() }}</small>
+            </template>
+          </el-alert>
+
+          <el-alert
+            v-if="amzError"
+            type="error"
+            show-icon
+            :closable="false"
+            title="Amazon 风险看板加载失败"
+            :description="amzError"
+            class="mt-16"
+          />
+
+          <!-- (A) KPI 行 -->
+          <div class="kpi-grid">
+            <div v-for="item in amzKpis" :key="item.label" class="kpi" :class="`is-${item.status}`">
+              <span>{{ item.label }}</span>
+              <strong>{{ item.value }}</strong>
+              <small>{{ item.hint }}</small>
+            </div>
+          </div>
+
+          <!-- 结论摘要 -->
+          <p v-if="amzBoard?.summary" class="amz-summary">{{ amzBoard.summary }}</p>
+
+          <el-card shadow="never" class="panel mt-16">
+            <template #header>
+              <div class="panel-head">
+                <div>
+                  <h3>风险明细 (真实字段证据)</h3>
+                  <p>点击行查看该 ASIN 全部真实指标 JSON。排名/评分为当期快照, 无历史趋势。</p>
+                </div>
+                <!-- (C) 风险类型筛选 -->
+                <el-radio-group v-model="amzRiskFilter" size="small">
+                  <el-radio-button value="all">全部</el-radio-button>
+                  <el-radio-button value="ad_overspend">广告超支</el-radio-button>
+                  <el-radio-button value="acos_high">ACOS高</el-radio-button>
+                  <el-radio-button value="rating_low">评分低</el-radio-button>
+                  <el-radio-button value="return_high">退货高</el-radio-button>
+                  <el-radio-button value="stockout_risk">断货</el-radio-button>
+                  <el-radio-button value="sales_drop">销量骤降</el-radio-button>
+                </el-radio-group>
+              </div>
+            </template>
+
+            <!-- (D) 风险明细表 -->
+            <el-table v-if="amzFilteredRisks.length" :data="amzFilteredRisks" size="small" @row-click="openAmzRisk" class="amz-table">
+              <el-table-column label="严重度" width="80">
+                <template #default="{ row }"><el-tag :type="severityType(row.severity)" size="small">{{ row.severity }}</el-tag></template>
+              </el-table-column>
+              <el-table-column label="店铺" prop="storeName" min-width="120" show-overflow-tooltip />
+              <el-table-column label="ASIN" prop="asin" width="120" />
+              <el-table-column label="标题" prop="itemName" min-width="160" show-overflow-tooltip />
+              <el-table-column label="风险类型" width="110">
+                <template #default="{ row }">{{ RISK_TYPE_LABELS[row.riskType] || row.riskType }}</template>
+              </el-table-column>
+              <el-table-column label="关键指标(对比阈值)" min-width="180">
+                <template #default="{ row }">{{ fmtMetric(row.metric) }}</template>
+              </el-table-column>
+              <el-table-column label="影响销售额" width="120">
+                <template #default="{ row }">{{ money(row.impact?.impactedAmount) }}</template>
+              </el-table-column>
+              <el-table-column label="预估损失" width="110">
+                <template #default="{ row }">{{ money(row.impact?.estimatedLoss) }}</template>
+              </el-table-column>
+              <el-table-column label="操作" width="90">
+                <template #default><el-button link type="primary" size="small">查看证据</el-button></template>
+              </el-table-column>
+            </el-table>
+            <EmptyState
+              v-else
+              :title="amzBoard?.source?.mock ? '暂无真实风险数据' : '区间内未发现触发阈值的风险'"
+              :description="amzBoard?.source?.mock ? '领星凭证未配置或拉取失败时无真实风险可展示。' : '当前区间所有 ASIN 指标均在阈值内。'"
+              icon="CircleCheck"
+            />
+          </el-card>
+
+          <!-- (E) 三个排行小卡 -->
+          <div class="rank-grid mt-16">
+            <el-card shadow="never" class="panel">
+              <template #header><strong>广告烧钱榜 Top5</strong></template>
+              <ol class="rank-list">
+                <li v-for="r in (amzBoard?.rankings?.adBurn || [])" :key="r.asin">
+                  <span>{{ r.asin }} · {{ r.storeName }}</span>
+                  <em>{{ money(r.adSpend) }} · ACOS {{ (num(r.acos) * 100).toFixed(0) }}%</em>
+                </li>
+                <li v-if="!(amzBoard?.rankings?.adBurn || []).length" class="empty">无</li>
+              </ol>
+            </el-card>
+            <el-card shadow="never" class="panel">
+              <template #header><strong>断货倒计时榜 Top5</strong></template>
+              <ol class="rank-list">
+                <li v-for="r in (amzBoard?.rankings?.stockout || [])" :key="r.asin">
+                  <span>{{ r.asin }} · {{ r.storeName }}</span>
+                  <em>{{ num(r.availableDays).toFixed(0) }} 天 · 库存 {{ num(r.availableInventory) }}</em>
+                </li>
+                <li v-if="!(amzBoard?.rankings?.stockout || []).length" class="empty">无</li>
+              </ol>
+            </el-card>
+            <el-card shadow="never" class="panel">
+              <template #header><strong>店铺风险计分榜 Top5</strong></template>
+              <ol class="rank-list">
+                <li v-for="r in (amzBoard?.rankings?.storeScore || [])" :key="r.sid">
+                  <span>{{ r.storeName }}</span>
+                  <em>计分 {{ r.score }} · P0 {{ r.p0 }} / P1 {{ r.p1 }}</em>
+                </li>
+                <li v-if="!(amzBoard?.rankings?.storeScore || []).length" class="empty">无</li>
+              </ol>
+            </el-card>
+          </div>
+        </div>
+      </el-tab-pane>
     </el-tabs>
 
     <el-drawer v-model="drawerOpen" size="440px" title="M4 风险证据">
@@ -419,6 +617,23 @@ function openCard(card) {
         </dl>
         <pre>{{ JSON.stringify(selected.evidence, null, 2) }}</pre>
         <router-link :to="selected.route"><el-button type="primary" style="width: 100%">进入原深水页面</el-button></router-link>
+      </div>
+    </el-drawer>
+
+    <el-drawer v-model="amzDrawerOpen" size="460px" title="Amazon 风险证据 (真实字段)">
+      <div v-if="amzSelected" class="drawer-body">
+        <el-tag :type="severityType(amzSelected.severity)">{{ amzSelected.severity }}</el-tag>
+        <h2>{{ RISK_TYPE_LABELS[amzSelected.riskType] || amzSelected.riskType }}</h2>
+        <dl>
+          <dt>店铺</dt><dd>{{ amzSelected.storeName }}</dd>
+          <dt>ASIN</dt><dd>{{ amzSelected.asin }}</dd>
+          <dt>标题</dt><dd>{{ amzSelected.itemName || '-' }}</dd>
+          <dt>关键指标</dt><dd>{{ fmtMetric(amzSelected.metric) }}</dd>
+          <dt>影响销售额</dt><dd>{{ money(amzSelected.impact?.impactedAmount) }}</dd>
+          <dt>预估损失</dt><dd>{{ money(amzSelected.impact?.estimatedLoss) }} ({{ amzSelected.impact?.basis }})</dd>
+          <dt>币种</dt><dd>{{ amzSelected.currencyCode }}</dd>
+        </dl>
+        <pre>{{ JSON.stringify(amzSelected, null, 2) }}</pre>
       </div>
     </el-drawer>
   </div>
@@ -477,12 +692,21 @@ function openCard(card) {
 .drawer-body dt { color: var(--text-muted); }
 .drawer-body dd { margin: 0; font-weight: 600; }
 .drawer-body pre { max-height: 260px; overflow: auto; padding: 12px; background: #111827; color: #ffe8d8; border-radius: 12px; font-size: 12px; }
+.amz-summary { margin: 14px 0 0; padding: 12px 16px; border-radius: 14px; background: #fff8f1; border: 1px solid #e2d6ca; color: #5c514b; font-weight: 600; }
+.amz-table { cursor: pointer; }
+.rank-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.rank-list { margin: 0; padding: 0; list-style: none; }
+.rank-list li { display: flex; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px dashed var(--line); font-size: 13px; }
+.rank-list li:last-child { border-bottom: none; }
+.rank-list li span { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rank-list li em { color: #b35b32; font-style: normal; font-weight: 700; white-space: nowrap; }
+.rank-list li.empty { color: var(--text-muted); justify-content: center; }
 @media (max-width: 960px) {
   .hero { grid-template-columns: 1fr; }
-  .kpi-grid, .risk-list, .block-grid { grid-template-columns: repeat(2, 1fr); }
+  .kpi-grid, .risk-list, .block-grid, .rank-grid { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 640px) {
-  .kpi-grid, .risk-list, .block-grid { grid-template-columns: 1fr; }
+  .kpi-grid, .risk-list, .block-grid, .rank-grid { grid-template-columns: 1fr; }
   .panel-head { align-items: flex-start; flex-direction: column; }
 }
 </style>

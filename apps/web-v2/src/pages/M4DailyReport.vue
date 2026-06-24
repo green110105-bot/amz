@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue';
 import PageHeader from '../components/PageHeader.vue';
 import EmptyState from '../components/EmptyState.vue';
 import { useLocalStore } from '../composables/useLocalStore';
-import { dailyReportsApi } from '../api/m4';
+import { dailyReportsApi, amazonDailyApi } from '../api/m4';
 import { formatCurrency, formatNumber } from '../utils/format';
 
 const localStore = useLocalStore();
@@ -128,7 +128,47 @@ watch(selectedStoreId, () => {
   selectedLinkId.value = 'all';
 });
 
-onMounted(load);
+// ===== Amazon 真实数据区 (领星 productPerformance) =====
+const azLoading = ref(false);
+const azError = ref('');
+const azReport = ref(null);
+const azDimension = ref('store');
+
+const azConfigured = computed(() => azReport.value?.configured === true);
+const azRealDataOnly = computed(() => azReport.value?.filters?.realDataOnly === true);
+const azSummary = computed(() => azReport.value?.summary || {});
+const azDelta = computed(() => azReport.value?.summary?.delta || {});
+const azStores = computed(() => azReport.value?.stores || []);
+const azAsins = computed(() => azReport.value?.asins || []);
+const azSeries = computed(() => azReport.value?.dailySeries || []);
+const azInsights = computed(() => azReport.value?.insights || {});
+const azRisks = computed(() => azReport.value?.insights?.risks || []);
+const azRankings = computed(() => azReport.value?.insights?.rankings || {});
+const azSourceMeta = computed(() => azReport.value?.sourceMeta || {});
+const azCurrency = computed(() => (azSummary.value.currency || 'USD').replace('*', ''));
+const azMixedCurrency = computed(() => String(azSummary.value.currency || '').includes('*'));
+const azMaxTrend = computed(() => Math.max(1, ...azSeries.value.map((p) => Math.max(num(p.gmv), num(p.adSpend) * 8))));
+
+async function loadAmazon() {
+  azLoading.value = true;
+  azError.value = '';
+  try {
+    azReport.value = await amazonDailyApi.get({
+      sids: selectedStoreId.value === 'all' ? 'all' : selectedStoreId.value,
+      date: selectedDate.value,
+      dimension: azDimension.value,
+    });
+  } catch (e) {
+    azReport.value = null;
+    azError.value = e?.message || String(e);
+  } finally {
+    azLoading.value = false;
+  }
+}
+
+watch([selectedDate, azDimension], () => loadAmazon());
+
+onMounted(() => { load(); loadAmazon(); });
 </script>
 
 <template>
@@ -205,6 +245,225 @@ onMounted(load);
       title="日报真实数据加载失败"
       :description="error"
     />
+
+    <!-- ===================== Amazon 真实数据区 (领星 productPerformance) ===================== -->
+    <el-card shadow="never" class="report-card mt-16 az-section" data-test="amazon-daily-section">
+      <template #header>
+        <div class="card-head">
+          <div>
+            <h3>Amazon 真实数据看板（领星 productPerformance）</h3>
+            <p>多店逐日销量 / GMV / 广告 / ACOS / 毛利 / 评分 / 退款 / 流量 + 环比，全部来自基座真实拉取。</p>
+          </div>
+          <div class="az-head-tags">
+            <el-tag :type="azConfigured ? 'success' : 'warning'" effect="plain" data-test="amazon-configured">
+              {{ azConfigured ? '真实数据' : '示例/未配置' }}
+            </el-tag>
+            <el-tag :type="azRealDataOnly ? 'success' : 'info'" effect="plain">realDataOnly={{ azRealDataOnly }}</el-tag>
+            <el-segmented v-model="azDimension" :options="[{ label: '按店铺', value: 'store' }, { label: '按 ASIN', value: 'asin' }]" size="small" />
+            <el-button :icon="'Refresh'" size="small" :loading="azLoading" @click="loadAmazon">刷新</el-button>
+          </div>
+        </div>
+      </template>
+
+      <el-alert
+        v-if="!azConfigured"
+        type="warning"
+        show-icon
+        :closable="false"
+        class="mb-12"
+        title="领星 Amazon 真实数据未接入"
+        :description="`原因：${azReport?.error || 'lingxing_not_configured'}。配置领星凭证后此区自动切换为真实数据（已实现真实通路），当前不展示伪造数字。`"
+        data-test="amazon-not-configured"
+      />
+      <el-alert
+        v-else-if="azError"
+        type="error"
+        show-icon
+        :closable="false"
+        class="mb-12"
+        title="Amazon 真实数据加载失败"
+        :description="azError"
+      />
+      <el-alert
+        v-else-if="azMixedCurrency"
+        type="info"
+        show-icon
+        :closable="false"
+        class="mb-12"
+        title="跨店混币"
+        description="多店币种不一致，汇总按主币种展示并标注，不伪造统一 USD 总额。"
+      />
+
+      <!-- 摘要 headline -->
+      <p v-if="azInsights.headline" class="az-headline" data-test="amazon-headline">{{ azInsights.headline }}</p>
+
+      <!-- KPI 汇总卡 (真实字段) -->
+      <div class="az-kpi-grid" v-loading="azLoading">
+        <div class="summary-card">
+          <span>销量</span>
+          <strong>{{ formatNumber(azSummary.volume || 0) }}</strong>
+          <small :class="['delta', deltaClass(azDelta.unitsDeltaPct)]">{{ deltaLabel(azDelta.unitsDeltaPct) }}</small>
+        </div>
+        <div class="summary-card">
+          <span>GMV {{ azMixedCurrency ? '(混币)' : '' }}</span>
+          <strong>{{ money(azSummary.gmv, azCurrency) }}</strong>
+          <small :class="['delta', deltaClass(azDelta.gmvDeltaPct)]">{{ deltaLabel(azDelta.gmvDeltaPct) }}</small>
+        </div>
+        <div class="summary-card">
+          <span>净销售额</span>
+          <strong>{{ money(azSummary.netAmount, azCurrency) }}</strong>
+          <small>{{ azSummary.asinCount || 0 }} ASIN</small>
+        </div>
+        <div class="summary-card">
+          <span>广告花费</span>
+          <strong>{{ money(azSummary.adSpend, azCurrency) }}</strong>
+          <small :class="['delta', deltaClass(azDelta.adSpendDeltaPct, true)]">{{ deltaLabel(azDelta.adSpendDeltaPct) }}</small>
+        </div>
+        <div class="summary-card">
+          <span>ACOS</span>
+          <strong :class="{ warning: azSummary.acos > 0.35 }">{{ pct(azSummary.acos) }}</strong>
+          <small :class="['delta', deltaClass(azDelta.acosDelta, true)]">{{ deltaLabel(azDelta.acosDelta, 'pp') }}</small>
+        </div>
+        <div class="summary-card">
+          <span>毛利率</span>
+          <strong :class="{ warning: azSummary.grossMargin < 0.05 }">{{ pct(azSummary.grossMargin) }}</strong>
+          <small>毛利 {{ money(azSummary.grossProfit, azCurrency) }}</small>
+        </div>
+        <div class="summary-card">
+          <span>评分</span>
+          <strong>{{ num(azSummary.avgStar).toFixed(2) }}</strong>
+          <small :class="['delta', deltaClass(azDelta.ratingDelta)]">{{ azDelta.ratingDelta > 0 ? '+' : '' }}{{ num(azDelta.ratingDelta).toFixed(2) }}</small>
+        </div>
+        <div class="summary-card">
+          <span>退款率</span>
+          <strong :class="{ warning: azSummary.returnRate > 0.05 }">{{ pct(azSummary.returnRate) }}</strong>
+          <small :class="['delta', deltaClass(azDelta.returnRateDelta, true)]">{{ deltaLabel(azDelta.returnRateDelta, 'pp') }}</small>
+        </div>
+        <div class="summary-card">
+          <span>Sessions</span>
+          <strong>{{ formatNumber(azSummary.sessions || 0) }}</strong>
+          <small>CVR {{ pct(azSummary.cvr) }}</small>
+        </div>
+      </div>
+
+      <!-- store 维度主表 -->
+      <el-table v-if="azDimension === 'store'" :data="azStores" border class="store-table mt-16" data-test="amazon-store-table">
+        <el-table-column label="店铺" min-width="180" fixed>
+          <template #default="{ row }">
+            <strong>{{ row.name }}</strong>
+            <small class="muted-inline">{{ row.region || '-' }} · {{ row.currency || 'USD' }}</small>
+          </template>
+        </el-table-column>
+        <el-table-column label="销量" align="right" width="110">
+          <template #default="{ row }">
+            <strong class="tnum">{{ formatNumber(row.volume || 0) }}</strong>
+            <span :class="['delta', deltaClass(row.unitsDeltaPct)]">{{ deltaLabel(row.unitsDeltaPct) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="GMV" align="right" width="130">
+          <template #default="{ row }">
+            <strong class="tnum">{{ money(row.gmv, row.currency) }}</strong>
+            <span :class="['delta', deltaClass(row.gmvDeltaPct)]">{{ deltaLabel(row.gmvDeltaPct) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="净销售额" align="right" width="120">
+          <template #default="{ row }">{{ money(row.netAmount, row.currency) }}</template>
+        </el-table-column>
+        <el-table-column label="广告花费" align="right" width="130">
+          <template #default="{ row }">
+            <strong class="tnum">{{ money(row.adSpend, row.currency) }}</strong>
+            <span :class="['delta', deltaClass(row.adSpendDeltaPct, true)]">{{ deltaLabel(row.adSpendDeltaPct) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="ACOS" align="right" width="90">
+          <template #default="{ row }"><span class="tnum" :class="{ warning: row.acos > 0.35 }">{{ pct(row.acos) }}</span></template>
+        </el-table-column>
+        <el-table-column label="毛利(率)" align="right" width="130">
+          <template #default="{ row }">
+            <strong class="tnum">{{ money(row.grossProfit, row.currency) }}</strong>
+            <span class="delta" :class="{ warning: row.grossMargin < 0.05 }">{{ pct(row.grossMargin) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="评分" align="right" width="80">
+          <template #default="{ row }">{{ num(row.avgStar).toFixed(2) }}</template>
+        </el-table-column>
+        <el-table-column label="退款率" align="right" width="90">
+          <template #default="{ row }"><span :class="{ warning: row.returnRate > 0.05 }">{{ pct(row.returnRate) }}</span></template>
+        </el-table-column>
+        <el-table-column label="Sessions" align="right" width="100">
+          <template #default="{ row }">{{ formatNumber(row.sessions || 0) }}</template>
+        </el-table-column>
+        <el-table-column label="CVR" align="right" width="80">
+          <template #default="{ row }">{{ pct(row.cvr) }}</template>
+        </el-table-column>
+      </el-table>
+
+      <!-- ASIN 维度下钻表 -->
+      <el-table v-else :data="azAsins" border class="store-table mt-16" data-test="amazon-asin-table">
+        <el-table-column label="ASIN / 标题" min-width="220" fixed>
+          <template #default="{ row }">
+            <strong>{{ row.asin || '-' }}</strong>
+            <small class="muted-inline">{{ row.itemName || '' }}</small>
+          </template>
+        </el-table-column>
+        <el-table-column label="店铺" width="120" prop="storeName" />
+        <el-table-column label="销量" align="right" width="90"><template #default="{ row }">{{ formatNumber(row.volume || 0) }}</template></el-table-column>
+        <el-table-column label="GMV" align="right" width="110"><template #default="{ row }">{{ money(row.amount, row.currencyCode) }}</template></el-table-column>
+        <el-table-column label="广告" align="right" width="100"><template #default="{ row }">{{ money(row.adSpend, row.currencyCode) }}</template></el-table-column>
+        <el-table-column label="ACOS" align="right" width="80"><template #default="{ row }"><span :class="{ warning: row.acos > 0.35 }">{{ pct(row.acos) }}</span></template></el-table-column>
+        <el-table-column label="TACOS" align="right" width="80"><template #default="{ row }">{{ pct(row.tacos) }}</template></el-table-column>
+        <el-table-column label="毛利" align="right" width="100"><template #default="{ row }">{{ money(row.grossProfit, row.currencyCode) }}</template></el-table-column>
+        <el-table-column label="CTR" align="right" width="70"><template #default="{ row }">{{ pct(row.ctr) }}</template></el-table-column>
+        <el-table-column label="CVR" align="right" width="70"><template #default="{ row }">{{ pct(row.cvr) }}</template></el-table-column>
+        <el-table-column label="BuyBox%" align="right" width="90"><template #default="{ row }">{{ pct(row.buyBoxPercentage) }}</template></el-table-column>
+        <el-table-column label="大类/小类" align="right" width="120"><template #default="{ row }">{{ rankText(row.cateRank) }} / {{ rankText(row.smallCateRank) }}</template></el-table-column>
+        <el-table-column label="可售天数" align="right" width="90"><template #default="{ row }"><span :class="{ warning: row.availableDays > 0 && row.availableDays < 14 }">{{ row.availableDays || '-' }}</span></template></el-table-column>
+        <el-table-column label="环比(量/额)" align="right" width="120"><template #default="{ row }">{{ deltaLabel(num(row.volumeChainRatio) * 100) }} / {{ deltaLabel(num(row.amountChainRatio) * 100) }}</template></el-table-column>
+      </el-table>
+
+      <!-- 趋势 + 排行/风险 -->
+      <el-row :gutter="16" class="mt-16">
+        <el-col :xs="24" :sm="24" :md="14" :lg="15">
+          <div class="trend-board" v-if="azSeries.length">
+            <div v-for="point in azSeries" :key="point.date" class="trend-col">
+              <div class="bar-stack">
+                <span class="bar gmv" :style="{ height: `${(num(point.gmv) / azMaxTrend) * 150 + 16}px` }" />
+                <span class="bar spend" :style="{ height: `${((num(point.adSpend) * 8) / azMaxTrend) * 150 + 12}px` }" />
+              </div>
+              <strong>{{ point.date?.slice(5) }}</strong>
+              <small>{{ formatNumber(point.volume || 0) }} 单 · ★{{ num(point.avgStar).toFixed(2) }}</small>
+            </div>
+          </div>
+          <EmptyState v-else title="暂无逐日趋势" description="区间内未拉到真实逐日数据。" icon="DataLine" />
+        </el-col>
+        <el-col :xs="24" :sm="24" :md="10" :lg="9">
+          <div class="az-risks" data-test="amazon-risks">
+            <h4>今日必须看（真实风险）</h4>
+            <div v-if="azRisks.length" class="watch-list">
+              <div v-for="(r, i) in azRisks" :key="i" class="watch-item">
+                <el-tag :type="r.level === 'P1' ? 'danger' : 'warning'" size="small">{{ r.level }}</el-tag>
+                <div><strong>{{ r.message }}</strong><small>{{ r.scope }} · {{ r.metric }}={{ r.value }}</small></div>
+              </div>
+            </div>
+            <EmptyState v-else title="无真实风险项" description="真实数据未发现 ACOS/毛利/退款/评分/断货风险。" icon="CircleCheck" />
+            <h4 class="mt-16">真实排行 · GMV Top</h4>
+            <ol class="az-rank">
+              <li v-for="(r, i) in (azRankings.gmvTop || [])" :key="i"><span>{{ r.name }}</span><b>{{ money(r.value, azCurrency) }}</b></li>
+            </ol>
+          </div>
+        </el-col>
+      </el-row>
+
+      <!-- sourceMeta: 真实区 mock:false / 基座拿不到的 mock:true -->
+      <div class="source-grid mt-16">
+        <div v-for="(meta, key) in azSourceMeta" :key="key" class="source-item">
+          <strong>{{ key }}</strong>
+          <span>provider: {{ meta.provider }} · mode={{ sourceMode(meta) }} · mock={{ meta.mock === true }}<template v-if="meta.reason"> · {{ meta.reason }}</template></span>
+        </div>
+      </div>
+    </el-card>
+
+    <h3 class="local-section-title mt-16">本地派生（模拟 / 预估）— 与上方真实区隔离</h3>
 
     <section class="summary-grid" v-loading="loading">
       <div class="summary-card">
@@ -475,11 +734,25 @@ onMounted(load);
 .source-item span { color: var(--text-muted); font-size: 12px; }
 .deep-links { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
 .deep-links a { padding: 8px 12px; border-radius: 999px; background: #eef5ea; color: var(--daily-green); text-decoration: none; font-weight: 700; font-size: 13px; }
+.mb-12 { margin-bottom: 12px; }
+.az-section { border-color: rgba(49, 95, 69, .22); }
+.az-head-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.az-headline { margin: 0 0 14px; padding: 12px 14px; border-radius: 12px; background: #f4f8f1; color: var(--daily-ink); font-weight: 700; line-height: 1.6; }
+.az-kpi-grid { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 10px; }
+.az-kpi-grid .summary-card { padding: 12px; }
+.az-kpi-grid .summary-card strong { font-size: 20px; margin: 6px 0; }
+.muted-inline { display: block; color: var(--text-muted); font-size: 11px; margin-top: 2px; }
+.az-risks h4 { margin: 0 0 10px; font-size: 14px; color: var(--daily-ink); }
+.az-rank { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 6px; }
+.az-rank li { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; }
+.local-section-title { margin: 24px 0 0; color: var(--daily-amber); font-size: 15px; }
+@media (max-width: 1280px) { .az-kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 1100px) { .summary-grid, .source-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 767px) {
   .daily-hero { grid-template-columns: 1fr; padding: 20px; }
   .daily-hero h2 { font-size: 22px; }
   .summary-grid, .source-grid { grid-template-columns: 1fr; }
+  .az-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .card-head { align-items: flex-start; flex-direction: column; }
   .trend-board { grid-template-columns: repeat(7, 86px); overflow-x: auto; padding-bottom: 8px; }
 }

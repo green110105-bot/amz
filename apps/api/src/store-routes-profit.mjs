@@ -42,6 +42,8 @@ import {
   // 库存联动
   getInvLinkConfig, updateInvLinkConfig, listInvLinkEvents, executeInvLinkEvent,
 } from './data-store-profit.mjs';
+// Amazon 真实利润看板(领星基座) — 仅本模块新增, 不动他人路由
+import { getAmazonProfitDashboard } from './integrations/lingxing/amazon-profit.mjs';
 
 function getDb() { return getDbInstance(); }
 
@@ -556,6 +558,26 @@ async function _impl(request) {
     if (!r) return notFound();
     if (r.error) return json(r, 400);
     return json(r);
+  }
+
+  // ============================================================
+  // 3.17 Amazon 真实利润看板(领星 productPerformance, asin 维度)
+  //   无凭证/失败 -> mock 标 sourceMeta.mock:true(不抛 500); 单店失败收进 errors[]
+  // ============================================================
+  if (path === '/api/v1/store/m2/amazon/profit' && method === 'GET') {
+    const thNum = (k) => {
+      const v = params.get(k);
+      return v == null || v === '' ? undefined : Number(v);
+    };
+    const thresholds = {};
+    if (thNum('lossMargin') !== undefined) thresholds.lossMargin = thNum('lossMargin');
+    if (thNum('highTacos') !== undefined) thresholds.highTacos = thNum('highTacos');
+    const data = await getAmazonProfitDashboard(db, userId, storeId, {
+      range: params.get('range') || '30d',
+      sid: params.get('sid') || null,
+      thresholds: Object.keys(thresholds).length ? thresholds : undefined,
+    });
+    return json(data);
   }
 
   return null;

@@ -28,6 +28,20 @@ export const tiktokDailyApi = {
   realSales: (params = {}) => http.get(`${BASE}/tiktok/real-sales`, { params }).then((r) => r.data),
 };
 
+// ===== 0c. amazonRiskApi — Amazon 真实风险看板 (领星 productPerformance) =====
+// params: { startDate, endDate, sids(逗号分隔), severity(p0|p1|all) }
+// 返回: { generatedAt, period, source{mock,...}, kpi, risks[], rankings, summary }
+export const amazonRiskApi = {
+  board: (params = {}) => http.get(`${BASE}/amazon/risk-board`, { params }).then((r) => r.data),
+};
+
+// ===== 0d. amazonDailyApi — Amazon 每日监控日报 (领星 productPerformance 真实数据) =====
+// 多店逐日/区间 KPI + 环比 + 排行 + 风险。无凭证时 configured:false + sourceMeta.mock:true(诚实降级)。
+// params: { sids:'all'|csv, startDate, endDate, date, dimension:'store'|'asin', refresh:0|1 }
+export const amazonDailyApi = {
+  get: (params = {}) => http.get(`${BASE}/amazon/daily-report`, { params }).then((r) => r.data),
+};
+
 // ===== 1. anomaliesApi — 异常事件 =====
 export const anomaliesApi = {
   list: (params = {}) => http.get(`${BASE}/anomalies`, { params }).then(unwrapList),

@@ -198,6 +198,15 @@ export const dimensionsApi = {
 };
 
 // ============================================================================
+// 17. amazonProfitApi — Amazon 真实利润看板 (领星 productPerformance, 1 endpoint)
+//   返回 { range, currencyBreakdown, summary, stores, asins, insights, sourceMeta:{mock} }
+// ============================================================================
+export const amazonProfitApi = {
+  profit: (params = {}) =>
+    http.get(`${BASE}/amazon/profit`, { params }).then(raw),
+};
+
+// ============================================================================
 // 16. inventoryLinkApi — 库存联动 (4 endpoints)
 // ============================================================================
 export const inventoryLinkApi = {
@@ -227,6 +236,7 @@ export default {
   alertsApi,
   dimensionsApi,
   inventoryLinkApi,
+  amazonProfitApi,
 };
 
 // 简单辅助：unwrap exposed in case callers want lists from { items: [...] } envelope

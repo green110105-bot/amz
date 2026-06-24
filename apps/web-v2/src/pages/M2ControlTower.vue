@@ -15,6 +15,7 @@ import {
   ltvApi,
   alertsApi,
   transfersApi,
+  amazonProfitApi,
 } from '../api/m2';
 
 const loading = ref(false);
@@ -40,7 +41,69 @@ const state = ref({
   tax: null,
   ltv: [],
   alertEvents: [],
+  amazonProfit: null,
 });
+
+// Amazon 真实利润看板状态(独立加载, 不阻塞主队列)
+const amzRange = ref('30d');
+const amzAsinFilter = ref('all'); // all | loss
+const amzStoreFilter = ref('');   // sid 下钻
+const amzLoading = ref(false);
+
+async function loadAmazonProfit() {
+  amzLoading.value = true;
+  try {
+    state.value.amazonProfit = await amazonProfitApi.profit({ range: amzRange.value });
+  } catch (e) {
+    console.warn('[m2-control] amazon-profit failed', e);
+    state.value.amazonProfit = null;
+  } finally {
+    amzLoading.value = false;
+  }
+}
+
+const amz = computed(() => state.value.amazonProfit || null);
+const amzMock = computed(() => amz.value?.sourceMeta?.mock === true);
+const amzSummary = computed(() => amz.value?.summary || {});
+const amzCurrencySymbol = computed(() => ({ USD: '$', EUR: '€', GBP: '£', JPY: '¥', CNY: '¥' })[amzSummary.value.currencyCode] || (amzSummary.value.currencyCode ? amzSummary.value.currencyCode + ' ' : '$'));
+
+const amzKpis = computed(() => {
+  const s = amzSummary.value;
+  return [
+    { label: '净销售额', value: money(s.netAmount, amzCurrencySymbol.value), hint: `销售额 ${money(s.amount, amzCurrencySymbol.value)}`, status: 'info' },
+    { label: '毛利', value: money(s.grossProfit, amzCurrencySymbol.value), hint: `${s.storeCount || 0} 店 / ${s.asinCount || 0} ASIN`, status: num(s.grossProfit) < 0 ? 'danger' : 'success' },
+    { label: '毛利率', value: pct(s.grossMargin), hint: `ROI ${num(s.roi).toFixed(2)}`, status: num(s.grossMargin) < 0.1 ? 'warning' : 'success' },
+    { label: 'TACOS', value: pct(s.tacos), hint: `ACOS ${pct(s.acos)}`, status: num(s.tacos) > 0.3 ? 'warning' : 'info' },
+    { label: 'ACOS', value: pct(s.acos), hint: '广告花费/广告销售', status: 'info' },
+    { label: '亏损 ASIN', value: num(s.lossAsinCount), hint: money(s.lossAmount, amzCurrencySymbol.value), status: num(s.lossAsinCount) > 0 ? 'danger' : 'success' },
+  ];
+});
+
+const amzStores = computed(() => amz.value?.stores || []);
+const amzAsinsAll = computed(() => amz.value?.asins || []);
+const amzAsins = computed(() => {
+  let rows = amzAsinsAll.value;
+  if (amzStoreFilter.value) rows = rows.filter((r) => String(r.sid) === String(amzStoreFilter.value));
+  if (amzAsinFilter.value === 'loss') rows = rows.filter((r) => (r.risks || []).includes('loss'));
+  return rows.slice(0, 50);
+});
+const amzInsights = computed(() => amz.value?.insights || {});
+
+function healthType(h) {
+  return ({ healthy: 'success', watch: 'warning', loss: 'danger' })[h] || 'info';
+}
+function healthLabel(h) {
+  return ({ healthy: '健康', watch: '观察', loss: '亏损' })[h] || h || '-';
+}
+function riskLabel(r) {
+  return ({ loss: '亏损', ad_eats_profit: '广告吞利', high_tacos: '高TACOS' })[r] || r;
+}
+function riskType(r) {
+  return ({ loss: 'danger', ad_eats_profit: 'warning', high_tacos: 'warning' })[r] || 'info';
+}
+function drillStore(row) {
+  amzStoreFilter.value = amzStoreFilter.value === row.sid ? '' : row.sid;
+}
 
 function listOf(payload, keys = ['items', 'list', 'data']) {
   if (Array.isArray(payload)) return payload;
@@ -147,7 +210,7 @@ async function load() {
   }
 }
 
-onMounted(load);
+onMounted(() => { load(); loadAmazonProfit(); });
 
 const overview = computed(() => state.value.overview?.overview || state.value.overview || {});
 
@@ -408,6 +471,128 @@ function openCard(card) {
         </div>
       </el-tab-pane>
 
+      <el-tab-pane label="Amazon 真实利润" name="amazon">
+        <el-card shadow="never" class="panel" v-loading="amzLoading">
+          <template #header>
+            <div class="panel-head">
+              <div>
+                <h3>Amazon 真实利润
+                  <el-tag v-if="amzMock" type="warning" size="small" effect="dark" round>示例数据</el-tag>
+                  <el-tag v-else type="success" size="small" effect="plain" round>领星真实</el-tag>
+                </h3>
+                <p>
+                  来源: 领星 productPerformance(ASIN 维度) · 店铺级 ACOS/TACOS/ROI/毛利率由汇总额重算 ·
+                  跨币种按 currencyBreakdown 分组不直接相加
+                  <span v-if="amz?.partial" class="warn-inline"> · 部分店铺拉取失败({{ amz.errors.length }})</span>
+                </p>
+              </div>
+              <div class="amz-controls">
+                <el-radio-group v-model="amzRange" size="small" @change="loadAmazonProfit">
+                  <el-radio-button value="7d">7天</el-radio-button>
+                  <el-radio-button value="30d">30天</el-radio-button>
+                  <el-radio-button value="90d">90天</el-radio-button>
+                </el-radio-group>
+                <el-button :icon="'Refresh'" size="small" :loading="amzLoading" @click="loadAmazonProfit">刷新</el-button>
+              </div>
+            </div>
+          </template>
+
+          <el-alert v-if="amzMock" type="warning" :closable="false" show-icon class="mb-12"
+            title="当前为示例数据(未配置领星凭证或拉取失败)"
+            :description="amz?.sourceMeta?.reason || amz?.sourceMeta?.error || '配置 LINGXING_APP_ID/SECRET 后将展示真实 Amazon 利润'" />
+
+          <div class="kpi-grid amz-kpi">
+            <div v-for="item in amzKpis" :key="item.label" class="kpi" :class="`is-${item.status}`">
+              <span>{{ item.label }}</span>
+              <strong>{{ item.value }}</strong>
+              <small>{{ item.hint }}</small>
+            </div>
+          </div>
+
+          <el-alert v-if="amzSummary.lossAsinCount" type="info" :closable="false" class="mb-12 summary-alert"
+            :title="`${amzSummary.lossAsinCount} 个 ASIN 亏损共 ${money(amzSummary.lossAmount, amzCurrencySymbol)}; 全局 TACOS ${pct(amzSummary.tacos)}; 最赚钱店铺 ${amzSummary.topStore?.name || '-'}; 最大拖累 ${amzSummary.worstAsin?.asin || '-'}`" />
+
+          <h4 class="amz-h4">店铺利润排行(毛利降序，点击行下钻该店 ASIN)</h4>
+          <el-table :data="amzStores" stripe size="small" @row-click="drillStore" class="clickable">
+            <el-table-column label="店铺" min-width="140">
+              <template #default="{ row }">
+                <strong>{{ row.name }}</strong>
+                <el-tag v-if="amzStoreFilter === row.sid" size="small" type="primary" class="ml-6">下钻中</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="销售额" width="110" align="right"><template #default="{ row }">{{ money(row.amount, ({USD:'$',EUR:'€',GBP:'£'}[row.currencyCode] || '$')) }}</template></el-table-column>
+            <el-table-column label="净销售" width="110" align="right"><template #default="{ row }">{{ money(row.netAmount, ({USD:'$',EUR:'€',GBP:'£'}[row.currencyCode] || '$')) }}</template></el-table-column>
+            <el-table-column label="毛利" width="100" align="right"><template #default="{ row }"><span :class="row.grossProfit < 0 ? 'neg' : 'pos'">{{ money(row.grossProfit, ({USD:'$',EUR:'€',GBP:'£'}[row.currencyCode] || '$')) }}</span></template></el-table-column>
+            <el-table-column label="毛利率" width="84" align="right"><template #default="{ row }">{{ pct(row.grossMargin) }}</template></el-table-column>
+            <el-table-column label="ACOS" width="80" align="right"><template #default="{ row }">{{ pct(row.acos) }}</template></el-table-column>
+            <el-table-column label="TACOS" width="80" align="right"><template #default="{ row }">{{ pct(row.tacos) }}</template></el-table-column>
+            <el-table-column label="ROI" width="70" align="right"><template #default="{ row }">{{ num(row.roi).toFixed(2) }}</template></el-table-column>
+            <el-table-column label="健康" width="80"><template #default="{ row }"><el-tag :type="healthType(row.health)" size="small">{{ healthLabel(row.health) }}</el-tag></template></el-table-column>
+          </el-table>
+
+          <div class="amz-h4-row">
+            <h4 class="amz-h4">ASIN 利润排行(毛利降序)</h4>
+            <div class="amz-controls">
+              <el-radio-group v-model="amzAsinFilter" size="small">
+                <el-radio-button value="all">全部</el-radio-button>
+                <el-radio-button value="loss">仅亏损</el-radio-button>
+              </el-radio-group>
+              <el-button v-if="amzStoreFilter" text type="primary" size="small" @click="amzStoreFilter = ''">清除店铺下钻</el-button>
+            </div>
+          </div>
+          <el-table :data="amzAsins" stripe size="small">
+            <el-table-column label="ASIN / 标题" min-width="180">
+              <template #default="{ row }">
+                <strong>{{ row.asin }}</strong>
+                <small class="asin-name">{{ row.storeName }} · {{ row.itemName }}</small>
+              </template>
+            </el-table-column>
+            <el-table-column label="销售额" width="100" align="right"><template #default="{ row }">{{ money(row.amount, ({USD:'$',EUR:'€',GBP:'£'}[row.currencyCode] || '$')) }}</template></el-table-column>
+            <el-table-column label="毛利" width="100" align="right"><template #default="{ row }"><span :class="row.grossProfit < 0 ? 'neg' : 'pos'">{{ money(row.grossProfit, ({USD:'$',EUR:'€',GBP:'£'}[row.currencyCode] || '$')) }}</span></template></el-table-column>
+            <el-table-column label="毛利率" width="80" align="right"><template #default="{ row }">{{ pct(row.grossMargin) }}</template></el-table-column>
+            <el-table-column label="ROI" width="64" align="right"><template #default="{ row }">{{ num(row.roi).toFixed(2) }}</template></el-table-column>
+            <el-table-column label="ACOS" width="76" align="right"><template #default="{ row }">{{ pct(row.acos) }}</template></el-table-column>
+            <el-table-column label="广告占比" width="84" align="right"><template #default="{ row }">{{ pct(row.adShare) }}</template></el-table-column>
+            <el-table-column label="环比" width="76" align="right"><template #default="{ row }"><span :class="row.amountChainRatio < 0 ? 'neg' : 'pos'">{{ pct(row.amountChainRatio) }}</span></template></el-table-column>
+            <el-table-column label="库存天数" width="84" align="right"><template #default="{ row }">{{ row.availableDays || '-' }}</template></el-table-column>
+            <el-table-column label="风险" min-width="120">
+              <template #default="{ row }">
+                <el-tag v-for="r in row.risks" :key="r" :type="riskType(r)" size="small" class="mr-4">{{ riskLabel(r) }}</el-tag>
+                <span v-if="!row.risks?.length">-</span>
+              </template>
+            </el-table-column>
+          </el-table>
+
+          <el-collapse class="mt-16">
+            <el-collapse-item :title="`风险清单(亏损 ${amzInsights.lossAsins?.length || 0} · 广告吞利 ${amzInsights.adEatsProfit?.length || 0} · 高TACOS ${amzInsights.highTacos?.length || 0})`" name="risks">
+              <div class="risk-cols">
+                <div>
+                  <h5>亏损 ASIN</h5>
+                  <div v-for="r in (amzInsights.lossAsins || []).slice(0, 8)" :key="'l'+r.asin" class="risk-row">
+                    <strong>{{ r.asin }}</strong><em class="neg">{{ money(r.grossProfit, amzCurrencySymbol) }}</em>
+                  </div>
+                  <EmptyState v-if="!amzInsights.lossAsins?.length" title="无亏损 ASIN" />
+                </div>
+                <div>
+                  <h5>广告吞利</h5>
+                  <div v-for="r in (amzInsights.adEatsProfit || []).slice(0, 8)" :key="'a'+r.asin" class="risk-row">
+                    <strong>{{ r.asin }}</strong><span>ACOS {{ pct(r.acos) }} &gt; 毛利率 {{ pct(r.grossMargin) }}</span>
+                  </div>
+                  <EmptyState v-if="!amzInsights.adEatsProfit?.length" title="无广告吞利" />
+                </div>
+                <div>
+                  <h5>高 TACOS</h5>
+                  <div v-for="r in (amzInsights.highTacos || []).slice(0, 8)" :key="'t'+r.asin" class="risk-row">
+                    <strong>{{ r.asin }}</strong><em class="neg">TACOS {{ pct(r.tacos) }}</em>
+                  </div>
+                  <EmptyState v-if="!amzInsights.highTacos?.length" title="无高 TACOS" />
+                </div>
+              </div>
+            </el-collapse-item>
+          </el-collapse>
+        </el-card>
+      </el-tab-pane>
+
       <el-tab-pane label="高级工具" name="tools">
         <div class="tool-grid">
           <el-card v-for="group in toolGroups" :key="group.title" shadow="never" class="tool-card">
@@ -501,12 +686,32 @@ function openCard(card) {
 .drawer-body dt { color: var(--text-muted); }
 .drawer-body dd { margin: 0; font-weight: 600; }
 .drawer-body pre { max-height: 260px; overflow: auto; padding: 12px; background: #111827; color: #d1fae5; border-radius: 12px; font-size: 12px; }
+.amz-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.amz-kpi { grid-template-columns: repeat(6, 1fr); }
+.amz-h4 { margin: 18px 0 8px; font-size: 15px; color: var(--text); }
+.amz-h4-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.mb-12 { margin-bottom: 12px; }
+.ml-6 { margin-left: 6px; }
+.mr-4 { margin-right: 4px; }
+.warn-inline { color: #c97a00; font-weight: 600; }
+.summary-alert :deep(.el-alert__title) { font-size: 13px; line-height: 1.5; }
+.clickable :deep(.el-table__row) { cursor: pointer; }
+.pos { color: #2f7d4d; }
+.neg { color: #d14343; font-weight: 600; }
+.asin-name { display: block; color: var(--text-muted); font-size: 12px; }
+.risk-cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.risk-cols h5 { margin: 0 0 8px; color: var(--text); }
+.risk-row { display: flex; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.risk-row em { font-style: normal; }
 @media (max-width: 960px) {
+  .amz-kpi { grid-template-columns: repeat(3, 1fr); }
+  .risk-cols { grid-template-columns: 1fr; }
   .hero, .two-col, .tool-grid { grid-template-columns: 1fr; }
   .kpi-grid, .action-list { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 640px) {
   .kpi-grid, .action-list { grid-template-columns: 1fr; }
+  .amz-kpi { grid-template-columns: repeat(2, 1fr); }
   .panel-head { align-items: flex-start; flex-direction: column; }
 }
 </style>

@@ -23,7 +23,8 @@ async function ppRequest(body) {
   for (let attempt = 0; ; attempt++) {
     _lastPpAt = Date.now();
     const res = await signedRequest(PRODUCT_PERFORMANCE_ROUTE, { method: 'POST', body });
-    if (String(res.code) === '3001008' && attempt < RATE_LIMIT_BACKOFF_MS.length) {
+    // 限流码: 3001008("请求过于频繁") 与 103(QPS 超限) 都退避重试。
+    if ((String(res.code) === '3001008' || String(res.code) === '103') && attempt < RATE_LIMIT_BACKOFF_MS.length) {
       await sleep(RATE_LIMIT_BACKOFF_MS[attempt]);
       continue;
     }
@@ -46,11 +47,22 @@ export async function fetchAmazonSellers() {
   }));
 }
 
-// 在售店铺。实测: 真正有销售数据的店是 status=1(在售/授权正常); status=2 多为停用/暂停。
-// 默认返回 status===1, 但允许传 includeAll 拿全部。
-export async function fetchActiveAmazonSellers({ includeAll = false } = {}) {
+// 是否美国店铺(名称含 -US, 或 country/marketplace 标 US)。
+export function isUsSeller(s) {
+  const name = String(s.name || '');
+  if (/-\s*US\b/i.test(name) || /\bUS$/i.test(name.trim())) return true;
+  const c = String(s.country || s.marketplace || '').toUpperCase();
+  return c === 'US' || c === 'USA' || c.includes('美国');
+}
+
+// 在售店铺。业务聚焦【美国店】: 实测有销售数据的店全是 -US 且 status=1。
+// 默认返回 美国 + status===1; includeAll 拿全部; usOnly=false 关闭美国过滤(保留多站点能力)。
+export async function fetchActiveAmazonSellers({ includeAll = false, usOnly = true } = {}) {
   const all = await fetchAmazonSellers();
-  return includeAll ? all : all.filter((s) => s.status === 1);
+  if (includeAll) return all;
+  let list = all.filter((s) => s.status === 1);
+  if (usOnly) list = list.filter(isUsSeller);
+  return list;
 }
 
 // 拉单店 productPerformance(区间, asin 维度, 分页全量) -> 原始行数组
