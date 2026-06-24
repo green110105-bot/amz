@@ -445,7 +445,7 @@ function openCard(card) {
       <el-tab-pane label="资金与采购" name="cash">
         <div v-loading="amzLoading">
           <el-row :gutter="12" class="cap-kpi" v-if="realCapital">
-            <el-col :xs="12" :sm="6"><div class="cap-card"><span>仓库货值</span><strong>{{ money(realCapital.warehouseValue, amzCurrencySymbol) }}</strong><small>资金占用</small></div></el-col>
+            <el-col :xs="12" :sm="6"><div class="cap-card"><span>库存资金占用</span><strong>{{ money(realCapital.inventoryValue, amzCurrencySymbol) }}</strong><small>资金占用</small></div></el-col>
             <el-col :xs="12" :sm="6"><div class="cap-card"><span>FBA 可售</span><strong>{{ num(realCapital.fbaAvailable) }}</strong><small>件</small></div></el-col>
             <el-col :xs="12" :sm="6"><div class="cap-card"><span>FBA 在途</span><strong>{{ num(realCapital.fbaInbound) }}</strong><small>件</small></div></el-col>
             <el-col :xs="12" :sm="6"><div class="cap-card warn"><span>断货风险</span><strong>{{ realCapital.stockoutRiskCount }}</strong><small>个 ASIN</small></div></el-col>
@@ -465,7 +465,7 @@ function openCard(card) {
               <template #header><div class="panel-head"><h3>库存积压(可售&gt;90天)</h3></div></template>
               <el-table v-if="realCapital?.overstockList?.length" :data="realCapital.overstockList" size="small" stripe>
                 <el-table-column label="ASIN" width="120" prop="asin" />
-                <el-table-column label="货值" width="110" align="right"><template #default="{ row }">{{ money(row.whsValue, amzCurrencySymbol) }}</template></el-table-column>
+                <el-table-column label="货值" width="110" align="right"><template #default="{ row }">{{ money(row.inventoryValue, amzCurrencySymbol) }}</template></el-table-column>
                 <el-table-column label="可售天数" width="90" align="right" prop="availableDays" />
               </el-table>
               <EmptyState v-else title="无明显积压" icon="CircleCheck" />

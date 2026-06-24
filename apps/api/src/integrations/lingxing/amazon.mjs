@@ -137,10 +137,13 @@ export function mapPerformanceRow(row) {
     afnReserved: num(row.afn_reserved_quantity),
     stockUpNum: num(row.stock_up_num),
     inventoryTurnoverDays: num(row.inventory_turnover_days),
-    // 采购成本/货值(资金占用视角)
-    cgPrice: num(row.cg_price),                 // 采购单价
-    whsValue: num(row.whs_value),               // 仓库货值(资金占用)
+    // 采购成本/货值(资金占用视角)。whs_value/cg_price 此接口常为 null,
+    // 用 可售库存 × 平均到岸价(avg_landed_price)估算库存资金占用。
+    avgLandedPrice: num(row.avg_landed_price),
+    inventoryValue: num(row.available_inventory?.available_inventory ?? row.available_inventory) * num(row.avg_landed_price),
     suppliers: row.suppliers ?? null,
+    // 类目排名(含前值, 判断排名下滑): small_cate_rank=[{category,rank,prev_rank}]
+    smallCateRankDetail: Array.isArray(row.small_cate_rank) ? row.small_cate_rank[0] : null,
     // 环比
     volumeChainRatio: num(row.volume_chain_ratio),
     amountChainRatio: num(row.amount_chain_ratio),

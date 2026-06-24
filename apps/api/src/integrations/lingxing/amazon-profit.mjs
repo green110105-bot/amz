@@ -97,8 +97,8 @@ export async function computeStoreAmazonProfit({ sid, name, currencyCode, startD
     afnFulfillable: r.afnFulfillable,
     afnInbound: r.afnInbound,
     stockUpNum: r.stockUpNum,
-    whsValue: round2(r.whsValue),
-    cgPrice: round2(r.cgPrice),
+    inventoryValue: round2(r.inventoryValue),
+    avgLandedPrice: round2(r.avgLandedPrice),
     cateRank: r.cateRank,
     amountChainRatio: round4(r.amountChainRatio),
   }));
@@ -253,16 +253,16 @@ function assembleDashboard({ range, startDate, endDate, stores, allAsins, thresh
 // 资金与采购视角(真实库存字段): 仓库货值/在途/可售天数/备货, + 断货&积压清单。
 export function deriveCapital(asins, currencyCode = 'USD') {
   const sum = (f) => asins.reduce((a, r) => a + (Number(r[f]) || 0), 0);
-  const whsValue = round2(sum('whsValue'));
+  const invValue = round2(sum('inventoryValue')); // 库存资金占用 = 可售库存 × 平均到岸价
   const stockout = asins.filter((a) => (a.availableDays || 0) > 0 && a.availableDays < 14 && a.volume > 0)
     .map((a) => ({ asin: a.asin, itemName: a.itemName, availableDays: a.availableDays, availableInventory: a.availableInventory, volume: a.volume, sid: a.sid, storeName: a.storeName }))
     .sort((x, y) => x.availableDays - y.availableDays);
   const overstock = asins.filter((a) => (a.availableDays || 0) > 90)
-    .map((a) => ({ asin: a.asin, itemName: a.itemName, availableDays: a.availableDays, availableInventory: a.availableInventory, whsValue: round2(a.whsValue), sid: a.sid, storeName: a.storeName }))
-    .sort((x, y) => (y.whsValue || 0) - (x.whsValue || 0));
+    .map((a) => ({ asin: a.asin, itemName: a.itemName, availableDays: a.availableDays, availableInventory: a.availableInventory, inventoryValue: round2(a.inventoryValue), sid: a.sid, storeName: a.storeName }))
+    .sort((x, y) => (y.inventoryValue || 0) - (x.inventoryValue || 0));
   return {
     currencyCode,
-    warehouseValue: whsValue,                 // 仓库货值(资金占用)
+    inventoryValue: invValue,                 // 库存资金占用(可售库存 × 到岸价)
     fbaAvailable: sum('afnFulfillable'),      // FBA 可售
     fbaInbound: sum('afnInbound'),            // FBA 在途
     stockUpNum: sum('stockUpNum'),            // 建议备货
@@ -343,8 +343,8 @@ function mockAsin(sid, storeName, i, currencyCode) {
     afnFulfillable: 120 - i * 10,
     afnInbound: 30 + i * 10,
     stockUpNum: i === 1 ? 200 : 0,
-    whsValue: round2((120 - i * 10) * (8 + i)),
-    cgPrice: round2(8 + i),
+    inventoryValue: round2((120 - i * 10) * (180 + i * 20)),
+    avgLandedPrice: round2(180 + i * 20),
     cateRank: 1000 + i * 250,
     amountChainRatio: round4(loss ? -0.18 : 0.05 + i * 0.02),
   };

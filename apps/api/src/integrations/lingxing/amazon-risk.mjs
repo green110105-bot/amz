@@ -308,6 +308,8 @@ export async function fetchAmazonRiskBoard({ startDate, endDate, sids } = {}) {
   const perStoreScores = [];
   let asinCount = 0;
   const perStoreErrors = [];
+  const customerVoice = []; // 客户声音: 评分/退款(真实)
+  const categoryRanks = []; // 竞品雷达: 类目排名 + 排名下滑(真实)
 
   for (const seller of sellers) {
     try {
@@ -320,13 +322,29 @@ export async function fetchAmazonRiskBoard({ startDate, endDate, sids } = {}) {
       });
       allRisks.push(...risks);
       perStoreScores.push(storeScore);
+      // 客户声音 + 类目排名(真实字段派生)
+      for (const r of mappedRows) {
+        const base = { sid: String(seller.sid), storeName: seller.name, asin: r.asin, itemName: r.itemName, currencyCode: r.currencyCode };
+        if (r.avgStar > 0 || r.reviewsCount > 0 || r.returnRate > 0) {
+          customerVoice.push({ ...base, avgStar: round2(r.avgStar), reviewsCount: r.reviewsCount, returnRate: round4(r.returnRate), returnCount: r.returnCount, volume: r.volume });
+        }
+        const scr = r.smallCateRankDetail;
+        if (r.cateRank || scr) {
+          const rank = scr?.rank ?? null;
+          const prev = scr?.prev_rank ?? null;
+          categoryRanks.push({ ...base, category: scr?.category || null, cateRank: r.cateRank, rank, prevRank: prev,
+            rankDrop: (rank != null && prev != null) ? (rank - prev) : null });
+        }
+      }
     } catch (err) {
-      // 单店失败不阻断整体(限流/某店无权限), 记录但继续。
       perStoreErrors.push({ sid: String(seller.sid), error: String(err.message || err) });
     }
   }
 
   const board = buildRiskBoard(allRisks, perStoreScores, { period });
+  // 客户声音: 评分低/退款高优先; 类目排名: 排名下滑优先
+  customerVoice.sort((a, b) => (b.returnRate - a.returnRate) || (a.avgStar - b.avgStar));
+  categoryRanks.sort((a, b) => (b.rankDrop ?? -1e9) - (a.rankDrop ?? -1e9));
   return {
     generatedAt: new Date().toISOString(),
     period,
@@ -337,10 +355,12 @@ export async function fetchAmazonRiskBoard({ startDate, endDate, sids } = {}) {
       asinCount,
       bsrTrend: 'snapshot_only',
       ratingTrend: 'snapshot_only',
-      disclaimer: '排名/评分为当期快照, 销量趋势采用领星原生环比字段(相对上一等长区间), 非逐日时间序列。',
+      disclaimer: '排名/评分为当期快照, 销量趋势采用领星原生环比字段(相对上一等长区间), 非逐日时间序列。竞品BSR需独立采集, 此处为本店真实类目排名。',
       ...(perStoreErrors.length ? { partialErrors: perStoreErrors } : {}),
     },
     ...board,
+    customerVoice: customerVoice.slice(0, 50),
+    categoryRanks: categoryRanks.slice(0, 50),
   };
 }
 
@@ -362,6 +382,8 @@ export function mockAmazonRiskBoard({ startDate, endDate, reason } = {}) {
       disclaimer: '领星未配置/拉取失败, 无真实风险数据。凭证到位即自动切换真实拉取。',
     },
     ...board,
+    customerVoice: [],
+    categoryRanks: [],
     summary: '领星未配置/拉取失败, 无真实风险数据。',
   };
 }

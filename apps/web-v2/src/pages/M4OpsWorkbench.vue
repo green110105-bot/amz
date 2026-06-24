@@ -80,6 +80,10 @@ const amzFilteredRisks = computed(() => {
   if (amzRiskFilter.value === 'all') return list;
   return list.filter((r) => r.riskType === amzRiskFilter.value);
 });
+// 客户声音/竞品雷达 读领星真实数据
+const amzMockRisk = computed(() => amzBoard.value?.source?.mock === true);
+const amzVoice = computed(() => amzBoard.value?.customerVoice || []);
+const amzRanks = computed(() => amzBoard.value?.categoryRanks || []);
 
 function openAmzRisk(row) {
   amzSelected.value = row;
@@ -437,21 +441,42 @@ function openCard(card) {
       </el-tab-pane>
 
       <el-tab-pane label="客户声音" name="voice">
-        <div class="block-grid">
+        <el-card shadow="never" class="panel" v-loading="amzLoading">
+          <template #header><div class="panel-head"><h3>客户声音 · 领星真实(评分/退款)</h3><el-tag :type="amzMockRisk ? 'warning' : 'success'" size="small">{{ amzMockRisk ? '示例' : '领星真实' }}</el-tag></div></template>
+          <el-table v-if="amzVoice.length" :data="amzVoice" size="small" stripe>
+            <el-table-column label="店铺" width="110" prop="storeName" show-overflow-tooltip />
+            <el-table-column label="ASIN" width="120" prop="asin" />
+            <el-table-column label="商品" min-width="160" prop="itemName" show-overflow-tooltip />
+            <el-table-column label="评分" width="80" align="right"><template #default="{ row }"><span :style="{color: row.avgStar<4 ? '#ef4444':'#10b981'}">{{ row.avgStar }}</span></template></el-table-column>
+            <el-table-column label="评论数" width="80" align="right" prop="reviewsCount" />
+            <el-table-column label="退款率" width="90" align="right"><template #default="{ row }"><span :style="{color: row.returnRate>0.05 ? '#ef4444':''}">{{ (row.returnRate*100).toFixed(1) }}%</span></template></el-table-column>
+          </el-table>
+          <EmptyState v-else :title="amzMockRisk ? '暂无真实数据' : '无评分/退款数据'" icon="ChatDotround" />
+        </el-card>
+        <div class="block-grid" style="margin-top:12px">
           <router-link v-for="item in reviewBlocks" :key="item.label" :to="item.path" class="block-card">
-            <span>{{ item.label }}</span>
-            <strong>{{ item.value }}</strong>
-            <small>进入详情</small>
+            <span>{{ item.label }}</span><strong>{{ item.value }}</strong><small>进入详情</small>
           </router-link>
         </div>
       </el-tab-pane>
 
       <el-tab-pane label="竞品雷达" name="competitors">
-        <div class="block-grid">
+        <el-card shadow="never" class="panel" v-loading="amzLoading">
+          <template #header><div class="panel-head"><h3>类目排名 · 领星真实(排名下滑预警)</h3><el-tag :type="amzMockRisk ? 'warning' : 'success'" size="small">{{ amzMockRisk ? '示例' : '领星真实' }}</el-tag></div></template>
+          <el-alert type="info" :closable="false" show-icon style="margin-bottom:8px" title="竞品 BSR 需独立采集; 此处为本店真实类目排名 + 排名变化" />
+          <el-table v-if="amzRanks.length" :data="amzRanks" size="small" stripe>
+            <el-table-column label="店铺" width="110" prop="storeName" show-overflow-tooltip />
+            <el-table-column label="ASIN" width="120" prop="asin" />
+            <el-table-column label="类目" min-width="160" prop="category" show-overflow-tooltip />
+            <el-table-column label="类目排名" width="90" align="right" prop="rank" />
+            <el-table-column label="较前" width="80" align="right"><template #default="{ row }"><span v-if="row.rankDrop!=null" :style="{color: row.rankDrop>0 ? '#ef4444':'#10b981'}">{{ row.rankDrop>0?'↓'+row.rankDrop : (row.rankDrop<0?'↑'+(-row.rankDrop):'—') }}</span><span v-else>-</span></template></el-table-column>
+            <el-table-column label="大类排名" width="100" align="right" prop="cateRank" />
+          </el-table>
+          <EmptyState v-else :title="amzMockRisk ? '暂无真实数据' : '无类目排名数据'" icon="TrendCharts" />
+        </el-card>
+        <div class="block-grid" style="margin-top:12px">
           <router-link v-for="item in competitorBlocks" :key="item.label" :to="item.path" class="block-card competitor">
-            <span>{{ item.label }}</span>
-            <strong>{{ item.value }}</strong>
-            <small>进入详情</small>
+            <span>{{ item.label }}</span><strong>{{ item.value }}</strong><small>进入详情</small>
           </router-link>
         </div>
       </el-tab-pane>
