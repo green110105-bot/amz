@@ -127,11 +127,20 @@ export function mapPerformanceRow(row) {
     reviewsCount: num(row.reviews_count),
     returnRate: num(row.return_rate),
     returnCount: num(row.return_count),
-    // 排名/库存
+    // 排名/库存(available_inventory 是嵌套对象 {available_inventory:N})
     cateRank: row.cate_rank ?? null,
     smallCateRank: row.small_cate_rank ?? null,
-    availableInventory: num(row.available_inventory),
+    availableInventory: num(row.available_inventory?.available_inventory ?? row.available_inventory),
     availableDays: num(row.available_days),
+    afnFulfillable: num(row.afn_fulfillable_quantity),
+    afnInbound: num(row.afn_total_inbound ?? row.afn_inbound_working_quantity),
+    afnReserved: num(row.afn_reserved_quantity),
+    stockUpNum: num(row.stock_up_num),
+    inventoryTurnoverDays: num(row.inventory_turnover_days),
+    // 采购成本/货值(资金占用视角)
+    cgPrice: num(row.cg_price),                 // 采购单价
+    whsValue: num(row.whs_value),               // 仓库货值(资金占用)
+    suppliers: row.suppliers ?? null,
     // 环比
     volumeChainRatio: num(row.volume_chain_ratio),
     amountChainRatio: num(row.amount_chain_ratio),

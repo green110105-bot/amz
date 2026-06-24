@@ -94,6 +94,11 @@ export async function computeStoreAmazonProfit({ sid, name, currencyCode, startD
     returnRate: round4(r.returnRate),
     availableInventory: r.availableInventory,
     availableDays: r.availableDays,
+    afnFulfillable: r.afnFulfillable,
+    afnInbound: r.afnInbound,
+    stockUpNum: r.stockUpNum,
+    whsValue: round2(r.whsValue),
+    cgPrice: round2(r.cgPrice),
     cateRank: r.cateRank,
     amountChainRatio: round4(r.amountChainRatio),
   }));
@@ -236,11 +241,60 @@ function assembleDashboard({ range, startDate, endDate, stores, allAsins, thresh
     stores: storeRanking,
     asins: asinRanking,
     insights,
+    capital: deriveCapital(mainAsins, main.currencyCode),
+    actions: deriveActions(mainAsins, thresholds),
     thresholds,
     partial: errors.length > 0,
     errors,
     sourceMeta,
   };
+}
+
+// 资金与采购视角(真实库存字段): 仓库货值/在途/可售天数/备货, + 断货&积压清单。
+export function deriveCapital(asins, currencyCode = 'USD') {
+  const sum = (f) => asins.reduce((a, r) => a + (Number(r[f]) || 0), 0);
+  const whsValue = round2(sum('whsValue'));
+  const stockout = asins.filter((a) => (a.availableDays || 0) > 0 && a.availableDays < 14 && a.volume > 0)
+    .map((a) => ({ asin: a.asin, itemName: a.itemName, availableDays: a.availableDays, availableInventory: a.availableInventory, volume: a.volume, sid: a.sid, storeName: a.storeName }))
+    .sort((x, y) => x.availableDays - y.availableDays);
+  const overstock = asins.filter((a) => (a.availableDays || 0) > 90)
+    .map((a) => ({ asin: a.asin, itemName: a.itemName, availableDays: a.availableDays, availableInventory: a.availableInventory, whsValue: round2(a.whsValue), sid: a.sid, storeName: a.storeName }))
+    .sort((x, y) => (y.whsValue || 0) - (x.whsValue || 0));
+  return {
+    currencyCode,
+    warehouseValue: whsValue,                 // 仓库货值(资金占用)
+    fbaAvailable: sum('afnFulfillable'),      // FBA 可售
+    fbaInbound: sum('afnInbound'),            // FBA 在途
+    stockUpNum: sum('stockUpNum'),            // 建议备货
+    stockoutRiskCount: stockout.length,
+    overstockCount: overstock.length,
+    stockoutList: stockout.slice(0, 20),
+    overstockList: overstock.slice(0, 20),
+  };
+}
+
+// 今日必须处理(从真实指标派生, 优先级排序)。
+export function deriveActions(asins, thresholds = DEFAULT_THRESHOLDS) {
+  const acts = [];
+  for (const a of asins) {
+    if ((a.grossMargin ?? 1) < (thresholds.lossMargin ?? 0) || a.grossProfit < 0) {
+      acts.push({ kind: 'loss', severity: 'p0', asin: a.asin, itemName: a.itemName, sid: a.sid, storeName: a.storeName,
+        metric: `毛利 ${a.grossProfit}`, action: '止损: 复核成本/定价/广告' });
+    } else if (a.tacos > (thresholds.highTacos ?? 0.30)) {
+      acts.push({ kind: 'ad_eat', severity: 'p1', asin: a.asin, itemName: a.itemName, sid: a.sid, storeName: a.storeName,
+        metric: `TACOS ${(a.tacos * 100).toFixed(1)}%`, action: '广告吞利: 降预算/优化否词' });
+    }
+    if ((a.availableDays || 0) > 0 && a.availableDays < 14 && a.volume > 0) {
+      acts.push({ kind: 'stockout', severity: 'p0', asin: a.asin, itemName: a.itemName, sid: a.sid, storeName: a.storeName,
+        metric: `可售 ${a.availableDays} 天`, action: '断货风险: 尽快补货' });
+    }
+    if ((a.returnRate || 0) > 0.05) {
+      acts.push({ kind: 'return', severity: 'p1', asin: a.asin, itemName: a.itemName, sid: a.sid, storeName: a.storeName,
+        metric: `退款率 ${(a.returnRate * 100).toFixed(1)}%`, action: '退款过高: 排查质量/Listing' });
+    }
+  }
+  const order = { p0: 0, p1: 1, p2: 2 };
+  return acts.sort((x, y) => (order[x.severity] ?? 9) - (order[y.severity] ?? 9)).slice(0, 50);
 }
 
 // 多店并发聚合 + 按币种分组 + 全局派生。真实通路。
@@ -285,7 +339,12 @@ function mockAsin(sid, storeName, i, currencyCode) {
     cvr: round4((20 + i * 8) / (300 + i * 90)),
     returnRate: round4(0.02 + i * 0.005),
     availableInventory: 120 - i * 10,
-    availableDays: 45 - i * 5,
+    availableDays: i === 1 ? 9 : (i === 3 ? 120 : 45 - i * 5), // i1 断货风险, i3 积压
+    afnFulfillable: 120 - i * 10,
+    afnInbound: 30 + i * 10,
+    stockUpNum: i === 1 ? 200 : 0,
+    whsValue: round2((120 - i * 10) * (8 + i)),
+    cgPrice: round2(8 + i),
     cateRank: 1000 + i * 250,
     amountChainRatio: round4(loss ? -0.18 : 0.05 + i * 0.02),
   };

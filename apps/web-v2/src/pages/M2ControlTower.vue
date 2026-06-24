@@ -65,6 +65,11 @@ async function loadAmazonProfit() {
 const amz = computed(() => state.value.amazonProfit || null);
 const amzMock = computed(() => amz.value?.sourceMeta?.mock === true);
 const amzSummary = computed(() => amz.value?.summary || {});
+// 三个原 mock tab 现在读领星真实 Amazon 数据
+const realActions = computed(() => amz.value?.actions || []);
+const realAsins = computed(() => amz.value?.asins || []);
+const realCapital = computed(() => amz.value?.capital || null);
+const sevType = (s) => ({ p0: 'danger', p1: 'warning', p2: 'info' }[s] || 'info');
 const amzCurrencySymbol = computed(() => ({ USD: '$', EUR: '€', GBP: '£', JPY: '¥', CNY: '¥' })[amzSummary.value.currencyCode] || (amzSummary.value.currencyCode ? amzSummary.value.currencyCode + ' ' : '$'));
 
 const amzKpis = computed(() => {
@@ -382,92 +387,90 @@ function openCard(card) {
 
     <el-tabs v-model="activeLane" class="ops-tabs">
       <el-tab-pane label="今日必须处理" name="actions">
-        <el-card shadow="never" class="panel">
+        <el-card shadow="never" class="panel" v-loading="amzLoading">
           <template #header>
             <div class="panel-head">
               <div>
-                <h3>决策队列</h3>
-                <p>AI 只做排序和证据归因，真实执行仍进审计中心。</p>
+                <h3>今日必须处理 · 决策队列 · 领星真实 Amazon 美国店</h3>
+                <p>从真实指标派生: 亏损 / 广告吞利 / 断货风险 / 退款过高, 按优先级排序。</p>
               </div>
-              <el-radio-group v-model="filter" size="small">
-                <el-radio-button value="all">全部</el-radio-button>
-                <el-radio-button value="profit">利润</el-radio-button>
-                <el-radio-button value="inventory">库存</el-radio-button>
-                <el-radio-button value="pricing">调价</el-radio-button>
-                <el-radio-button value="cash">现金</el-radio-button>
-              </el-radio-group>
+              <span class="head-links">
+                <el-tag :type="amzMock ? 'warning' : 'success'" size="small">{{ amzMock ? '示例数据' : '领星真实' }}</el-tag>
+                <router-link to="/profit/leaks"><el-button text type="primary" size="small">利润泄漏</el-button></router-link>
+              </span>
             </div>
           </template>
-
-          <div v-if="filteredCards.length" class="action-list">
-            <button v-for="card in filteredCards" :key="card.id" class="action-card" @click="openCard(card)">
-              <span class="card-top">
-                <el-tag :type="severityType(card.severity)" size="small">{{ card.severity }}</el-tag>
-                <span class="source">{{ card.source }}</span>
-              </span>
-              <strong>{{ card.title }}</strong>
-              <small>{{ card.object || '-' }}</small>
-              <p>{{ card.action }}</p>
-              <span class="impact">影响 {{ card.impact }}</span>
-            </button>
-          </div>
-          <EmptyState v-else title="暂无必须处理的 M2 决策" description="当前没有触发利润、库存、调价或现金流风险。" icon="CircleCheck" />
+          <el-table v-if="realActions.length" :data="realActions" stripe size="small">
+            <el-table-column label="级别" width="70"><template #default="{ row }"><el-tag :type="sevType(row.severity)" size="small">{{ row.severity?.toUpperCase() }}</el-tag></template></el-table-column>
+            <el-table-column label="类型" width="100"><template #default="{ row }">{{ {loss:'亏损',ad_eat:'广告吞利',stockout:'断货风险',return:'退款过高'}[row.kind] || row.kind }}</template></el-table-column>
+            <el-table-column label="店铺" width="120" prop="storeName" />
+            <el-table-column label="ASIN" width="120" prop="asin" />
+            <el-table-column label="商品" min-width="180" show-overflow-tooltip><template #default="{ row }">{{ row.itemName || '-' }}</template></el-table-column>
+            <el-table-column label="指标" width="130" prop="metric" />
+            <el-table-column label="建议处置" min-width="180" prop="action" />
+          </el-table>
+          <EmptyState v-else :title="amzMock ? '暂无真实数据' : '今日无需处理'" description="真实指标未触发亏损/断货/广告吞利/退款风险。" icon="CircleCheck" />
         </el-card>
       </el-tab-pane>
 
       <el-tab-pane label="利润雷达" name="profit">
-        <el-card shadow="never" class="panel">
+        <el-card shadow="never" class="panel" v-loading="amzLoading">
           <template #header>
             <div class="panel-head">
               <div>
-                <h3>SKU 利润雷达</h3>
-                <p>默认只保留运营要用的字段，完整瀑布图进入深水页面。</p>
+                <h3>ASIN 利润雷达 · 领星真实数据</h3>
+                <p>各 ASIN 真实销售额、毛利、毛利率、广告占比、退款率、可售天数。</p>
               </div>
-              <router-link to="/profit/skus"><el-button text type="primary">打开完整 SKU 利润</el-button></router-link>
+              <span class="head-links">
+                <el-tag :type="amzMock ? 'warning' : 'success'" size="small">{{ amzMock ? '示例数据' : '领星真实' }}</el-tag>
+                <router-link to="/profit/skus"><el-button text type="primary" size="small">完整 SKU 利润</el-button></router-link>
+                <router-link to="/profit/fx"><el-button text type="primary" size="small">汇率</el-button></router-link>
+              </span>
             </div>
           </template>
-          <el-table :data="skuRows" stripe>
-            <el-table-column label="SKU" min-width="160">
-              <template #default="{ row }"><strong>{{ row.sku || row.asin || '-' }}</strong></template>
-            </el-table-column>
-            <el-table-column label="净利" width="120" align="right">
-              <template #default="{ row }">{{ money(row.netProfit ?? row.net_profit) }}</template>
-            </el-table-column>
-            <el-table-column label="利润率" width="100" align="right">
-              <template #default="{ row }">{{ pct(row.margin ?? row.profitMargin ?? row.profit_margin) }}</template>
-            </el-table-column>
-            <el-table-column label="库存天数" width="100" align="right">
-              <template #default="{ row }">{{ row.daysCover ?? row.days_cover ?? row.daysRemaining ?? '-' }}</template>
-            </el-table-column>
-            <el-table-column label="生命周期" width="120">
-              <template #default="{ row }"><el-tag size="small" effect="plain">{{ row.lifecycle || '-' }}</el-tag></template>
-            </el-table-column>
+          <el-table v-if="realAsins.length" :data="realAsins" stripe size="small">
+            <el-table-column label="店铺" width="110" prop="storeName" show-overflow-tooltip />
+            <el-table-column label="ASIN" width="120"><template #default="{ row }"><strong>{{ row.asin || '-' }}</strong></template></el-table-column>
+            <el-table-column label="销售额" width="110" align="right"><template #default="{ row }">{{ money(row.amount, amzCurrencySymbol) }}</template></el-table-column>
+            <el-table-column label="毛利" width="100" align="right"><template #default="{ row }"><span :style="{color: row.grossProfit<0 ? '#ef4444':'#10b981'}">{{ money(row.grossProfit, amzCurrencySymbol) }}</span></template></el-table-column>
+            <el-table-column label="毛利率" width="90" align="right"><template #default="{ row }">{{ pct(row.grossMargin) }}</template></el-table-column>
+            <el-table-column label="TACOS" width="90" align="right"><template #default="{ row }">{{ pct(row.tacos) }}</template></el-table-column>
+            <el-table-column label="退款率" width="90" align="right"><template #default="{ row }">{{ pct(row.returnRate) }}</template></el-table-column>
+            <el-table-column label="可售天数" width="90" align="right"><template #default="{ row }">{{ row.availableDays ?? '-' }}</template></el-table-column>
           </el-table>
+          <EmptyState v-else title="暂无 ASIN 利润数据" icon="DataLine" />
         </el-card>
       </el-tab-pane>
 
       <el-tab-pane label="资金与采购" name="cash">
-        <div class="two-col">
-          <el-card shadow="never" class="panel">
-            <template #header><div class="panel-head"><h3>未闭环 PO</h3><router-link to="/inventory/po"><el-button text type="primary">完整采购单</el-button></router-link></div></template>
-            <div class="mini-list">
-              <div v-for="po in openPOs" :key="po.id" class="mini-row">
-                <strong>{{ po.poNumber || po.id }}</strong>
-                <span>{{ po.status || '-' }}</span>
-                <em>{{ money(po.totalAmount || po.amount || po.capitalRequired) }}</em>
-              </div>
-              <EmptyState v-if="!openPOs.length" title="暂无未闭环 PO" description="采购链路当前没有明显阻塞。" />
-            </div>
-          </el-card>
-          <el-card shadow="never" class="panel">
-            <template #header><div class="panel-head"><h3>资金/供应链摘要</h3><router-link to="/profit/cashflow"><el-button text type="primary">现金流</el-button></router-link></div></template>
-            <div class="supply-grid">
-              <div><span>供应商</span><strong>{{ state.suppliers.length }}</strong></div>
-              <div><span>待调拨</span><strong>{{ state.transfers.length }}</strong></div>
-              <div><span>税务记录</span><strong>{{ state.tax?.records?.length || state.tax?.total || 0 }}</strong></div>
-              <div><span>LTV 样本</span><strong>{{ state.ltv.length }}</strong></div>
-            </div>
-          </el-card>
+        <div v-loading="amzLoading">
+          <el-row :gutter="12" class="cap-kpi" v-if="realCapital">
+            <el-col :xs="12" :sm="6"><div class="cap-card"><span>仓库货值</span><strong>{{ money(realCapital.warehouseValue, amzCurrencySymbol) }}</strong><small>资金占用</small></div></el-col>
+            <el-col :xs="12" :sm="6"><div class="cap-card"><span>FBA 可售</span><strong>{{ num(realCapital.fbaAvailable) }}</strong><small>件</small></div></el-col>
+            <el-col :xs="12" :sm="6"><div class="cap-card"><span>FBA 在途</span><strong>{{ num(realCapital.fbaInbound) }}</strong><small>件</small></div></el-col>
+            <el-col :xs="12" :sm="6"><div class="cap-card warn"><span>断货风险</span><strong>{{ realCapital.stockoutRiskCount }}</strong><small>个 ASIN</small></div></el-col>
+          </el-row>
+          <div class="two-col">
+            <el-card shadow="never" class="panel">
+              <template #header><div class="panel-head"><h3>断货风险(可售&lt;14天)</h3><span class="head-links"><el-tag :type="amzMock ? 'warning' : 'success'" size="small">{{ amzMock ? '示例' : '领星真实' }}</el-tag><router-link to="/inventory/reorder"><el-button text type="primary" size="small">补货</el-button></router-link><router-link to="/inventory/po"><el-button text type="primary" size="small">采购单</el-button></router-link><router-link to="/tax"><el-button text type="primary" size="small">税务</el-button></router-link></span></div></template>
+              <el-table v-if="realCapital?.stockoutList?.length" :data="realCapital.stockoutList" size="small" stripe>
+                <el-table-column label="ASIN" width="120" prop="asin" />
+                <el-table-column label="店铺" min-width="100" prop="storeName" show-overflow-tooltip />
+                <el-table-column label="可售天数" width="90" align="right"><template #default="{ row }"><span style="color:#ef4444">{{ row.availableDays }}</span></template></el-table-column>
+                <el-table-column label="库存" width="80" align="right" prop="availableInventory" />
+              </el-table>
+              <EmptyState v-else title="无断货风险" description="所有 ASIN 可售天数充足。" icon="CircleCheck" />
+            </el-card>
+            <el-card shadow="never" class="panel">
+              <template #header><div class="panel-head"><h3>库存积压(可售&gt;90天)</h3></div></template>
+              <el-table v-if="realCapital?.overstockList?.length" :data="realCapital.overstockList" size="small" stripe>
+                <el-table-column label="ASIN" width="120" prop="asin" />
+                <el-table-column label="货值" width="110" align="right"><template #default="{ row }">{{ money(row.whsValue, amzCurrencySymbol) }}</template></el-table-column>
+                <el-table-column label="可售天数" width="90" align="right" prop="availableDays" />
+              </el-table>
+              <EmptyState v-else title="无明显积压" icon="CircleCheck" />
+            </el-card>
+          </div>
         </div>
       </el-tab-pane>
 
@@ -714,4 +717,12 @@ function openCard(card) {
   .amz-kpi { grid-template-columns: repeat(2, 1fr); }
   .panel-head { align-items: flex-start; flex-direction: column; }
 }
+
+.cap-kpi { margin-bottom: 12px; }
+.cap-kpi .el-col { margin-bottom: 10px; }
+.cap-card { background: #fff; border: 1px solid #eef2f7; border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; }
+.cap-card span { font-size: 12px; color: #94a3b8; }
+.cap-card strong { font-size: 20px; }
+.cap-card small { font-size: 11px; color: #cbd5e1; }
+.cap-card.warn strong { color: #f59e0b; }
 </style>
